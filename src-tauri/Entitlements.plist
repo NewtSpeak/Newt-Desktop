@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened Runtime 下签名分发时麦克风采集必需（配合 Info.plist 的用途描述） -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

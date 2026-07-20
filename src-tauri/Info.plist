@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- WKWebView getUserMedia 需要：缺失时系统直接拒绝麦克风访问（语音频道通话） -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>OwlSpeak 需要访问麦克风，以便你在语音频道中与他人通话。</string>
+</dict>
+</plist>
