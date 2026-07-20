@@ -50,7 +50,15 @@ export type ReadyParticipant = {
   user_id: string
   session_id: string
   publishing?: boolean
+  publishing_screen?: boolean
 }
+
+/**
+ * subscribe/unsubscribe 帧的轨类型维度（协议 §2.1 kinds 字段）：
+ * audio = 音频轨；video = 屏幕轨 + 系统音频伴轨（伴轨跟随屏幕会话）。
+ * 缺省（不传）= 全部轨类型（旧协议行为）。
+ */
+export type SubscribeKind = "audio" | "video"
 
 export type ReadyPayload = {
   session_id: string
@@ -82,6 +90,14 @@ export type SignalingCallbacks = {
    * 每个 VoiceSignaling 实例至多触发一次。
    */
   onClosed: (info: VoiceCloseInfo) => void
+}
+
+/** kinds 非空时才携带该字段（缺省语义 = 全部轨类型，保持帧向后兼容） */
+function withKinds(
+  d: Record<string, unknown>,
+  kinds?: SubscribeKind[]
+): Record<string, unknown> {
+  return kinds && kinds.length > 0 ? { ...d, kinds } : d
 }
 
 export class VoiceSignaling {
@@ -163,14 +179,17 @@ export class VoiceSignaling {
     })
   }
 
-  /** 恢复订阅某发布者（默认进房全订，仅本地静音解除时需要） */
-  sendSubscribe(userId: string) {
-    this.send("subscribe", { user_id: userId })
+  /**
+   * 恢复订阅某发布者；kinds 缺省 = 全部轨类型（协议 §2.1）。
+   * 只订视频（点观看）传 ["video"]，只恢复音频（解除本地静音）传 ["audio"]。
+   */
+  sendSubscribe(userId: string, kinds?: SubscribeKind[]) {
+    this.send("subscribe", withKinds({ user_id: userId }, kinds))
   }
 
-  /** 本地静音 = 真实退订，SFU 停止转发 */
-  sendUnsubscribe(userId: string) {
-    this.send("unsubscribe", { user_id: userId })
+  /** 真实退订（SFU 停止转发）；kinds 缺省 = 全部轨类型 */
+  sendUnsubscribe(userId: string, kinds?: SubscribeKind[]) {
+    this.send("unsubscribe", withKinds({ user_id: userId }, kinds))
   }
 
   /** 主动关闭；不再触发 onClosed */

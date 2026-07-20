@@ -24,24 +24,12 @@ import { CircleUserRoundIcon, LogOutIcon, SettingsIcon } from "lucide-react"
 import type { GatewayStatus } from "~/lib/gateway/client"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
-import { useSettingsStore } from "~/stores/settings"
+import { setManualPresence, usePresenceStore } from "~/stores/presence"
+import { useSettingsStore, type ManualPresenceStatus } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
 
 function userInitials(username: string): string {
   return username.trim().slice(0, 2) || "?"
-}
-
-/** Gateway 连接状态圆点：绿=已连接、黄=连接/重连中、灰=离线 */
-function statusDotClass(status: GatewayStatus): string {
-  switch (status) {
-    case "connected":
-      return "bg-emerald-500"
-    case "connecting":
-    case "reconnecting":
-      return "bg-amber-500"
-    default:
-      return "bg-muted-foreground/50"
-  }
 }
 
 function statusLabel(status: GatewayStatus): string {
@@ -57,17 +45,53 @@ function statusLabel(status: GatewayStatus): string {
   }
 }
 
+/** Presence 状态点配色（docs 01：在线绿 / 闲置黄 / 勿扰红 / 隐身与离线灰） */
+export function presenceDotClass(status: string | undefined): string {
+  switch (status) {
+    case "online":
+      return "bg-emerald-500"
+    case "idle":
+      return "bg-amber-500"
+    case "dnd":
+      return "bg-red-500"
+    default:
+      return "bg-muted-foreground/50"
+  }
+}
+
+const PRESENCE_OPTIONS: {
+  value: ManualPresenceStatus
+  label: string
+  description?: string
+}[] = [
+  { value: "online", label: "在线" },
+  { value: "idle", label: "闲置" },
+  { value: "dnd", label: "勿扰", description: "不会收到任何桌面通知" },
+  { value: "invisible", label: "隐身", description: "对他人显示为离线" },
+]
+
 export function NavUser() {
   const { isMobile } = useSidebar()
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
   const gatewayStatus = useUIStore((state) => state.gatewayStatus)
+  const manualStatus = useSettingsStore((state) => state.presence.manualStatus)
+  const autoIdle = usePresenceStore((state) => state.autoIdle)
 
   if (!user) return null
 
+  // 本人有效状态：手动 online 时叠加空闲检测；未连接时按离线灰点
+  const selfStatus =
+    gatewayStatus === "connected"
+      ? manualStatus === "online" && autoIdle
+        ? "idle"
+        : manualStatus
+      : "offline"
+
   const handleLogout = async () => {
     await useAuthStore.getState().logout()
-    navigate("/login", { replace: true })
+    // /login 路由已移除：未登录态由应用壳渲染欢迎空态，回到根路由即可
+    navigate("/", { replace: true })
   }
 
   return (
@@ -82,7 +106,7 @@ export function NavUser() {
               />
             }
           >
-            {/* 仅显示头像：居中、方形带圆角；右下角连接状态圆点 */}
+            {/* 仅显示头像：居中、方形带圆角；右下角 Presence 状态点 */}
             <span className="relative">
               <Avatar className="size-8 rounded-lg">
                 {user.avatar_url && <AvatarImage src={user.avatar_url} alt={user.username} />}
@@ -94,7 +118,7 @@ export function NavUser() {
                 aria-label={statusLabel(gatewayStatus)}
                 className={cn(
                   "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-sidebar",
-                  statusDotClass(gatewayStatus),
+                  presenceDotClass(selfStatus),
                 )}
               />
             </span>
@@ -124,10 +148,39 @@ export function NavUser() {
                   </div>
                   <span
                     title={statusLabel(gatewayStatus)}
-                    className={cn("size-2 rounded-full", statusDotClass(gatewayStatus))}
+                    className={cn("size-2 rounded-full", presenceDotClass(selfStatus))}
                   />
                 </div>
               </DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            {/* Presence 四态切换（docs 01 FR-18） */}
+            <DropdownMenuGroup>
+              {PRESENCE_OPTIONS.map((option) => (
+                <DropdownMenuItem
+                  key={option.value}
+                  onClick={() => setManualPresence(option.value)}
+                >
+                  <span
+                    className={cn(
+                      "size-2.5 shrink-0 rounded-full",
+                      presenceDotClass(option.value),
+                    )}
+                  />
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span
+                      className={cn(manualStatus === option.value && "font-semibold")}
+                    >
+                      {option.label}
+                    </span>
+                    {option.description && (
+                      <span className="text-xs text-muted-foreground">
+                        {option.description}
+                      </span>
+                    )}
+                  </div>
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>

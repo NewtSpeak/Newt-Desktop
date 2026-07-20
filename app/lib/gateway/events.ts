@@ -2,7 +2,16 @@
 // 与各模块 Publish 的 payload 结构；docs 14）。
 // 后续消息/语音功能 agent 按事件名注册 handler，payload 类型在此集中演进。
 
-import type { Message, StageConfig, StageQueueBrief, User, VoiceCaps, VoiceState } from "~/lib/api/types"
+import type {
+  Channel,
+  Guild,
+  Message,
+  StageConfig,
+  StageQueueBrief,
+  User,
+  VoiceCaps,
+  VoiceState,
+} from "~/lib/api/types"
 
 // ---------------------------------------------------------------------------
 // 事件名常量
@@ -36,9 +45,29 @@ export const GatewayEvents = {
   ScreenQuotaUpdate: "SCREEN_QUOTA_UPDATE",
 
   PermissionsUpdate: "PERMISSIONS_UPDATE",
+
+  // 结构事件（服务器 / 频道 / 成员 / 角色，docs 14 §3.2）
+  GuildCreate: "GUILD_CREATE",
+  GuildUpdate: "GUILD_UPDATE",
+  GuildDelete: "GUILD_DELETE",
+  ChannelCreate: "CHANNEL_CREATE",
+  ChannelUpdate: "CHANNEL_UPDATE",
+  ChannelDelete: "CHANNEL_DELETE",
+  GuildMemberAdd: "GUILD_MEMBER_ADD",
+  GuildMemberUpdate: "GUILD_MEMBER_UPDATE",
+  GuildMemberRemove: "GUILD_MEMBER_REMOVE",
+  GuildRoleCreate: "GUILD_ROLE_CREATE",
+  GuildRoleUpdate: "GUILD_ROLE_UPDATE",
+  GuildRoleDelete: "GUILD_ROLE_DELETE",
+
+  // 未读 / 在线状态 / 用户设置（docs 15 §7-1、docs 01 §3.4、docs 16 §7-1）
+  ReadStateUpdate: "READ_STATE_UPDATE",
+  PresenceUpdate: "PRESENCE_UPDATE",
+  UserSettingsUpdate: "USER_SETTINGS_UPDATE",
 } as const
 
-export type GatewayEventName = (typeof GatewayEvents)[keyof typeof GatewayEvents]
+export type GatewayEventName =
+  (typeof GatewayEvents)[keyof typeof GatewayEvents]
 
 // ---------------------------------------------------------------------------
 // payload 类型
@@ -121,11 +150,18 @@ export type VoiceMigratedPayload = {
   node_id?: string
 }
 
+/** VOICE_PACK_PLAY 载荷（服务端 message/voicepack.go VoicePackPlayPayload，docs 12 §6.1 定稿） */
 export type VoicePackPlayPayload = {
   guild_id: string
   channel_id: string
   user_id: string
+  pack_id?: string | null
   audio_url?: string
+  /** FIRST_JOIN（进服首次）/ CHANNEL_JOIN（进指定语音频道） */
+  scene?: string
+  /** SAME_CHANNEL（默认，同语音频道）/ GUILD_ONLINE（全服在线） */
+  scope?: string
+  event_at?: string
 }
 
 export type RestrictionEventPayload = {
@@ -155,6 +191,8 @@ export type ScreenSharePayload = {
   user_id: string
   slot_id?: string
   quality?: string
+  /** SCREEN_SHARE_STOP 附带：self | admin | demote | quota | disconnect | timeout */
+  reason?: string
 }
 
 export type ScreenQuotaUpdatePayload = {
@@ -171,6 +209,123 @@ export type PermissionsUpdatePayload = {
   guild_id: string
   channel_id?: string
   user_id?: string
+}
+
+// ---------------------------------------------------------------------------
+// 结构事件（服务端 eventbus/payloads.go / snapshot 包）
+// ---------------------------------------------------------------------------
+
+/** READY guilds[].member / GUILD_MEMBER_* 的成员实体（model.Member + role_ids） */
+export type MemberSnapshot = {
+  id: string
+  guild_id: string
+  user_id: string
+  nickname?: string
+  created_at?: string
+  role_ids?: string[]
+}
+
+/** GUILD_CREATE：建服/加入服务器时定向发送的全量快照（snapshot.GuildCreatePayload） */
+export type GuildCreatePayload = {
+  guild: Guild
+  channels: Channel[]
+  roles: unknown[]
+  member: MemberSnapshot
+  voice_states: VoiceState[]
+  presences: PresenceEntry[]
+  event_at: string
+}
+
+export type GuildUpdatePayload = {
+  guild: Guild
+  event_at: string
+}
+
+export type GuildDeletePayload = {
+  guild_id: string
+  event_at: string
+}
+
+/** CHANNEL_CREATE / CHANNEL_UPDATE：频道快照平铺（snapshot.ChannelPayload） */
+export type ChannelEventPayload = Channel & {
+  topic?: string
+  voice_config?: {
+    mode: string
+    max_speakers: number
+    request_to_speak_enabled: boolean
+  }
+  event_at: string
+}
+
+export type ChannelDeletePayload = {
+  guild_id: string
+  channel_id: string
+  event_at: string
+}
+
+export type GuildMemberAddPayload = {
+  guild_id: string
+  member: MemberSnapshot
+  user: User
+  event_at: string
+}
+
+export type GuildMemberUpdatePayload = {
+  guild_id: string
+  member: MemberSnapshot
+  role_ids: string[]
+  event_at: string
+}
+
+export type GuildMemberRemovePayload = {
+  guild_id: string
+  member_id: string
+  user_id: string
+  /** kick / ban / leave */
+  reason: string
+  event_at: string
+}
+
+export type GuildRolePayload = {
+  guild_id: string
+  role: { id: string; name?: string; permissions?: number | string }
+  event_at: string
+}
+
+export type GuildRoleDeletePayload = {
+  guild_id: string
+  role_id: string
+  event_at: string
+}
+
+// ---------------------------------------------------------------------------
+// 未读 / Presence / 用户设置
+// ---------------------------------------------------------------------------
+
+/** READ_STATE_UPDATE：定向多端同步（本人 ack 或被提及计数增长时触发） */
+export type ReadStateUpdatePayload = {
+  user_id: string
+  channel_id: string
+  /** 雪花 ID 字符串 */
+  last_read_message_id: string
+  mention_count: number
+  event_at: string
+}
+
+export type PresenceStatus = "online" | "idle" | "dnd" | "invisible" | "offline"
+
+/** PRESENCE_UPDATE：他人载荷不会出现 invisible（服务端已掩码为 offline） */
+export type PresenceUpdatePayload = {
+  user_id: string
+  status: PresenceStatus
+  custom_text?: string
+  event_at: string
+}
+
+/** USER_SETTINGS_UPDATE：合并后的全量设置文档（其他端整体替换本地副本） */
+export type UserSettingsUpdatePayload = {
+  settings: Record<string, unknown>
+  event_at: string
 }
 
 /** 事件名 → payload 的映射（subscribe 的类型入口） */
@@ -197,6 +352,21 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.ScreenShareStop]: ScreenSharePayload
   [GatewayEvents.ScreenQuotaUpdate]: ScreenQuotaUpdatePayload
   [GatewayEvents.PermissionsUpdate]: PermissionsUpdatePayload
+  [GatewayEvents.GuildCreate]: GuildCreatePayload
+  [GatewayEvents.GuildUpdate]: GuildUpdatePayload
+  [GatewayEvents.GuildDelete]: GuildDeletePayload
+  [GatewayEvents.ChannelCreate]: ChannelEventPayload
+  [GatewayEvents.ChannelUpdate]: ChannelEventPayload
+  [GatewayEvents.ChannelDelete]: ChannelDeletePayload
+  [GatewayEvents.GuildMemberAdd]: GuildMemberAddPayload
+  [GatewayEvents.GuildMemberUpdate]: GuildMemberUpdatePayload
+  [GatewayEvents.GuildMemberRemove]: GuildMemberRemovePayload
+  [GatewayEvents.GuildRoleCreate]: GuildRolePayload
+  [GatewayEvents.GuildRoleUpdate]: GuildRolePayload
+  [GatewayEvents.GuildRoleDelete]: GuildRoleDeletePayload
+  [GatewayEvents.ReadStateUpdate]: ReadStateUpdatePayload
+  [GatewayEvents.PresenceUpdate]: PresenceUpdatePayload
+  [GatewayEvents.UserSettingsUpdate]: UserSettingsUpdatePayload
 }
 
 // ---------------------------------------------------------------------------
@@ -204,15 +374,61 @@ export type GatewayEventPayloadMap = {
 // ---------------------------------------------------------------------------
 
 export type GatewayFrame = {
-  op: "HELLO" | "IDENTIFY" | "READY" | "HEARTBEAT" | "HEARTBEAT_ACK" | "DISPATCH" | string
+  op:
+    | "HELLO"
+    | "IDENTIFY"
+    | "RESUME"
+    | "READY"
+    | "RESUMED"
+    | "INVALID_SESSION"
+    | "HEARTBEAT"
+    | "HEARTBEAT_ACK"
+    | "DISPATCH"
+    | "PRESENCE"
+    | string
   t?: string
+  /** DISPATCH 帧携带：会话内从 1 起递增的序列号（resume 续传游标） */
+  s?: number
   d?: unknown
 }
 
 /** 注意：字段名是 heartbeat_interval_ms（服务端 protocol.go helloData） */
 export type HelloData = { heartbeat_interval_ms: number }
 
-export type ReadyData = { user: User; guild_ids: string[] }
+/** READY presences 条目（顶层扁平视图与 guilds[].presences 元素同构） */
+export type PresenceEntry = {
+  user_id: string
+  status: PresenceStatus
+  custom_text?: string
+}
+
+/** READY read_states 条目（没有记录的频道省略） */
+export type ReadyReadState = {
+  channel_id: string
+  last_read_message_id: string
+  mention_count: number
+  /** 该频道当前最新消息 ID（字符串雪花，无消息为 "0"） */
+  last_message_id?: string
+}
+
+/** READY guilds 数组元素（snapshot.Guild：按可见性过滤的全量快照） */
+export type ReadyGuild = {
+  guild: Guild
+  channels: Channel[]
+  roles: unknown[]
+  member: MemberSnapshot
+  voice_states: VoiceState[]
+  presences: PresenceEntry[]
+}
+
+export type ReadyData = {
+  session_id: string
+  user: User
+  guild_ids: string[]
+  guilds?: ReadyGuild[]
+  presences?: PresenceEntry[]
+  read_states?: ReadyReadState[]
+}
 
 /** 应用层关闭码 */
 export const GatewayCloseCodes = {
@@ -222,6 +438,10 @@ export const GatewayCloseCodes = {
   IdentifyTimeout: 4001,
   /** 访问令牌无效 */
   AuthFailed: 4003,
+  /** 同一 session 被新连接 RESUME 接管，旧连接关闭 */
+  SessionReplaced: 4006,
   /** 发送队列积压（慢消费者） */
   SlowConsumer: 4008,
+  /** RESUME 失败：session 不存在 / 超出回放窗口 / 用户不符 */
+  InvalidSession: 4009,
 } as const

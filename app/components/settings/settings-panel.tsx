@@ -3,6 +3,7 @@
 
 import { useEffect } from "react"
 import {
+  BellIcon,
   CircleUserRoundIcon,
   InfoIcon,
   KeyboardIcon,
@@ -17,6 +18,7 @@ import { AboutSection } from "./about-section"
 import { AccountSection } from "./account-section"
 import { AppearanceSection } from "./appearance-section"
 import { KeybindsSection } from "./keybinds-section"
+import { NotificationsSection } from "./notifications-section"
 import { VoiceSection } from "./voice-section"
 
 const NAV: { group: string; items: { id: SettingsSection; label: string; icon: typeof MicIcon }[] }[] = [
@@ -28,6 +30,7 @@ const NAV: { group: string; items: { id: SettingsSection; label: string; icon: t
     group: "应用设置",
     items: [
       { id: "voice", label: "语音与视频", icon: MicIcon },
+      { id: "notifications", label: "通知", icon: BellIcon },
       { id: "appearance", label: "外观", icon: PaletteIcon },
       { id: "keybinds", label: "快捷键", icon: KeyboardIcon },
     ],
@@ -44,6 +47,8 @@ function SectionContent({ section }: { section: SettingsSection }) {
       return <AccountSection />
     case "voice":
       return <VoiceSection />
+    case "notifications":
+      return <NotificationsSection />
     case "appearance":
       return <AppearanceSection />
     case "keybinds":

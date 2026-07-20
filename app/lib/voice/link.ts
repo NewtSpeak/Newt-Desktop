@@ -6,7 +6,8 @@
 //
 // 每个实例内聚：
 //   - auth 首帧 / ready → offer/answer/trickle ICE 协商；
-//   - ready 后重放本地静音退订集合与每用户音量（FR-21 就绪钩子）；
+//   - ready 后重放本地静音退订集合（audio 维度）、视频默认剪枝 + 观看白名单
+//     （video 维度，协议 §2.1 kinds）与每用户音量（FR-21 就绪钩子）；
 //   - 上行闸门 uplinkAllowed：pending 链路建立期禁发，CUTOVER 一次性放行（FR-03）；
 //   - 下行主静音 setPlaybackMuted：旧链路在新链路接收侧就绪后静音防双声；
 //   - destroy 顺序：信令（先停回调）→ RTC（PC/track/audio/定时器）。
@@ -50,6 +51,12 @@ export type VoiceLinkCallbacks = {
   onCapsUpdated: (link: VoiceLink, caps: string[]) => void
   /** initMic 结果（false = 仅听模式） */
   onMicAvailability: (link: VoiceLink, hasMic: boolean) => void
+  /** 下行视频轨（屏幕共享）到达/移除（stream=null 表示结束） */
+  onRemoteVideo?: (
+    link: VoiceLink,
+    userId: string,
+    stream: MediaStream | null
+  ) => void
 }
 
 export type VoiceLinkOptions = {
@@ -59,8 +66,14 @@ export type VoiceLinkOptions = {
   micWanted: boolean
   /** 闭听状态（下行全静音） */
   deafened: boolean
-  /** 本地静音集合快照（ready 后重放 unsubscribe，FR-21） */
+  /** 本地静音集合快照（ready 后重放 unsubscribe kinds=["audio"]，FR-21） */
   localMuted: Record<string, true>
+  /**
+   * 正在观看的屏幕共享发布者白名单（ready 后重放视频订阅剪枝）：
+   * SFU 进房默认全订（含视频轨），链路就绪后对白名单之外的全员发
+   * unsubscribe kinds=["video"]，实现「不点观看不拉视频流」（协议 §2.1 kinds）。
+   */
+  watchedVideo: Record<string, true>
   /** 每用户音量快照（百分比 0–200，FR-21） */
   userVolumes: Record<string, number>
   /** 日志关联用（迁移链路带 migration_id） */
@@ -81,14 +94,20 @@ export class VoiceLink {
   private uplinkAllowed: boolean
   private micWanted: boolean
   private localMuted: Record<string, true>
+  private watchedVideo: Record<string, true>
   private readonly migrationId: string | null
 
-  constructor(target: VoiceLinkTarget, options: VoiceLinkOptions, callbacks: VoiceLinkCallbacks) {
+  constructor(
+    target: VoiceLinkTarget,
+    options: VoiceLinkOptions,
+    callbacks: VoiceLinkCallbacks
+  ) {
     this.target = { ...target }
     this.callbacks = callbacks
     this.uplinkAllowed = options.uplinkAllowed
     this.micWanted = options.micWanted
     this.localMuted = { ...options.localMuted }
+    this.watchedVideo = { ...options.watchedVideo }
     this.migrationId = options.migrationId ?? null
 
     this.rtc = new VoiceRtc({
@@ -115,6 +134,10 @@ export class VoiceLink {
       onFirstRemoteAudio: () => {
         if (this.destroyed) return
         this.callbacks.onFirstRemoteAudio(this)
+      },
+      onRemoteVideo: (userId, stream) => {
+        if (this.destroyed) return
+        this.callbacks.onRemoteVideo?.(this, userId, stream)
       },
     })
     this.rtc.setDeafened(options.deafened)
@@ -156,23 +179,34 @@ export class VoiceLink {
     const signaling = new VoiceSignaling(this.target.wssUrl, {
       onReady: (d) => void this.handleReady(d),
       onAnswer: (sdp) => {
-        void this.rtc.applyAnswer(sdp).catch((error) => verror("setRemote(answer) 失败", error))
+        void this.rtc
+          .applyAnswer(sdp)
+          .catch((error) => verror("setRemote(answer) 失败", error))
       },
       onOffer: (sdp) => void this.handleRemoteOffer(sdp),
       onIce: (d) => void this.rtc.addRemoteIce(d),
       onParticipantJoined: (d) => {
         vlog("participant_joined", d.user_id, this.logCtx())
-        // 新参与者若在本地静音名单内，补发退订
-        if (this.localMuted[d.user_id]) this.signaling?.sendUnsubscribe(d.user_id)
+        // 新参与者若在本地静音名单内，补发音频退订
+        if (this.localMuted[d.user_id])
+          this.signaling?.sendUnsubscribe(d.user_id, ["audio"])
+        // 视频默认剪枝：新人不在观看白名单内则退订其视频轨
+        //（SFU 默认全订；退订状态持久，其此后开播也不会转发过来）
+        if (!this.watchedVideo[d.user_id])
+          this.signaling?.sendUnsubscribe(d.user_id, ["video"])
       },
       onParticipantLeft: (d) => {
         vlog("participant_left", d.user_id, this.logCtx())
         this.rtc.removeUserAudio(d.user_id)
+        this.rtc.removeUserVideo(d.user_id)
       },
       onTrackPublished: (d) => vlog("track_published", d, this.logCtx()),
       onTrackEnded: (d) => {
         vlog("track_ended", d, this.logCtx())
         if (d.kind === "audio") this.rtc.removeUserAudio(d.user_id)
+        // 屏幕轨事件 kind 为 "screen"（协议 §2.2）；兼容旧值 "video"
+        if (d.kind === "screen" || d.kind === "video")
+          this.rtc.removeUserVideo(d.user_id)
       },
       onCapsUpdated: (caps) => this.callbacks.onCapsUpdated(this, caps),
       onSpeaking: (userIds) => this.callbacks.onSpeaking(this, userIds),
@@ -190,7 +224,11 @@ export class VoiceLink {
   // ---------------------------------------------------------------------------
 
   /** token 在位更新（刷新 / 同节点 VOICE_SERVER_UPDATE）：auth 帧重发，不断媒体 */
-  updateToken(token: string, expiresAtMs: number | null, sessionId?: string | null) {
+  updateToken(
+    token: string,
+    expiresAtMs: number | null,
+    sessionId?: string | null
+  ) {
     this.target.token = token
     this.target.expiresAtMs = expiresAtMs
     if (sessionId) this.target.sessionId = sessionId
@@ -223,20 +261,73 @@ export class VoiceLink {
     this.rtc.setPlaybackMuted(muted)
   }
 
-  /** 本地静音某用户：播放兜底 + 信令退订/恢复订阅 */
+  /**
+   * 本地静音某用户：播放兜底 + 信令按 audio 维度退订/恢复订阅。
+   * 只作用于音频轨——与视频观看（video 维度）互相独立，被本地静音的用户
+   * 开播后点观看仍只订其视频（协议 §2.1 kinds）。
+   */
   setLocalMute(userId: string, muted: boolean) {
     if (muted) this.localMuted[userId] = true
     else delete this.localMuted[userId]
     this.rtc.setUserLocallyMuted(userId, muted)
     if (this.signaling?.isOpen) {
-      if (muted) this.signaling.sendUnsubscribe(userId)
-      else this.signaling.sendSubscribe(userId)
+      if (muted) this.signaling.sendUnsubscribe(userId, ["audio"])
+      else this.signaling.sendSubscribe(userId, ["audio"])
     }
   }
 
   /** 每用户音量（百分比 0–200） */
   setUserVolume(userId: string, percent: number) {
     this.rtc.setUserVolume(userId, percent / 100)
+  }
+
+  /**
+   * 发布屏幕轨（docs 11 FR-04）：客户端主动 addTrack + createOffer 重协商，
+   * 经信令 offer 帧发出，SFU 回 answer（信令双向已支持）。
+   * 返回是否成功发出 offer（信令不可用 / PC 缺失时 false）。
+   */
+  async publishScreen(
+    track: MediaStreamTrack,
+    stream: MediaStream
+  ): Promise<boolean> {
+    if (!this.signaling?.isOpen) return false
+    const sdp = await this.rtc.publishScreenTrack(track, stream)
+    if (this.destroyed) return false
+    // sdp=null 且已有 sender：replaceTrack 无需重协商
+    if (sdp === null) return this.rtc.hasScreenTrack
+    this.signaling.sendOffer(sdp)
+    vlog("屏幕轨 renegotiation offer 已发出", this.logCtx())
+    return true
+  }
+
+  /** 停止屏幕轨发布：removeTrack + 重协商（尽力而为，链路已死时静默） */
+  async unpublishScreen(): Promise<void> {
+    const sdp = await this.rtc.removeScreenTrack().catch(() => null)
+    if (this.destroyed || !sdp) return
+    if (this.signaling?.isOpen) this.signaling.sendOffer(sdp)
+  }
+
+  get hasScreenTrack(): boolean {
+    return this.rtc.hasScreenTrack
+  }
+
+  /** 本链路已到达的下行视频轨（CUTOVER 提升后回灌 store） */
+  getVideoStreams(): ReadonlyMap<string, MediaStream> {
+    return this.rtc.getVideoStreams()
+  }
+
+  /**
+   * 观看端视频订阅开关（协议 §2.1 kinds=["video"]）：
+   * watching=true = 点观看订阅其屏幕轨（含伴轨），false = 停止观看退订。
+   * 白名单同步维护，供 participant_joined 剪枝与迁移后新链路 ready 重放。
+   */
+  setVideoSubscription(userId: string, watching: boolean) {
+    if (watching) this.watchedVideo[userId] = true
+    else delete this.watchedVideo[userId]
+    if (this.signaling?.isOpen) {
+      if (watching) this.signaling.sendSubscribe(userId, ["video"])
+      else this.signaling.sendUnsubscribe(userId, ["video"])
+    }
   }
 
   /**
@@ -287,11 +378,18 @@ export class VoiceLink {
     this.target.sessionId = d.session_id ?? this.target.sessionId
     this.target.roomId = d.room_id ?? this.target.roomId
 
-    // 就绪钩子：重放本地静音退订集合（docs 13 FR-21）
+    // 就绪钩子（docs 13 FR-21 + 协议 §2.1 kinds）：
+    //   1. 重放本地静音退订集合（audio 维度）；
+    //   2. 视频默认剪枝：对观看白名单之外的全员退订视频轨（SFU 进房默认全订，
+    //      主动退订实现「不点观看不拉视频流」；白名单内的用户保持默认订阅，
+    //      迁移后新链路无需补发 subscribe 即恢复观看）。
     for (const participant of d.participants ?? []) {
       if (this.localMuted[participant.user_id]) {
-        this.signaling?.sendUnsubscribe(participant.user_id)
+        this.signaling?.sendUnsubscribe(participant.user_id, ["audio"])
         this.rtc.setUserLocallyMuted(participant.user_id, true)
+      }
+      if (!this.watchedVideo[participant.user_id]) {
+        this.signaling?.sendUnsubscribe(participant.user_id, ["video"])
       }
     }
 
@@ -305,7 +403,10 @@ export class VoiceLink {
       verror("createOffer 失败", error, this.logCtx())
       if (this.destroyed) return
       // 无法协商 = 链路不可用，统一走关闭路径由管理器决策
-      this.callbacks.onClosed(this, { code: "UNKNOWN", message: "createOffer 失败" })
+      this.callbacks.onClosed(this, {
+        code: "UNKNOWN",
+        message: "createOffer 失败",
+      })
     }
   }
 
@@ -325,9 +426,12 @@ export class VoiceLink {
   }
 
   /** 百分比音量 → 0–2 倍率 */
-  private scaleVolumes(percents: Record<string, number>): Record<string, number> {
+  private scaleVolumes(
+    percents: Record<string, number>
+  ): Record<string, number> {
     const scaled: Record<string, number> = {}
-    for (const [userId, percent] of Object.entries(percents)) scaled[userId] = percent / 100
+    for (const [userId, percent] of Object.entries(percents))
+      scaled[userId] = percent / 100
     return scaled
   }
 

@@ -1,7 +1,8 @@
 // 消息内附件渲染（docs 07 §3.4）：
 //   图片内嵌（最大 550×350，点击 lightbox）/ 音频视频原生播放器 /
 //   PDF 卡片（系统默认方式打开）/ 其他类型下载卡片。
-// download_url 为 15 分钟 HMAC 签名的相对路径；加载失败提示重试（简化的过期处理）。
+// download_url 为 15 分钟 HMAC 签名的相对路径，经 resolveApiUrl 指向当前服务器；
+// 加载失败提示重试（简化的过期处理）。
 
 import { useEffect, useState } from "react"
 import {
@@ -12,6 +13,7 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { resolveApiUrl } from "~/lib/api/http"
 import type { MessageAttachment } from "~/lib/api/types"
 import { cn } from "~/lib/utils"
 
@@ -35,6 +37,7 @@ function FileCard({
   icon: React.ReactNode
   onOpen?: () => void
 }) {
+  const downloadUrl = resolveApiUrl(attachment.download_url)
   return (
     <div className="flex w-fit max-w-full items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
       <span className="text-muted-foreground">{icon}</span>
@@ -49,14 +52,19 @@ function FileCard({
             {attachment.filename}
           </button>
         ) : (
-          <p className="max-w-72 truncate text-sm font-medium" title={attachment.filename}>
+          <p
+            className="max-w-72 truncate text-sm font-medium"
+            title={attachment.filename}
+          >
             {attachment.filename}
           </p>
         )}
-        <p className="text-xs text-muted-foreground">{formatBytes(attachment.size)}</p>
+        <p className="text-xs text-muted-foreground">
+          {formatBytes(attachment.size)}
+        </p>
       </div>
       <a
-        href={attachment.download_url}
+        href={downloadUrl}
         download={attachment.filename}
         aria-label={`下载 ${attachment.filename}`}
         className="ml-2 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -75,6 +83,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
   const [failed, setFailed] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
   const [lightbox, setLightbox] = useState(false)
+  const downloadUrl = resolveApiUrl(attachment.download_url)
 
   // lightbox 打开时 Esc 关闭（窗口级监听，遮罩本身不可聚焦）
   useEffect(() => {
@@ -115,7 +124,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
       >
         <img
           key={retryKey}
-          src={attachment.download_url}
+          src={downloadUrl}
           alt={attachment.filename}
           loading="lazy"
           onError={() => setFailed(true)}
@@ -130,7 +139,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
           aria-label="图片查看器"
         >
           <img
-            src={attachment.download_url}
+            src={downloadUrl}
             alt={attachment.filename}
             className="max-h-[90vh] max-w-[90vw] object-contain"
             onClick={(event) => event.stopPropagation()}
@@ -140,9 +149,11 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
             onClick={(event) => event.stopPropagation()}
           >
             <span className="max-w-60 truncate">{attachment.filename}</span>
-            <span className="text-white/60">{formatBytes(attachment.size)}</span>
+            <span className="text-white/60">
+              {formatBytes(attachment.size)}
+            </span>
             <a
-              href={attachment.download_url}
+              href={downloadUrl}
               download={attachment.filename}
               className="flex items-center gap-1 text-white/90 hover:text-white"
             >
@@ -170,6 +181,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
 
 function AttachmentItem({ attachment }: { attachment: MessageAttachment }) {
   const isPdf = attachment.mime === "application/pdf"
+  const downloadUrl = resolveApiUrl(attachment.download_url)
 
   switch (attachment.preview) {
     case "image":
@@ -177,7 +189,7 @@ function AttachmentItem({ attachment }: { attachment: MessageAttachment }) {
     case "video":
       return (
         <video
-          src={attachment.download_url}
+          src={downloadUrl}
           controls
           preload="metadata"
           className="max-h-[350px] max-w-[550px] rounded-lg bg-black"
@@ -191,7 +203,12 @@ function AttachmentItem({ attachment }: { attachment: MessageAttachment }) {
           <p className="max-w-96 truncate px-1 pb-1 text-xs text-muted-foreground">
             {attachment.filename}（{formatBytes(attachment.size)}）
           </p>
-          <audio src={attachment.download_url} controls preload="metadata" className="h-10" />
+          <audio
+            src={downloadUrl}
+            controls
+            preload="metadata"
+            className="h-10"
+          />
         </div>
       )
     default:
@@ -200,11 +217,18 @@ function AttachmentItem({ attachment }: { attachment: MessageAttachment }) {
           <FileCard
             attachment={attachment}
             icon={<FileTextIcon className="size-8" />}
-            onOpen={() => window.open(attachment.download_url, "_blank", "noopener,noreferrer")}
+            onOpen={() =>
+              window.open(downloadUrl, "_blank", "noopener,noreferrer")
+            }
           />
         )
       }
-      return <FileCard attachment={attachment} icon={<FileIcon className="size-8" />} />
+      return (
+        <FileCard
+          attachment={attachment}
+          icon={<FileIcon className="size-8" />}
+        />
+      )
   }
 }
 

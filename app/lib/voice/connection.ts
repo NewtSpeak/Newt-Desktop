@@ -34,8 +34,17 @@ import type {
   VoiceStateUpdatePayload,
 } from "~/lib/gateway/events"
 import { useAuthStore } from "~/stores/auth"
-import { canPublishAudio, useVoiceStore, type VoiceSession } from "~/stores/voice"
-import { VoiceLink, type VoiceLinkCallbacks, type VoiceLinkTarget } from "./link"
+import { inferChannelMode, useStageStore } from "~/stores/stage"
+import {
+  canPublishAudio,
+  useVoiceStore,
+  type VoiceSession,
+} from "~/stores/voice"
+import {
+  VoiceLink,
+  type VoiceLinkCallbacks,
+  type VoiceLinkTarget,
+} from "./link"
 import { verror, vevent, vlog, vwarn } from "./log"
 import type { ReadyPayload, VoiceCloseInfo } from "./signaling"
 
@@ -77,7 +86,10 @@ function capsList(caps: unknown): string[] {
 }
 
 /** 解析 expires_at（unix 秒 / 毫秒 / ISO 串）；缺失时兜底解 JWT exp */
-function parseExpiresAt(value: number | string | undefined, token: string): number | null {
+function parseExpiresAt(
+  value: number | string | undefined,
+  token: string
+): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return value > 1e12 ? value : value * 1000
   }
@@ -91,7 +103,9 @@ function parseExpiresAt(value: number | string | undefined, token: string): numb
   }
   try {
     const [, payload] = token.split(".")
-    const claims = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as {
+    const claims = JSON.parse(
+      atob(payload.replace(/-/g, "+").replace(/_/g, "/"))
+    ) as {
       exp?: number
     }
     if (typeof claims.exp === "number") return claims.exp * 1000
@@ -155,6 +169,13 @@ class VoiceConnectionManager {
   private prevMuteBeforeDeaf = false
   private micWarned = false
 
+  /**
+   * 正在观看的屏幕共享发布者白名单（协议 §2.1 kinds=["video"]）：
+   * 链路 ready 后对白名单之外全员退订视频轨（默认不拉流），点观看才订阅。
+   * 迁移/重连的新链路以此快照重放（视频退订全员 + 已观看白名单）。
+   */
+  private watchedVideo: Record<string, true> = {}
+
   // speaking 熄灭防闪：活跃集合 + 每用户 fade 定时器
   private speakingActive = new Set<string>()
   private speakingFadeTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -187,11 +208,19 @@ class VoiceConnectionManager {
     const selfMute = existing?.selfMute ?? false
     const selfDeaf = existing?.selfDeaf ?? false
 
-    vlog("join 请求", { guildId, channelId, selfMute, selfDeaf, switching: Boolean(existing) })
+    vlog("join 请求", {
+      guildId,
+      channelId,
+      selfMute,
+      selfDeaf,
+      switching: Boolean(existing),
+    })
     // 迁移中切频道：丢弃在途迁移状态（docs 13 §6）
     this.clearRecovery()
     this.abortPendingLink("join")
     this.migration = null
+    // 切频道：观看白名单不跨频道保留
+    this.watchedVideo = {}
     this.destroyActiveLink()
 
     useVoiceStore.getState().setSession({
@@ -257,7 +286,8 @@ class VoiceConnectionManager {
 
   /** 断开按钮：REST leave + 完整本地清理（迁移中断开 = 服务端取消迁移 job） */
   async leave(): Promise<void> {
-    const guildId = this.info?.guildId ?? useVoiceStore.getState().session?.guildId
+    const guildId =
+      this.info?.guildId ?? useVoiceStore.getState().session?.guildId
     vlog("leave", { guildId })
     this.cleanupToIdle()
     if (!guildId) return
@@ -279,9 +309,10 @@ class VoiceConnectionManager {
     this.prevMuteBeforeDeaf = mute
     this.applyMicState()
     vlog("self_mute →", mute)
-    void updateSelfVoiceState({ guild_id: session.guildId, self_mute: mute }).catch((error) =>
-      vwarn("self_mute 上报失败", error),
-    )
+    void updateSelfVoiceState({
+      guild_id: session.guildId,
+      self_mute: mute,
+    }).catch((error) => vwarn("self_mute 上报失败", error))
   }
 
   /** 自我闭听：停止播放全部下行 + 联动 mute；取消闭听恢复之前的 mute 状态 */
@@ -295,7 +326,9 @@ class VoiceConnectionManager {
     } else {
       nextMute = this.prevMuteBeforeDeaf
     }
-    useVoiceStore.getState().patchSession({ selfDeaf: deaf, selfMute: nextMute })
+    useVoiceStore
+      .getState()
+      .patchSession({ selfDeaf: deaf, selfMute: nextMute })
     this.activeLink?.setDeafened(deaf)
     this.pendingLink?.setDeafened(deaf)
     this.applyMicState()
@@ -331,6 +364,89 @@ class VoiceConnectionManager {
     this.activeLink?.setUserVolume(userId, percent)
     this.pendingLink?.setUserVolume(userId, percent)
     vlog("本地音量", userId, "→", percent)
+  }
+
+  // ---------------------------------------------------------------------------
+  // 屏幕共享增量接口（docs 11；编排在 lib/voice/screen-share.ts）
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 观看端按需订阅某发布者的屏幕轨（协议 §2.1 subscribe kinds=["video"]）。
+   * 与本地静音（audio 维度）互相独立：被本地静音的用户开播，点观看只订其视频。
+   */
+  startWatchingVideo(userId: string) {
+    this.watchedVideo[userId] = true
+    this.activeLink?.setVideoSubscription(userId, true)
+    this.pendingLink?.setVideoSubscription(userId, true)
+    vlog("观看视频订阅", userId)
+  }
+
+  /** 停止观看：退订该发布者的视频轨（unsubscribe kinds=["video"]） */
+  stopWatchingVideo(userId: string) {
+    if (!this.watchedVideo[userId]) return
+    delete this.watchedVideo[userId]
+    this.activeLink?.setVideoSubscription(userId, false)
+    this.pendingLink?.setVideoSubscription(userId, false)
+    vlog("停止观看，退订视频", userId)
+  }
+
+  /** 停止观看全部（离开语音频道视图 / 切频道时收口） */
+  stopAllWatching() {
+    for (const userId of Object.keys(this.watchedVideo)) {
+      this.stopWatchingVideo(userId)
+    }
+  }
+
+  /**
+   * 屏幕共享发起前的 caps 收口（docs 11 BC.1 步骤 2）：
+   * start 占坑成功后服务端已重算 caps，主动 refresh token 并经 auth 帧在位重发，
+   * 返回新 caps（含 publish_screen 才允许继续发布）。失败返回 null。
+   */
+  async ensureScreenCaps(): Promise<string[] | null> {
+    const session = useVoiceStore.getState().session
+    if (!session) return null
+    // 当前 caps 已含 publish_screen（如迁移后 token 保留）则无需刷新
+    if (session.caps.includes("publish_screen")) return session.caps
+    const info = this.info
+    const link = this.activeLink
+    if (!info || !link?.isSignalingOpen) return null
+    const epoch = this.refreshEpoch
+    try {
+      const result = await refreshVoiceToken(info.guildId)
+      if (epoch !== this.refreshEpoch || this.activeLink !== link || !this.info)
+        return null
+      this.info.token = result.token
+      this.info.expiresAtMs = parseExpiresAt(result.expires_at, result.token)
+      const caps = capsList(result.caps)
+      this.applyCaps(caps)
+      this.refreshFailCount = 0
+      link.updateToken(result.token, this.info.expiresAtMs)
+      this.scheduleTokenRefresh()
+      return caps
+    } catch (error) {
+      vwarn("屏幕共享 token 刷新失败", error)
+      return null
+    }
+  }
+
+  /** 在当前链路上发布屏幕轨（addTrack + createOffer 重协商） */
+  async publishScreenTrack(
+    track: MediaStreamTrack,
+    stream: MediaStream
+  ): Promise<boolean> {
+    const link = this.activeLink
+    if (!link || !link.isSignalingOpen) return false
+    try {
+      return await link.publishScreen(track, stream)
+    } catch (error) {
+      verror("屏幕轨发布失败", error)
+      return false
+    }
+  }
+
+  /** 停止屏幕轨发布（removeTrack + 重协商，尽力而为） */
+  async unpublishScreenTrack(): Promise<void> {
+    await this.activeLink?.unpublishScreen()
   }
 
   /** 恢复循环耗尽 / 长时间未恢复时的手动重试入口（重置退避，FR-20） */
@@ -380,8 +496,10 @@ class VoiceConnectionManager {
     }
 
     const patch: Partial<VoiceSession> = {}
-    if (typeof payload.server_mute === "boolean") patch.serverMute = payload.server_mute
-    if (typeof payload.server_deaf === "boolean") patch.serverDeaf = payload.server_deaf
+    if (typeof payload.server_mute === "boolean")
+      patch.serverMute = payload.server_mute
+    if (typeof payload.server_deaf === "boolean")
+      patch.serverDeaf = payload.server_deaf
     // 被管理员移动频道：跟随更新（媒体面由 VOICE_SERVER_UPDATE / re-join 收敛）
     if (payload.channel_id && payload.channel_id !== session.channelId) {
       patch.channelId = payload.channel_id
@@ -409,14 +527,16 @@ class VoiceConnectionManager {
     })
     this.clearDrainingWait()
 
-    const endpoint = payload.advertise_wss_url || payload.sfu_endpoint || payload.endpoint
+    const endpoint =
+      payload.advertise_wss_url || payload.sfu_endpoint || payload.endpoint
     if (!payload.token || !endpoint) {
       vwarn("VOICE_SERVER_UPDATE 缺 token/endpoint，转完整重进")
       this.recoverStart()
       this.scheduleRecovery(() => this.fullRejoin())
       return
     }
-    if (payload.migration_id || this.migration) this.ensureMigration(payload.migration_id ?? null)
+    if (payload.migration_id || this.migration)
+      this.ensureMigration(payload.migration_id ?? null)
     if (this.migration) this.migration.sawServerUpdate = true
 
     // 同节点 = token/参数在位更新，无需重建（docs 13 §6）；迁移事件 token 优先（FR-11）
@@ -432,8 +552,13 @@ class VoiceConnectionManager {
       this.info.token = payload.token
       this.info.expiresAtMs = parseExpiresAt(payload.expires_at, payload.token)
       if (payload.session_id) this.info.sessionId = payload.session_id
-      if (payload.caps) useVoiceStore.getState().patchSession({ caps: capsList(payload.caps) })
-      this.activeLink.updateToken(this.info.token, this.info.expiresAtMs, payload.session_id)
+      if (payload.caps)
+        useVoiceStore.getState().patchSession({ caps: capsList(payload.caps) })
+      this.activeLink.updateToken(
+        this.info.token,
+        this.info.expiresAtMs,
+        payload.session_id
+      )
       this.scheduleTokenRefresh()
       this.finishMigration("same_node_auth")
       return
@@ -449,7 +574,8 @@ class VoiceConnectionManager {
       sessionId: payload.session_id ?? null,
       expiresAtMs: parseExpiresAt(payload.expires_at, payload.token),
     }
-    if (payload.caps) useVoiceStore.getState().patchSession({ caps: capsList(payload.caps) })
+    if (payload.caps)
+      useVoiceStore.getState().patchSession({ caps: capsList(payload.caps) })
 
     // 旧链路已死：无热切基础，直接以服务端指派的新目标重建
     if (!this.activeLink || !this.activeLink.isSignalingOpen) {
@@ -479,10 +605,12 @@ class VoiceConnectionManager {
         micWanted: canPublishAudio(useVoiceStore.getState().session ?? session),
         deafened: session.selfDeaf,
         localMuted: useVoiceStore.getState().localMuted,
+        // 新链路 ready 后重放视频剪枝：白名单外全员退订、观看中的保持订阅
+        watchedVideo: this.watchedVideo,
         userVolumes: useVoiceStore.getState().userVolumes,
         migrationId: this.migration?.id,
       },
-      this.linkCallbacks(),
+      this.linkCallbacks()
     )
     this.pendingLink = pending
     // FR-07：约 8s 未连通 → 放弃新链路、保持旧链路，等服务端换目标（不自行选点）
@@ -567,6 +695,12 @@ class VoiceConnectionManager {
           toast.warning("未获得麦克风权限，已以仅听模式加入语音")
         }
       },
+      // 下行视频轨（屏幕共享观看端）：仅 activeLink 的轨进 store；
+      // pendingLink 建立期到达的轨在 CUTOVER 提升时统一回灌（performCutover）
+      onRemoteVideo: (link, userId, stream) => {
+        if (link !== this.activeLink) return
+        useStageStore.getState().setRemoteVideo(userId, stream)
+      },
     }
   }
 
@@ -639,7 +773,10 @@ class VoiceConnectionManager {
     this.clearPendingConnectTimer()
     this.pendingLink = null
 
-    vlog("CUTOVER 开始", { migration_id: this.migration?.id, new_sid: pending.target.sessionId })
+    vlog("CUTOVER 开始", {
+      migration_id: this.migration?.id,
+      new_sid: pending.target.sessionId,
+    })
     old?.stopUplink()
     pending.allowUplink()
     old?.setPlaybackMuted(true)
@@ -649,6 +786,12 @@ class VoiceConnectionManager {
     this.info = pending.target
     this.clearSpeaking()
     old?.destroy()
+    // 旧链路视频流失效；新链路建立期已到达的视频轨回灌（观看中迁移不黑屏），
+    // 其余由新链路后续 ontrack 落位
+    useStageStore.getState().clearRemoteVideos()
+    for (const [userId, stream] of pending.getVideoStreams()) {
+      useStageStore.getState().setRemoteVideo(userId, stream)
+    }
 
     // token 刷新定时器跟随新链路 expires_at；在途刷新结果作废（FR-12）
     this.refreshEpoch += 1
@@ -677,7 +820,10 @@ class VoiceConnectionManager {
       migrationId: this.migration?.id,
       // CUTOVER 埋点口径：新链路创建 → 上行切换完成
       durationMs: Date.now() - pending.createdAt,
-      detail: { new_node: pending.target.nodeId, new_sid: pending.target.sessionId },
+      detail: {
+        new_node: pending.target.nodeId,
+        new_sid: pending.target.sessionId,
+      },
     })
     this.finishMigration("cutover")
   }
@@ -694,7 +840,10 @@ class VoiceConnectionManager {
     }
     if (link !== this.activeLink) return // 已销毁实例的迟到回调
     vlog("信令关闭", info)
-    vevent("signaling_closed", { closeCode: info.code, migrationId: this.migration?.id })
+    vevent("signaling_closed", {
+      closeCode: info.code,
+      migrationId: this.migration?.id,
+    })
     if (!this.info || !useVoiceStore.getState().session) return
 
     // 迁移双 PC 在途时旧链路死亡：交给 pendingLink 接管，不另起恢复循环
@@ -749,13 +898,17 @@ class VoiceConnectionManager {
       case "AUTH_TIMEOUT":
         // 立即重连并保证 auth 首帧优先
         this.recoverStart()
-        this.scheduleRecovery(() => this.reconnectSameNode(), { immediate: true })
+        this.scheduleRecovery(() => this.reconnectSameNode(), {
+          immediate: true,
+        })
         return
       default:
         // LINK_DEAD / UNKNOWN：退避重连同节点，多次失败升级为完整重进
         this.recoverStart()
         this.scheduleRecovery(() =>
-          this.recoveryAttempts >= 3 ? this.fullRejoin() : this.reconnectSameNode(),
+          this.recoveryAttempts >= 3
+            ? this.fullRejoin()
+            : this.reconnectSameNode()
         )
     }
   }
@@ -791,7 +944,7 @@ class VoiceConnectionManager {
     if (!this.info || !useVoiceStore.getState().session) return
     this.recoverStart()
     this.scheduleRecovery(() =>
-      this.recoveryAttempts >= 3 ? this.fullRejoin() : this.reconnectSameNode(),
+      this.recoveryAttempts >= 3 ? this.fullRejoin() : this.reconnectSameNode()
     )
   }
 
@@ -846,10 +999,12 @@ class VoiceConnectionManager {
         micWanted: session ? canPublishAudio(session) : false,
         deafened: session?.selfDeaf ?? false,
         localMuted: useVoiceStore.getState().localMuted,
+        // ready 后重放视频剪枝：白名单外全员退订、观看中的保持订阅
+        watchedVideo: this.watchedVideo,
         userVolumes: useVoiceStore.getState().userVolumes,
         migrationId: this.migration?.id,
       },
-      this.linkCallbacks(),
+      this.linkCallbacks()
     )
     this.activeLink = link
     this.refreshEpoch += 1
@@ -884,7 +1039,9 @@ class VoiceConnectionManager {
     })
     if (migration.id) {
       vlog("ackVoiceMigration", migration.id)
-      void ackVoiceMigration(migration.id).catch((error) => vwarn("迁移 ack 失败", error))
+      void ackVoiceMigration(migration.id).catch((error) =>
+        vwarn("迁移 ack 失败", error)
+      )
     }
   }
 
@@ -916,6 +1073,15 @@ class VoiceConnectionManager {
     useVoiceStore.getState().patchSession({ caps })
     this.applyMicState()
     vlog("caps 更新", caps)
+    // 舞台模式下 publish_audio 随上/下台增减是常态，专属提示由 stage_role 事件驱动
+    // （docs 10 AD.5：抱下 ≠ 静音，两者渲染必须区分），此处不再叠加静音 toast。
+    const stage = useStageStore.getState().byChannel[session.channelId]
+    const isStage = stage?.instanceKnown
+      ? stage.mode === "STAGE"
+      : inferChannelMode(
+          useVoiceStore.getState().byChannel[session.channelId]
+        ) === "STAGE"
+    if (isStage) return
     if (hadPublish && !hasPublish) {
       toast.error("你已被服务器静音")
     } else if (!hadPublish && hasPublish && session.caps.length > 0) {
@@ -952,7 +1118,7 @@ class VoiceConnectionManager {
           this.speakingFadeTimers.delete(id)
           this.speakingActive.delete(id)
           useVoiceStore.getState().setSpeakingUserIds([...this.speakingActive])
-        }, SPEAKING_FADE_MS),
+        }, SPEAKING_FADE_MS)
       )
     }
     useVoiceStore.getState().setSpeakingUserIds([...this.speakingActive])
@@ -977,7 +1143,10 @@ class VoiceConnectionManager {
     // 缺 exp 时按 TTL 3 分钟的保守周期刷新
     const jitter = Math.random() * REFRESH_JITTER_MS * 2 - REFRESH_JITTER_MS
     const delay = info.expiresAtMs
-      ? Math.max(5_000, info.expiresAtMs - Date.now() - REFRESH_LEAD_MS + jitter)
+      ? Math.max(
+          5_000,
+          info.expiresAtMs - Date.now() - REFRESH_LEAD_MS + jitter
+        )
       : 90_000
     vlog("token 刷新已排期", Math.round(delay / 1000), "s 后")
     this.refreshTimer = setTimeout(() => {
@@ -993,7 +1162,11 @@ class VoiceConnectionManager {
     try {
       const result = await refreshVoiceToken(info.guildId)
       // 刷新与迁移竞争：期间发生迁移/重建则丢弃在途刷新结果（FR-11/12）
-      if (epoch !== this.refreshEpoch || this.activeLink !== link || !this.info) {
+      if (
+        epoch !== this.refreshEpoch ||
+        this.activeLink !== link ||
+        !this.info
+      ) {
         vlog("token 刷新结果作废（期间发生迁移/链路重建）")
         return
       }
@@ -1005,7 +1178,8 @@ class VoiceConnectionManager {
       link.updateToken(result.token, this.info.expiresAtMs)
       this.scheduleTokenRefresh()
     } catch (error) {
-      if (epoch !== this.refreshEpoch || this.activeLink !== link || !this.info) return
+      if (epoch !== this.refreshEpoch || this.activeLink !== link || !this.info)
+        return
       // 403 = caps 已无 join，按被踢处理（等 Gateway 事件说明具体原因）
       if (error instanceof ApiError && error.status === 403) {
         verror("token 刷新 403：已无语音权限，退出语音", error)
@@ -1043,7 +1217,10 @@ class VoiceConnectionManager {
    * 退避调度一次恢复动作；单故障窗口 ≤5 次，耗尽后停止并给手动重试入口。
    * 断网（offline）时挂起不计次，online 事件立即执行（FR-20）。
    */
-  private scheduleRecovery(action: () => Promise<void>, opts?: { immediate?: boolean }) {
+  private scheduleRecovery(
+    action: () => Promise<void>,
+    opts?: { immediate?: boolean }
+  ) {
     if (this.recoverTimer) return // 已有恢复动作在途
     if (!this.online) {
       this.suspendRecovery(action)
@@ -1061,7 +1238,7 @@ class VoiceConnectionManager {
     this.recoveryAttempts += 1
     const base = Math.min(
       BACKOFF_CAP_MS,
-      BACKOFF_BASE_MS * BACKOFF_MULTIPLIER ** (this.recoveryAttempts - 1),
+      BACKOFF_BASE_MS * BACKOFF_MULTIPLIER ** (this.recoveryAttempts - 1)
     )
     const jitter = 1 - BACKOFF_JITTER + Math.random() * BACKOFF_JITTER * 2
     const delay = opts?.immediate ? 0 : Math.round(base * jitter)
@@ -1227,6 +1404,8 @@ class VoiceConnectionManager {
       this.activeLink = null
     }
     this.clearSpeaking()
+    // 旧链路的下行视频流已随 PC 关闭失效；新链路 ontrack 会重新落位
+    useStageStore.getState().clearRemoteVideos()
   }
 
   private clearRecovery() {
@@ -1256,6 +1435,7 @@ class VoiceConnectionManager {
     this.migration = null
     this.micWarned = false
     this.prevMuteBeforeDeaf = false
+    this.watchedVideo = {}
     this.info = null
     useVoiceStore.getState().setSession(null)
   }

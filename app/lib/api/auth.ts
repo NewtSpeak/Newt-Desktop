@@ -1,6 +1,12 @@
 // 鉴权端点（POST /gapi/v1/auth/*、GET /gapi/v1/users/@me）。
 
-import { api, apiPublic, clearSession, getRefreshToken, setSession } from "./http"
+import {
+  api,
+  apiPublic,
+  clearSession,
+  getRefreshToken,
+  setSession,
+} from "./http"
 import type { TokenResponse, User } from "./types"
 
 export type SignupInput = {
@@ -9,9 +15,13 @@ export type SignupInput = {
   email: string
   /** 8-128 字符 */
   password: string
+  /** 注册邀请码（通过注册邀请链接连接服务器时必带；与 guild_invite_code 互斥） */
+  invite_code?: string
+  /** 社区邀请码（通过社区邀请链接注册时携带，同样绕过注册开关；注册后需另行 join） */
+  guild_invite_code?: string
 }
 
-/** 注册成功即持有会话（201）；403 SIGNUP_DISABLED、409 ACCOUNT_EXISTS */
+/** 注册成功即持有会话（201）；403 SIGNUP_DISABLED / INVITE_INVALID、409 ACCOUNT_EXISTS */
 export async function signup(input: SignupInput): Promise<TokenResponse> {
   const tokens = await apiPublic<TokenResponse>("/auth/signup", {
     method: "POST",

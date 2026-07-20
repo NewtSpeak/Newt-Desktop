@@ -11,6 +11,7 @@ import { useEffect } from "react"
 
 import type { Route } from "./+types/root"
 import "./app.css"
+import { TitlebarControls } from "~/components/titlebar-controls"
 import { TooltipProvider } from "~/components/ui/tooltip"
 import { initAppearance } from "~/stores/settings"
 
@@ -42,7 +43,13 @@ export default function App() {
   useEffect(() => {
     initAppearance()
   }, [])
-  return <Outlet />
+  return (
+    <>
+      <Outlet />
+      {/* 右上角悬浮：主题切换 +（Windows/Linux）窗口三键，覆盖全部路由 */}
+      <TitlebarControls />
+    </>
+  )
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

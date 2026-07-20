@@ -50,6 +50,8 @@ export type Channel = {
   type: ChannelType
   /** 服务端当前模型未含 position 字段，预留：缺失时按 0 处理 */
   position?: number
+  /** 频道最新消息雪花 ID（字符串，无消息为 "0"）；未读白点恢复用 */
+  last_message_id?: string
   created_at?: string
   updated_at?: string
 }
@@ -61,6 +63,23 @@ export type GuildMember = {
   nickname: string
   is_owner: boolean
   role_ids: string[]
+}
+
+/** 服务器角色（model.Role；permissions 为 int64 位掩码，JSON 序列化为 number） */
+export type Role = {
+  id: string
+  guild_id: string
+  name: string
+  permissions: number | string
+  position: number
+  is_everyone: boolean
+  /** 服务端内置托管角色（如「管理员」，permissions 为 ADMINISTRATOR）；普通角色缺省 */
+  managed?: boolean
+  color?: string
+  hoist?: boolean
+  mentionable?: boolean
+  created_at?: string
+  updated_at?: string
 }
 
 /** joinInvite 返回 Member 记录（201 新加入 / 200 幂等已是成员） */
@@ -102,6 +121,12 @@ export type Message = {
   content: string
   reply_to_id?: string
   attachments: MessageAttachment[]
+  /** 被提及且确为本服成员的用户 ID（wire format <@UUID>） */
+  mentions?: string[]
+  /** 被提及且确为本服角色的角色 ID */
+  mention_roles?: string[]
+  /** 正文含 @everyone/@here 且作者具备 MENTION_EVERYONE 权限 */
+  mention_everyone?: boolean
   edit_count: number
   edited_at?: string
   nonce?: string
@@ -185,8 +210,8 @@ export type VoiceState = {
   joined_at?: string | null
   created_at?: string
   updated_at?: string
-  // stage 模块增量字段（VOICE_STATE_UPDATE 第二形态，按 user_id 合并；本期仅存储）
-  stage_role?: StageRole | null
+  // stage 模块增量字段（VOICE_STATE_UPDATE 第二形态，按 user_id 合并）
+  stage_role?: StageRoleWire | null
   capacity_muted?: boolean
   self_stream?: boolean
 }
@@ -248,6 +273,8 @@ export type VoicePublicKey = {
 
 export type VoiceChannelMode = "FREE_DISCUSSION" | "STAGE"
 export type StageRole = "AUDIENCE" | "QUEUED" | "SPEAKER"
+/** 线上形态：FREE 模式服务端返回空串（stage/authority.go RoleNone = ""） */
+export type StageRoleWire = StageRole | "NONE" | ""
 
 export type StageConfig = {
   guild_id?: string
@@ -290,7 +317,10 @@ export type StageQueueResult = {
 }
 
 export type StageApplyResult = { status: "QUEUED"; idempotent: boolean }
-export type StageSeatResult = { status: "SPEAKER" | "AUDIENCE"; idempotent?: boolean }
+export type StageSeatResult = {
+  status: "SPEAKER" | "AUDIENCE"
+  idempotent?: boolean
+}
 
 export type ScreenQuality = "480p" | "720p" | "1080p"
 

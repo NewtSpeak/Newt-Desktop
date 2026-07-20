@@ -1,31 +1,64 @@
-// 文字频道页：# 频道头部 + 消息流 + typing 指示 + Composer。
+// 频道页：按频道 type 分流——TEXT → 消息页（# 头部 + 消息流 + Composer），
+// VOICE → 语音频道主视图（舞台/自由讨论布局 + 屏幕共享观看端，docs 10/11）。
 // 消息数据全部来自 messages store（REST 拉取 + Gateway 事件驱动）。
 
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router"
-import { HashIcon } from "lucide-react"
+import { HashIcon, UsersIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Composer } from "~/components/messages/composer"
-import { MessageList, TypingIndicator } from "~/components/messages/message-list"
+import {
+  MessageList,
+  TypingIndicator,
+} from "~/components/messages/message-list"
+import { VoiceChannelView } from "~/components/voice/voice-channel-view"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
+import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
 import { useUIStore } from "~/stores/ui"
+import { cn } from "~/lib/utils"
+
+/** 频道页头部「成员」图标按钮：切换右侧成员面板开合（docs 02 FR-22） */
+function MemberPanelToggle() {
+  const open = useUIStore((state) => state.memberPanelOpen)
+  return (
+    <button
+      type="button"
+      title={open ? "收起成员面板" : "展开成员面板"}
+      aria-label={open ? "收起成员面板" : "展开成员面板"}
+      onClick={() => useUIStore.getState().toggleMemberPanel()}
+      className={cn(
+        "ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        open && "text-foreground",
+      )}
+    >
+      <UsersIcon className="size-4" />
+    </button>
+  )
+}
 
 export default function ChannelPage() {
-  const { guildId, channelId } = useParams<{ guildId: string; channelId: string }>()
+  const { guildId, channelId } = useParams<{
+    guildId: string
+    channelId: string
+  }>()
   const navigate = useNavigate()
-  const channels = useChannelsStore((state) => (guildId ? state.byGuild[guildId] : undefined))
+  const channels = useChannelsStore((state) =>
+    guildId ? state.byGuild[guildId] : undefined
+  )
   const channel = channels?.find((item) => item.id === channelId)
   const user = useAuthStore((state) => state.user)
-  const members = useMembersStore((state) => (guildId ? state.byGuild[guildId] : undefined))
+  const members = useMembersStore((state) =>
+    guildId ? state.byGuild[guildId] : undefined
+  )
   const unavailable = useMessagesStore((state) =>
-    channelId ? Boolean(state.byChannel[channelId]?.unavailable) : false,
+    channelId ? Boolean(state.byChannel[channelId]?.unavailable) : false
   )
   const channelMessages = useMessagesStore((state) =>
-    channelId ? state.byChannel[channelId]?.messages : undefined,
+    channelId ? state.byChannel[channelId]?.messages : undefined
   )
 
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
@@ -43,7 +76,7 @@ export default function ChannelPage() {
         params.delete("around")
         return params
       },
-      { replace: true },
+      { replace: true }
     )
   }, [setSearchParams])
 
@@ -54,9 +87,12 @@ export default function ChannelPage() {
     }
   }, [guildId, channelId])
 
-  // 进入频道拉取最近 50 条；带 around 参数时改走锚点上下文加载
+  const channelType = channel?.type
+
+  // 进入频道拉取最近 50 条；带 around 参数时改走锚点上下文加载。
+  // 语音频道不走消息域（主视图由 VoiceChannelView 承担）。
   useEffect(() => {
-    if (!channelId) return
+    if (!channelId || channelType === "VOICE") return
     if (around) {
       let cancelled = false
       void useMessagesStore
@@ -70,7 +106,10 @@ export default function ChannelPage() {
             // 目标被删/不可见（竞态容错 FR-19）
             toast.error("无法定位该消息")
             clearAroundParam()
-            void useMessagesStore.getState().loadInitial(channelId).catch(() => undefined)
+            void useMessagesStore
+              .getState()
+              .loadInitial(channelId)
+              .catch(() => undefined)
           }
         })
         .catch(() => {
@@ -82,8 +121,11 @@ export default function ChannelPage() {
         cancelled = true
       }
     }
-    void useMessagesStore.getState().loadInitial(channelId).catch(() => undefined)
-  }, [channelId, around, clearAroundParam])
+    void useMessagesStore
+      .getState()
+      .loadInitial(channelId)
+      .catch(() => undefined)
+  }, [channelId, channelType, around, clearAroundParam])
 
   // 切频道时重置本页交互态
   useEffect(() => {
@@ -93,13 +135,29 @@ export default function ChannelPage() {
 
   // 正在回复/编辑的消息被删除（本端或远端）时退出对应状态
   useEffect(() => {
-    if (replyTo && channelMessages && !channelMessages.some((item) => item.id === replyTo.id)) {
+    if (
+      replyTo &&
+      channelMessages &&
+      !channelMessages.some((item) => item.id === replyTo.id)
+    ) {
       setReplyTo(null)
     }
-    if (editingId && channelMessages && !channelMessages.some((item) => item.id === editingId)) {
+    if (
+      editingId &&
+      channelMessages &&
+      !channelMessages.some((item) => item.id === editingId)
+    ) {
       setEditingId(null)
     }
   }, [channelMessages, replyTo, editingId])
+
+  // 正在浏览的服务器消失（被踢/Ban/删服，GUILD_DELETE / GUILD_MEMBER_REMOVE）：导航走
+  const guildGone = useGuildsStore((state) =>
+    Boolean(guildId && state.loaded && !state.guilds.some((item) => item.id === guildId))
+  )
+  useEffect(() => {
+    if (guildGone) navigate("/", { replace: true })
+  }, [guildGone, navigate])
 
   // 频道列表已加载但找不到该频道（404 被移除/不可见）：
   // 历史 404 的场景保留在本页显示空态，其余情况退回首页
@@ -122,10 +180,21 @@ export default function ChannelPage() {
       if (userId === user?.id) return user.username
       return `用户${userId.slice(0, 6)}`
     },
-    [members, user],
+    [members, user]
   )
 
   if (!guildId || !channelId) return null
+
+  // 语音频道：主内容区渲染语音视图（舞台分区/参与者网格/屏幕共享观看端）
+  if (channel?.type === "VOICE") {
+    return (
+      <VoiceChannelView
+        guildId={guildId}
+        channelId={channelId}
+        channelName={channel.name}
+      />
+    )
+  }
 
   // 历史 404：频道不可用空态
   if (unavailable) {
@@ -134,6 +203,7 @@ export default function ChannelPage() {
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <HashIcon className="size-4 text-muted-foreground" />
           <span className="text-sm font-medium">{channel?.name ?? "频道"}</span>
+          <MemberPanelToggle />
         </header>
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
           <p className="text-base font-medium">无法加载此频道</p>
@@ -148,7 +218,8 @@ export default function ChannelPage() {
   // 空输入框按 ↑：编辑自己最近一条消息
   const editLastOwn = () => {
     if (!user) return
-    const list = useMessagesStore.getState().byChannel[channelId]?.messages ?? []
+    const list =
+      useMessagesStore.getState().byChannel[channelId]?.messages ?? []
     for (let index = list.length - 1; index >= 0; index--) {
       if (list[index].author_id === user.id) {
         setEditingId(list[index].id)
@@ -163,6 +234,7 @@ export default function ChannelPage() {
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
         <HashIcon className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">{channelName}</span>
+        <MemberPanelToggle />
       </header>
 
       {/* 消息流（key 按频道重挂载，隔离滚动与本地交互态） */}

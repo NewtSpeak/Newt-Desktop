@@ -31,6 +31,8 @@ export type VoiceRtcCallbacks = {
   onSelfSpeaking: (speaking: boolean) => void
   /** 首个下行音频轨到达（每实例至多一次；迁移接收侧切换时机） */
   onFirstRemoteAudio: () => void
+  /** 下行视频轨（屏幕共享）到达/移除：stream=null 表示该用户视频轨已结束（docs 11 观看端） */
+  onRemoteVideo?: (userId: string, stream: MediaStream | null) => void
 }
 
 /** 隐藏 audio 池容器（autoplay），全局唯一 */
@@ -61,6 +63,11 @@ export class VoiceRtc {
   private audioStreams = new Map<string, MediaStream>()
   private iceDisconnectTimer: ReturnType<typeof setTimeout> | null = null
   private firstRemoteAudioFired = false
+
+  // 屏幕共享上行（docs 11）：sender 用于停止时 removeTrack 重协商
+  private screenSender: RTCRtpSender | null = null
+  // 下行视频轨（屏幕共享观看端）：user_id → stream
+  private videoStreams = new Map<string, MediaStream>()
 
   // 播放侧静音状态（信令退订之外的双保险）
   private deafened = false
@@ -113,7 +120,8 @@ export class VoiceRtc {
       }
       this.micStream = stream
       this.micTrack = stream.getAudioTracks()[0] ?? null
-      if (this.micTrack) this.micTrack.enabled = this.micEnabled && !this.uplinkStopped
+      if (this.micTrack)
+        this.micTrack.enabled = this.micEnabled && !this.uplinkStopped
       this.startSpeakingDetection(stream)
       vlog("麦克风采集就绪", this.micTrack?.label)
       return this.micTrack !== null
@@ -136,7 +144,8 @@ export class VoiceRtc {
     pc.ontrack = (event) => this.handleRemoteTrack(event)
     pc.oniceconnectionstatechange = () => this.handleIceStateChange()
     pc.onconnectionstatechange = () => {
-      if (this.pc === pc) this.callbacks.onConnectionStateChange(pc.connectionState)
+      if (this.pc === pc)
+        this.callbacks.onConnectionStateChange(pc.connectionState)
     }
 
     if (this.micTrack && this.micStream) {
@@ -161,6 +170,47 @@ export class VoiceRtc {
     const offer = await pc.createOffer({ iceRestart: true })
     await pc.setLocalDescription(offer)
     return offer.sdp ?? null
+  }
+
+  /**
+   * 发布屏幕轨（docs 11 FR-04）：addTrack 后生成 renegotiation offer SDP。
+   * 调用方负责把 SDP 经信令 offer 帧发给 SFU 并等 answer。无 PC 时返回 null。
+   */
+  async publishScreenTrack(
+    track: MediaStreamTrack,
+    stream: MediaStream
+  ): Promise<string | null> {
+    const pc = this.pc
+    if (!pc) return null
+    if (this.screenSender) {
+      // 每用户同时 1 路（docs 11 AX.4）：先替换旧轨
+      await this.screenSender.replaceTrack(track)
+      return null
+    }
+    this.screenSender = pc.addTrack(track, stream)
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    return offer.sdp ?? null
+  }
+
+  /** 停止屏幕轨发布：removeTrack 后生成 renegotiation offer SDP（无在发轨时返回 null） */
+  async removeScreenTrack(): Promise<string | null> {
+    const pc = this.pc
+    const sender = this.screenSender
+    this.screenSender = null
+    if (!pc || !sender) return null
+    try {
+      pc.removeTrack(sender)
+    } catch {
+      return null
+    }
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    return offer.sdp ?? null
+  }
+
+  get hasScreenTrack(): boolean {
+    return this.screenSender !== null
   }
 
   /** 应用 SFU 对我方 offer 的 answer */
@@ -292,7 +342,11 @@ export class VoiceRtc {
     this.micStream?.getTracks().forEach((track) => track.stop())
     this.micStream = null
     this.micTrack = null
-    for (const userId of [...this.gainPipes.keys()]) this.teardownGainPipe(userId)
+    // 屏幕采集 track 归 screen-share 管理器所有（含 onended 收尾），此处只解引用
+    this.screenSender = null
+    this.videoStreams.clear()
+    for (const userId of [...this.gainPipes.keys()])
+      this.teardownGainPipe(userId)
     if (this.playbackContext) {
       void this.playbackContext.close().catch(() => undefined)
       this.playbackContext = null
@@ -310,6 +364,10 @@ export class VoiceRtc {
   // ---------------------------------------------------------------------------
 
   private handleRemoteTrack(event: RTCTrackEvent) {
+    if (event.track.kind === "video") {
+      this.handleRemoteVideoTrack(event)
+      return
+    }
     if (event.track.kind !== "audio") return
     const stream = event.streams[0]
     // 约定：SFU 侧远端 stream id = 发布者 user_id；无 stream 时退化为 track id
@@ -328,7 +386,8 @@ export class VoiceRtc {
     const mediaStream = stream ?? new MediaStream([event.track])
     el.srcObject = mediaStream
     // 流变化后旧放大链失效，重建
-    if (this.audioStreams.get(userId) !== mediaStream) this.teardownGainPipe(userId)
+    if (this.audioStreams.get(userId) !== mediaStream)
+      this.teardownGainPipe(userId)
     this.audioStreams.set(userId, mediaStream)
     this.applyPlayback(userId)
     void el.play().catch(() => {
@@ -350,11 +409,40 @@ export class VoiceRtc {
     }
   }
 
+  /** 下行视频轨（屏幕共享观看端）：按 user_id 关联并回调，渲染与否由 UI 决定 */
+  private handleRemoteVideoTrack(event: RTCTrackEvent) {
+    const stream = event.streams[0]
+    // 约定同音频：远端 stream id = 发布者 user_id
+    const userId = stream?.id ?? event.track.id
+    vlog("下行视频轨到达", userId)
+    const mediaStream = stream ?? new MediaStream([event.track])
+    this.videoStreams.set(userId, mediaStream)
+    this.callbacks.onRemoteVideo?.(userId, mediaStream)
+
+    event.track.onended = () => {
+      if (this.videoStreams.get(userId) === mediaStream) {
+        this.removeUserVideo(userId)
+      }
+    }
+  }
+
+  /** track_ended(kind=video) / participant_left 时移除下行视频 */
+  removeUserVideo(userId: string) {
+    if (!this.videoStreams.delete(userId)) return
+    this.callbacks.onRemoteVideo?.(userId, null)
+  }
+
+  /** 当前已到达的下行视频轨快照（迁移 CUTOVER 后回灌 store 用） */
+  getVideoStreams(): ReadonlyMap<string, MediaStream> {
+    return this.videoStreams
+  }
+
   /** 单用户播放收口：静音条件 + 音量（≤1 元素直出，>1 走 GainNode） */
   private applyPlayback(userId: string) {
     const el = this.audioEls.get(userId)
     if (!el) return
-    const muted = this.playbackMuted || this.deafened || this.locallyMuted.has(userId)
+    const muted =
+      this.playbackMuted || this.deafened || this.locallyMuted.has(userId)
     const volume = this.volumes.get(userId) ?? 1
 
     if (volume <= 1) {
@@ -435,7 +523,10 @@ export class VoiceRtc {
       }, ICE_DISCONNECTED_GRACE_MS)
       return
     }
-    if (this.iceDisconnectTimer && (state === "connected" || state === "completed")) {
+    if (
+      this.iceDisconnectTimer &&
+      (state === "connected" || state === "completed")
+    ) {
       clearTimeout(this.iceDisconnectTimer)
       this.iceDisconnectTimer = null
     }
@@ -445,7 +536,8 @@ export class VoiceRtc {
     try {
       const AudioContextCtor =
         window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext
       if (!AudioContextCtor) return
       this.audioContext = new AudioContextCtor()
       const source = this.audioContext.createMediaStreamSource(stream)

@@ -6,7 +6,7 @@
 // 并订阅变化做热切换；本组件只负责偏好存储，接入点在语音连接层。
 
 import { useCallback, useEffect, useState } from "react"
-import { MicIcon, RefreshCwIcon } from "lucide-react"
+import { MicIcon, RefreshCwIcon, XIcon } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
 import {
@@ -19,8 +19,33 @@ import {
 import { Slider } from "~/components/ui/slider"
 import { Switch } from "~/components/ui/switch"
 import { RadioGroup, RadioGroupItem } from "~/components/ui/radio-group"
+import { useMembersStore } from "~/stores/members"
 import { useSettingsStore, type VoiceInputMode } from "~/stores/settings"
 import { ComingSoon, GroupLabel, SectionTitle, SettingRow } from "./section"
+
+/** 语音包屏蔽名单条目：跨已缓存服务器解析昵称，查不到显示 ID 片段 */
+function VoicePackMutedRow({ userId }: { userId: string }) {
+  const name = useMembersStore((state) => {
+    for (const members of Object.values(state.byGuild)) {
+      const member = members.find((item) => item.user_id === userId)
+      if (member) return member.nickname || member.username
+    }
+    return null
+  })
+  const setVoicePackMuted = useSettingsStore((state) => state.setVoicePackMuted)
+
+  return (
+    <div className="flex items-center justify-between gap-3 border-b py-2 last:border-b-0">
+      <span className="min-w-0 flex-1 truncate text-sm">
+        {name ?? `用户${userId.slice(0, 6)}`}
+      </span>
+      <Button size="sm" variant="ghost" onClick={() => setVoicePackMuted(userId, false)}>
+        <XIcon />
+        移除
+      </Button>
+    </div>
+  )
+}
 
 type DeviceOption = { deviceId: string; label: string }
 type PermissionState = "unknown" | "granted" | "denied"
@@ -157,6 +182,37 @@ export function VoiceSection() {
           />
         </div>
       </SettingRow>
+
+      <GroupLabel>入场音效</GroupLabel>
+      <SettingRow label="播放入场音效" description="他人进入语音频道时播放其入场语音包">
+        <Switch
+          checked={voice.voicePackEnabled}
+          onCheckedChange={(checked) => setVoice({ voicePackEnabled: Boolean(checked) })}
+        />
+      </SettingRow>
+      <SettingRow label="音效音量" description={`${voice.voicePackVolume}%（独立于通话输出音量）`}>
+        <div className="w-56">
+          <Slider
+            min={0}
+            max={100}
+            value={voice.voicePackVolume}
+            onValueChange={(value) =>
+              setVoice({ voicePackVolume: Array.isArray(value) ? value[0] : value })
+            }
+          />
+        </div>
+      </SettingRow>
+      {voice.voicePackMutedUsers.length > 0 && (
+        <div className="mt-2 rounded-2xl border p-4">
+          <p className="mb-1 text-sm font-medium">已屏蔽的入场音效</p>
+          <p className="mb-2 text-xs text-muted-foreground">
+            以下成员的入场语音不会出声（仍显示视觉提示）
+          </p>
+          {voice.voicePackMutedUsers.map((userId) => (
+            <VoicePackMutedRow key={userId} userId={userId} />
+          ))}
+        </div>
+      )}
 
       <GroupLabel>输入模式</GroupLabel>
       <div className="flex items-center gap-2 py-1">

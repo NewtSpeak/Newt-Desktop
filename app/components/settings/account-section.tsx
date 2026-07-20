@@ -29,7 +29,8 @@ export function AccountSection() {
   const handleLogout = async () => {
     useSettingsStore.getState().closePanel()
     await useAuthStore.getState().logout()
-    navigate("/login", { replace: true })
+    // 未登录态由应用壳渲染欢迎空态，回到根路由即可
+    navigate("/", { replace: true })
   }
 
   return (
@@ -39,14 +40,18 @@ export function AccountSection() {
       {/* 账号信息卡片 */}
       <div className="flex items-center gap-4 rounded-2xl bg-muted/50 p-4">
         <Avatar className="size-16 rounded-2xl">
-          {user.avatar_url && <AvatarImage src={user.avatar_url} alt={user.username} />}
+          {user.avatar_url && (
+            <AvatarImage src={user.avatar_url} alt={user.username} />
+          )}
           <AvatarFallback className="rounded-2xl text-lg">
             {user.username.trim().slice(0, 2) || "?"}
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0">
           <p className="truncate text-base font-semibold">{user.username}</p>
-          <p className="truncate text-sm text-muted-foreground">{maskEmail(user.email)}</p>
+          <p className="truncate text-sm text-muted-foreground">
+            {maskEmail(user.email)}
+          </p>
         </div>
       </div>
 
@@ -62,7 +67,7 @@ export function AccountSection() {
       </SettingRow>
 
       <GroupLabel>会话</GroupLabel>
-      <SettingRow label="退出登录" description="吊销当前会话并返回登录页">
+      <SettingRow label="退出登录" description="吊销当前会话并返回欢迎界面">
         <Button variant="destructive" size="sm" onClick={handleLogout}>
           <LogOutIcon />
           退出登录

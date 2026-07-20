@@ -16,23 +16,42 @@ import { Label } from "~/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs"
 import { createGuild, joinInvite } from "~/lib/api/guilds"
 import { ApiError } from "~/lib/api/http"
+import {
+  getServerBaseUrl,
+  isSameServer,
+  parseInviteLink,
+} from "~/lib/server-connection"
 import { useChannelsStore } from "~/stores/channels"
 import { useGuildsStore } from "~/stores/guilds"
 import { useUIStore } from "~/stores/ui"
 
-/** 从输入中提取邀请码：支持纯 code 或完整 URL（取路径最后一段） */
-export function extractInviteCode(input: string): string {
+/**
+ * 从输入中提取邀请码：支持纯 code、完整社区邀请链接（分享链接/深链）或
+ * "invite/CODE" 片段。完整链接会校验其指向的服务器与当前连接一致。
+ */
+export function extractInviteCode(
+  input: string
+): { code: string } | { error: string } {
   const raw = input.trim()
-  if (!raw) return ""
-  try {
-    const url = new URL(raw)
-    const segments = url.pathname.split("/").filter(Boolean)
-    return segments[segments.length - 1] ?? ""
-  } catch {
-    // 非 URL：容忍 "invite/CODE" 这类片段，取最后一段
-    const segments = raw.split("/").filter(Boolean)
-    return segments[segments.length - 1] ?? ""
+  if (!raw) return { error: "请输入邀请码或邀请链接" }
+  const parsed = parseInviteLink(raw)
+  if (parsed) {
+    if (parsed.kind === "registration")
+      return { error: "这是注册邀请链接，不是社区邀请链接" }
+    const current = getServerBaseUrl()
+    if (current && !isSameServer(current, parsed.serverBaseUrl))
+      return { error: "该邀请属于其他服务器" }
+    return { code: parsed.code }
   }
+  // 非完整邀请链接：容忍纯 code、其他 URL 或 "invite/CODE" 这类片段，取最后一段
+  let segments: string[]
+  try {
+    segments = new URL(raw).pathname.split("/").filter(Boolean)
+  } catch {
+    segments = raw.split("/").filter(Boolean)
+  }
+  const code = segments[segments.length - 1] ?? ""
+  return code ? { code } : { error: "请输入邀请码或邀请链接" }
 }
 
 export function AddGuildDialog({
@@ -85,15 +104,15 @@ export function AddGuildDialog({
 
   const handleJoin = async (event: React.FormEvent) => {
     event.preventDefault()
-    const code = extractInviteCode(invite)
-    if (!code) {
-      setError("请输入邀请码或邀请链接")
+    const extracted = extractInviteCode(invite)
+    if ("error" in extracted) {
+      setError(extracted.error)
       return
     }
     setSubmitting(true)
     setError(null)
     try {
-      const member = await joinInvite(code)
+      const member = await joinInvite(extracted.code)
       await finish(member.guild_id)
     } catch (caught) {
       if (caught instanceof ApiError) {

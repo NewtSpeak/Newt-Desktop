@@ -5,6 +5,12 @@ import { create } from "zustand"
 import { listChannels } from "~/lib/api/guilds"
 import { isNotFound } from "~/lib/api/http"
 import type { Channel } from "~/lib/api/types"
+import { useReadStatesStore } from "./read-states"
+
+/** 频道对象携带 last_message_id：喂给未读 store 恢复离线未读白点 */
+function seedReadStates(channels: Channel[]) {
+  useReadStatesStore.getState().seedFromChannels(channels)
+}
 
 type ChannelsState = {
   /** guildId → 频道列表（已按 position、名称排序） */
@@ -12,6 +18,10 @@ type ChannelsState = {
   loadingGuilds: Record<string, boolean>
   /** 404 时返回 null 并清缓存（服务器已不可见），由调用方决定跳转 */
   fetchChannels: (guildId: string) => Promise<Channel[] | null>
+  /** 整体替换某服频道列表（READY 快照 / GUILD_CREATE 事件喂入） */
+  setChannels: (guildId: string, channels: Channel[]) => void
+  /** CHANNEL_CREATE / CHANNEL_UPDATE 增量维护 */
+  upsertChannel: (channel: Channel) => void
   removeChannel: (guildId: string, channelId: string) => void
   removeGuild: (guildId: string) => void
   reset: () => void
@@ -35,6 +45,7 @@ export const useChannelsStore = create<ChannelsState>()((set, get) => ({
         byGuild: { ...state.byGuild, [guildId]: channels },
         loadingGuilds: { ...state.loadingGuilds, [guildId]: false },
       }))
+      seedReadStates(channels)
       return channels
     } catch (error) {
       set((state) => ({ loadingGuilds: { ...state.loadingGuilds, [guildId]: false } }))
@@ -46,6 +57,27 @@ export const useChannelsStore = create<ChannelsState>()((set, get) => ({
       }
       throw error
     }
+  },
+
+  setChannels: (guildId, channels) => {
+    set((state) => ({
+      byGuild: { ...state.byGuild, [guildId]: sortChannels(channels) },
+    }))
+    seedReadStates(channels)
+  },
+
+  upsertChannel: (channel) => {
+    seedReadStates([channel])
+    set((state) => {
+      const channels = state.byGuild[channel.guild_id]
+      // 该服频道列表尚未加载：忽略增量（选中时会全量拉取）
+      if (!channels) return state
+      const next = channels.filter((item) => item.id !== channel.id)
+      next.push(channel)
+      return {
+        byGuild: { ...state.byGuild, [channel.guild_id]: sortChannels(next) },
+      }
+    })
   },
 
   removeChannel: (guildId, channelId) =>

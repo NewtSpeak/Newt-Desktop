@@ -1,12 +1,15 @@
-// 受保护的应用壳（原 dashboard.tsx 改造）：
-//   启动 gate（静默续期 → 加载态/跳登录）→ Gateway 自动连接 → 服务器栏 + 频道列表 + 内容区。
+// 应用壳：
+//   启动 gate（静默续期 → 加载态/欢迎空态）→ Gateway 自动连接 → 服务器栏 + 频道列表 + 内容区。
+// 未登录不再整页跳转登录页，而是渲染欢迎壳（左侧只有「+」，右侧引导/页内认证流程）。
 // 窗口拖拽、顶部 32px 留白（--app-top-inset）、macOS 交通灯避让行为保持不变。
 
 import { useEffect, useState } from "react"
-import { Navigate, Outlet } from "react-router"
+import { Outlet } from "react-router"
 
 import { AppSidebar } from "~/components/app-sidebar"
+import { WelcomeShell } from "~/components/welcome-shell"
 import { ChannelList } from "~/components/channel-list"
+import { MemberPanel } from "~/components/member-panel"
 import { QuickSwitcher } from "~/components/quick-switcher"
 import { SearchPanel } from "~/components/search/search-panel"
 import { SettingsPanel } from "~/components/settings/settings-panel"
@@ -15,26 +18,47 @@ import { Toaster } from "~/components/ui/sonner"
 import { useAuthBootstrap } from "~/hooks/use-auth-bootstrap"
 import { dragWindowOnSelfMouseDown } from "~/lib/window-drag"
 import { gateway } from "~/lib/gateway/client"
+import { initDockBadge } from "~/lib/notifications"
+import { initSettingsSync } from "~/lib/settings-sync"
 import { bindGatewayToStores } from "~/stores/gateway-bindings"
 import { useGuildsStore } from "~/stores/guilds"
+import { initIdleWatcher } from "~/stores/presence"
+import { useReadStatesStore } from "~/stores/read-states"
 import { useSettingsStore } from "~/stores/settings"
+import { useUIStore } from "~/stores/ui"
 
 export default function AppShell() {
   const status = useAuthBootstrap()
   const [switcherOpen, setSwitcherOpen] = useState(false)
 
   // 进入应用壳后：绑定事件分发 + 连接 Gateway + 拉服务器列表
+  // + 设置服务端同步 / 空闲检测 / Dock 角标（均幂等）
   useEffect(() => {
     if (status !== "authenticated") return
     bindGatewayToStores()
     gateway.connect()
-    void useGuildsStore.getState().fetchGuilds().catch(() => undefined)
+    initSettingsSync()
+    initIdleWatcher()
+    initDockBadge()
+    void useGuildsStore
+      .getState()
+      .fetchGuilds()
+      .catch(() => undefined)
   }, [status])
 
-  // 全局快捷键：Ctrl/Cmd+K 快速切换器、Ctrl/Cmd+, 设置面板
+  // 全局快捷键：Ctrl/Cmd+K 快速切换器、Ctrl/Cmd+, 设置面板、
+  // Shift+Esc 当前服务器全部已读（docs 15 FR-02）
   useEffect(() => {
     if (status !== "authenticated") return
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.shiftKey && event.key === "Escape") {
+        const guildId = useUIStore.getState().selectedGuildId
+        if (guildId) {
+          event.preventDefault()
+          useReadStatesStore.getState().ackGuild(guildId)
+        }
+        return
+      }
       if (!(event.metaKey || event.ctrlKey)) return
       if (event.key === "k" || event.key === "K") {
         event.preventDefault()
@@ -59,7 +83,7 @@ export default function AppShell() {
     )
   }
   if (status === "unauthenticated") {
-    return <Navigate to="/login" replace />
+    return <WelcomeShell />
   }
 
   return (
@@ -87,6 +111,8 @@ export default function AppShell() {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none">
             <Outlet />
           </div>
+          {/* 成员面板（右侧 240px 可折叠，docs 02 FR-22） */}
+          <MemberPanel />
           {/* 消息搜索面板（右侧 420px 滑出） */}
           <SearchPanel />
         </div>

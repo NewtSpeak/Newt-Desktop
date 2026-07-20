@@ -7,6 +7,7 @@ import { ArrowDownIcon, HashIcon } from "lucide-react"
 
 import type { MentionResolver } from "~/lib/markdown"
 import { compareSnowflake, useMessagesStore, type ChatMessage } from "~/stores/messages"
+import { useReadStatesStore } from "~/stores/read-states"
 import { MessageRow, PendingRow } from "./message-item"
 
 const GROUP_WINDOW_MS = 7 * 60 * 1000
@@ -34,6 +35,18 @@ function DateDivider({ iso }: { iso: string }) {
       <div className="h-px flex-1 bg-border" />
       <span className="text-xs text-muted-foreground select-none">{dayLabel(iso)}</span>
       <div className="h-px flex-1 bg-border" />
+    </div>
+  )
+}
+
+/** 红色「新消息」分割线（docs 15 FR-06/UX-03） */
+function NewMessagesDivider() {
+  return (
+    <div className="mx-4 mt-2 flex items-center gap-2" role="separator" aria-label="新消息">
+      <div className="h-px flex-1 bg-red-500/70" />
+      <span className="rounded-sm bg-red-500 px-1 text-[9px] font-bold text-white select-none">
+        新消息
+      </span>
     </div>
   )
 }
@@ -97,9 +110,22 @@ export function MessageList({
   const [newCount, setNewCount] = useState(0)
   const [flashingId, setFlashingId] = useState<string | null>(null)
 
+  // 进入频道时捕获一次 last_read（组件按频道 key 重挂载）：
+  // 「新消息」分割线按该快照定位，停留期间不跳动（docs 15 FR-06）
+  const [entryLastRead] = useState<string | null>(
+    () => useReadStatesStore.getState().lastReadByChannel[channelId] ?? null,
+  )
+
   const scrollToBottom = () => {
     const el = containerRef.current
     if (el) el.scrollTop = el.scrollHeight
+  }
+
+  /** 已读推进（docs 15 FR-02）：处于底部且窗口聚焦时 ack（store 内 1s 节流） */
+  const ackIfAtBottom = () => {
+    if (!stickRef.current) return
+    if (typeof document !== "undefined" && !document.hasFocus()) return
+    useReadStatesStore.getState().ack(channelId)
   }
 
   // 频道切换：重置滚动状态
@@ -108,6 +134,22 @@ export function MessageList({
     snapshotRef.current = null
     setNewCount(0)
     scrollToBottom()
+  }, [channelId])
+
+  // 消息变化且在底部 → 推进已读；窗口重新聚焦时同样补一次
+  useEffect(() => {
+    ackIfAtBottom()
+    const onFocus = () => ackIfAtBottom()
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, channelId])
+
+  // 频道切走（卸载）时 ack 一次当前已知最新（FR-02 切频落点）
+  useEffect(() => {
+    return () => {
+      useReadStatesStore.getState().ack(channelId)
+    }
   }, [channelId])
 
   // 消息/待发变化后的滚动策略
@@ -163,6 +205,7 @@ export function MessageList({
     const atBottom = distanceToBottom < BOTTOM_THRESHOLD_PX
     stickRef.current = atBottom
     if (atBottom && newCount > 0) setNewCount(0)
+    if (atBottom) ackIfAtBottom()
     if (el.scrollTop < LOAD_OLDER_THRESHOLD_PX && channel?.loadedInitial) {
       void loadOlder(channelId).catch(() => undefined)
     }
@@ -188,12 +231,25 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusMessageId, messages])
 
-  // 渲染列表：日期分割线 + 分组
+  // 渲染列表：日期分割线 + 新消息分割线 + 分组
   const rows: React.ReactNode[] = []
   let previousMessage: ChatMessage | null = null
+  let newDividerPlaced = false
   for (const message of messages) {
     if (!previousMessage || dayKey(previousMessage.created_at) !== dayKey(message.created_at)) {
       rows.push(<DateDivider key={`divider-${message.id}`} iso={message.created_at} />)
+    }
+    // 「新消息」分割线：进频时快照的 last_read 之后第一条消息上方（一次性定位）
+    if (
+      !newDividerPlaced &&
+      entryLastRead !== null &&
+      compareSnowflake(message.id, entryLastRead) > 0
+    ) {
+      newDividerPlaced = true
+      // 全部消息都已读时不会走到这里；自己刚发的消息不标新
+      if (message.author_id !== selfId) {
+        rows.push(<NewMessagesDivider key={`new-${message.id}`} />)
+      }
     }
     const grouped =
       previousMessage !== null &&

@@ -18,6 +18,8 @@ import {
 } from "~/lib/api/messages"
 import { ApiError, isNotFound } from "~/lib/api/http"
 import type { Message } from "~/lib/api/types"
+import { compareSnowflake } from "~/lib/snowflake"
+import { useReadStatesStore } from "./read-states"
 import type {
   MessageDeletePayload,
   MessageReactionPayload,
@@ -135,11 +137,7 @@ type MessagesState = {
 // 雪花 ID 与排序工具
 // ---------------------------------------------------------------------------
 
-/** 雪花 ID（十进制字符串）比较：长度不同直接比长度，相同按字典序 */
-export function compareSnowflake(a: string, b: string): number {
-  if (a.length !== b.length) return a.length - b.length
-  return a < b ? -1 : a > b ? 1 : 0
-}
+export { compareSnowflake }
 
 function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
   // MESSAGE_UPDATE / REST 响应不带 reactions：保留本地累积的反应
@@ -273,6 +271,12 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       patchChannel(channelId, { loadingInitial: true })
       try {
         const page = await listMessages(channelId, { limit: PAGE_SIZE })
+        // 未读判定需要频道最新消息 ID（服务端降序返回，page[0] 最新）
+        if (page.length > 0) {
+          useReadStatesStore
+            .getState()
+            .noteLatestMessage(channelId, page[0].guild_id, page[0].id)
+        }
         set((state) => {
           const current = channelState(state, channelId)
           return {
@@ -394,6 +398,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
           return get().loadInitial(channelId)
         }
         if (page.length > 0) {
+          useReadStatesStore
+            .getState()
+            .noteLatestMessage(channelId, page[0].guild_id, page[0].id)
           set((state) => {
             const current = channelState(state, channelId)
             return {
