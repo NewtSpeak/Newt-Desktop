@@ -1,11 +1,12 @@
 // 设置 · 语音与视频（docs 16 FR-06/07/08/10 P0）：
 // 设备枚举与选择只写设置 store（偏好存储），不直接操作正在进行的语音连接。
+// 麦克风测试：开关打开后采集当前输入设备，显示频谱/电平并本地回放。
 //
 // TODO(语音层接入)：app/lib/voice/** 建立/重建音频轨时应读取
 // useSettingsStore.getState().voice 的 inputDeviceId / aec / ns / agc 等值，
 // 并订阅变化做热切换；本组件只负责偏好存储，接入点在语音连接层。
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { MicIcon, RefreshCwIcon, XIcon } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
@@ -19,16 +20,283 @@ import {
 import { Slider } from "~/components/ui/slider"
 import { Switch } from "~/components/ui/switch"
 import { RadioGroup, RadioGroupItem } from "~/components/ui/radio-group"
+import { cn } from "~/lib/utils"
 import { useMembersStore } from "~/stores/members"
 import { useSettingsStore, type VoiceInputMode } from "~/stores/settings"
 import { ComingSoon, GroupLabel, SectionTitle, SettingRow } from "./section"
+
+// ---------------------------------------------------------------------------
+// 麦克风测试：电平可视化 + 本地回放
+// ---------------------------------------------------------------------------
+
+const METER_BARS = 24
+
+type MicTestProps = {
+  inputDeviceId: string | null
+  outputDeviceId: string | null
+  inputVolume: number
+  aec: boolean
+  ns: boolean
+  agc: boolean
+  onPermissionGranted?: () => void
+}
+
+function MicTestPanel({
+  inputDeviceId,
+  outputDeviceId,
+  inputVolume,
+  aec,
+  ns,
+  agc,
+  onPermissionGranted,
+}: MicTestProps) {
+  const [enabled, setEnabled] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  /** 0–1 总体电平 */
+  const [level, setLevel] = useState(0)
+  /** 频谱条 0–1 */
+  const [bars, setBars] = useState<number[]>(() => Array(METER_BARS).fill(0))
+
+  const streamRef = useRef<MediaStream | null>(null)
+  const ctxRef = useRef<AudioContext | null>(null)
+  const gainRef = useRef<GainNode | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const rafRef = useRef(0)
+
+  const stopTest = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+    }
+    try {
+      gainRef.current?.disconnect()
+      analyserRef.current?.disconnect()
+    } catch {
+      // ignore
+    }
+    gainRef.current = null
+    analyserRef.current = null
+    if (ctxRef.current) {
+      void ctxRef.current.close().catch(() => undefined)
+      ctxRef.current = null
+    }
+    if (streamRef.current) {
+      for (const track of streamRef.current.getTracks()) track.stop()
+      streamRef.current = null
+    }
+    setLevel(0)
+    setBars(Array(METER_BARS).fill(0))
+  }, [])
+
+  // 开关 / 设备 / 处理链变化时重建采集
+  useEffect(() => {
+    if (!enabled) {
+      stopTest()
+      return
+    }
+
+    let cancelled = false
+
+    const start = async () => {
+      stopTest()
+      try {
+        const audio: MediaTrackConstraints = {
+          echoCancellation: aec,
+          noiseSuppression: ns,
+          autoGainControl: agc,
+        }
+        if (inputDeviceId) {
+          audio.deviceId = { exact: inputDeviceId }
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio })
+        if (cancelled) {
+          for (const track of stream.getTracks()) track.stop()
+          return
+        }
+        streamRef.current = stream
+        onPermissionGranted?.()
+
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext })
+            .webkitAudioContext
+        const ctx = new AudioCtx()
+        ctxRef.current = ctx
+        if (ctx.state === "suspended") await ctx.resume()
+
+        // 输出设备（Chromium / 新版浏览器）
+        const sinkId = outputDeviceId ?? ""
+        const maybeSetSink = (
+          ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> }
+        ).setSinkId
+        if (typeof maybeSetSink === "function" && sinkId) {
+          await maybeSetSink.call(ctx, sinkId).catch(() => undefined)
+        }
+
+        const source = ctx.createMediaStreamSource(stream)
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 512
+        analyser.smoothingTimeConstant = 0.75
+        analyserRef.current = analyser
+
+        const gain = ctx.createGain()
+        // 输入音量 0–200% → 0–2 增益；略压一点防啸叫
+        gain.gain.value = Math.min(2, Math.max(0, inputVolume / 100)) * 0.85
+        gainRef.current = gain
+
+        // 分析 + 回放到扬声器
+        source.connect(analyser)
+        source.connect(gain)
+        gain.connect(ctx.destination)
+
+        const timeData = new Uint8Array(analyser.fftSize)
+        const freqData = new Uint8Array(analyser.frequencyBinCount)
+
+        const tick = () => {
+          const node = analyserRef.current
+          if (!node) return
+          node.getByteTimeDomainData(timeData)
+          let sum = 0
+          for (let i = 0; i < timeData.length; i++) {
+            const v = (timeData[i]! - 128) / 128
+            sum += v * v
+          }
+          const rms = Math.sqrt(sum / timeData.length)
+          // 放大便于观察轻声
+          setLevel(Math.min(1, rms * 4))
+
+          node.getByteFrequencyData(freqData)
+          const nextBars: number[] = []
+          const binsPerBar = Math.max(1, Math.floor(freqData.length / METER_BARS))
+          for (let b = 0; b < METER_BARS; b++) {
+            let acc = 0
+            const start = b * binsPerBar
+            for (let i = 0; i < binsPerBar; i++) {
+              acc += freqData[start + i] ?? 0
+            }
+            nextBars.push(Math.min(1, acc / binsPerBar / 255))
+          }
+          setBars(nextBars)
+          rafRef.current = requestAnimationFrame(tick)
+        }
+        rafRef.current = requestAnimationFrame(tick)
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        const message =
+          err instanceof DOMException && err.name === "NotAllowedError"
+            ? "麦克风权限被拒绝"
+            : err instanceof DOMException && err.name === "NotFoundError"
+              ? "未找到可用麦克风"
+              : err instanceof DOMException && err.name === "OverconstrainedError"
+                ? "当前选择的麦克风不可用，请换一个设备"
+                : "无法打开麦克风"
+        setError(message)
+        setEnabled(false)
+        stopTest()
+      }
+    }
+
+    void start()
+    return () => {
+      cancelled = true
+      stopTest()
+    }
+    // inputVolume 单独用另一个 effect 调增益，避免重建采集
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, inputDeviceId, outputDeviceId, aec, ns, agc, stopTest])
+
+  // 热更新回放音量
+  useEffect(() => {
+    if (gainRef.current) {
+      gainRef.current.gain.value =
+        Math.min(2, Math.max(0, inputVolume / 100)) * 0.85
+    }
+  }, [inputVolume])
+
+  // 卸载清理
+  useEffect(() => () => stopTest(), [stopTest])
+
+  return (
+    <div className="mt-2 space-y-3 rounded-2xl border p-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">测试麦克风</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            打开后显示实时电平，并通过扬声器回放你的声音（建议使用耳机，避免啸叫）
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(checked) => setEnabled(Boolean(checked))}
+        />
+      </div>
+
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+
+      {enabled && !error && (
+        <div className="space-y-2">
+          {/* 频谱条 */}
+          <div
+            className="flex h-16 items-end gap-0.5 rounded-xl bg-muted/50 px-2 py-2"
+            aria-hidden
+          >
+            {bars.map((value, index) => (
+              <div
+                key={index}
+                className={cn(
+                  "min-w-0 flex-1 rounded-sm transition-[height,background-color] duration-75",
+                  value > 0.75
+                    ? "bg-destructive"
+                    : value > 0.45
+                      ? "bg-amber-500"
+                      : "bg-emerald-500",
+                )}
+                style={{ height: `${Math.max(4, value * 100)}%` }}
+              />
+            ))}
+          </div>
+          {/* 总电平条 */}
+          <div className="flex items-center gap-2">
+            <MicIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-[width,background-color] duration-75",
+                  level > 0.75
+                    ? "bg-destructive"
+                    : level > 0.45
+                      ? "bg-amber-500"
+                      : "bg-emerald-500",
+                )}
+                style={{ width: `${Math.round(level * 100)}%` }}
+              />
+            </div>
+            <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+              {Math.round(level * 100)}%
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            对着麦克风说话，条形图应随音量跳动，同时能听到回放。回放音量跟随上方「输入音量」。
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** 语音包屏蔽名单条目：跨已缓存服务器解析昵称，查不到显示 ID 片段 */
 function VoicePackMutedRow({ userId }: { userId: string }) {
   const name = useMembersStore((state) => {
     for (const members of Object.values(state.byGuild)) {
       const member = members.find((item) => item.user_id === userId)
-      if (member) return member.nickname || member.username
+      if (member) {
+        return member.nickname?.trim() || member.display_name?.trim() || member.username
+      }
     }
     return null
   })
@@ -156,6 +424,20 @@ export function VoiceSection() {
           刷新
         </Button>
       </SettingRow>
+
+      <GroupLabel>麦克风测试</GroupLabel>
+      <MicTestPanel
+        inputDeviceId={voice.inputDeviceId}
+        outputDeviceId={voice.outputDeviceId}
+        inputVolume={voice.inputVolume}
+        aec={voice.aec}
+        ns={voice.ns}
+        agc={voice.agc}
+        onPermissionGranted={() => {
+          setPermission("granted")
+          void refreshDevices()
+        }}
+      />
 
       <GroupLabel>音量</GroupLabel>
       <SettingRow label="输入音量" description={`${voice.inputVolume}%`}>

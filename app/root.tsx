@@ -46,7 +46,7 @@ export default function App() {
   return (
     <>
       <Outlet />
-      {/* 右上角悬浮：主题切换 +（Windows/Linux）窗口三键，覆盖全部路由 */}
+      {/* 右上角悬浮：主题切换 + 私信占位 +（Windows/Linux）窗口三键，覆盖全部路由 */}
       <TitlebarControls />
     </>
   )

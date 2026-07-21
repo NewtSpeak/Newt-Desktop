@@ -7,16 +7,20 @@ import { useEffect, useState } from "react"
 import { Outlet } from "react-router"
 
 import { AppSidebar } from "~/components/app-sidebar"
-import { WelcomeShell } from "~/components/welcome-shell"
 import { ChannelList } from "~/components/channel-list"
+import { GuildAvatar } from "~/components/guild-avatar"
 import { MemberPanel } from "~/components/member-panel"
 import { QuickSwitcher } from "~/components/quick-switcher"
 import { SearchPanel } from "~/components/search/search-panel"
 import { SettingsPanel } from "~/components/settings/settings-panel"
-import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar"
+import { WelcomeShell } from "~/components/welcome-shell"
+import { SidebarProvider } from "~/components/ui/sidebar"
 import { Toaster } from "~/components/ui/sonner"
 import { useAuthBootstrap } from "~/hooks/use-auth-bootstrap"
-import { dragWindowOnSelfMouseDown } from "~/lib/window-drag"
+import {
+  dragWindowOnMouseDown,
+  dragWindowOnSelfMouseDown,
+} from "~/lib/window-drag"
 import { gateway } from "~/lib/gateway/client"
 import { initDockBadge } from "~/lib/notifications"
 import { initSettingsSync } from "~/lib/settings-sync"
@@ -102,21 +106,28 @@ export default function AppShell() {
       }
     >
       <AppSidebar variant="inset" />
-      {/* 仅右侧页面区域向下让出顶部间距，左侧导航不受影响 */}
-      <SidebarInset className="min-h-0 overflow-hidden md:peer-data-[variant=inset]:mt-(--app-top-inset)">
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* 频道列表栏（240px） */}
+      {/*
+        主内容区：左（频道）/ 中（页面）/ 右（成员）三张独立圆角白卡片，
+        卡片间隙透出侧栏底色；顶部居中服名浮在卡片外。
+      */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* 卡片外顶部条：可拖窗口 + 居中服名/圆形头像 */}
+        <SelectedGuildTitleBar />
+        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2 pt-[calc(var(--app-top-inset)+0.25rem)] md:pl-0">
+          {/* 左：频道列表卡片 */}
           <ChannelList />
-          {/* 页面内容在此容器内部滚动 */}
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none">
-            <Outlet />
-          </div>
-          {/* 成员面板（右侧 240px 可折叠，docs 02 FR-22） */}
+          {/* 中：页面内容卡片 */}
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none">
+              <Outlet />
+            </div>
+          </main>
+          {/* 右：成员面板卡片（可折叠） */}
           <MemberPanel />
-          {/* 消息搜索面板（右侧 420px 滑出） */}
+          {/* 消息搜索面板（打开时同为圆角卡片） */}
           <SearchPanel />
         </div>
-      </SidebarInset>
+      </div>
       {/* 全局 toast（语音错误提示等） */}
       <Toaster position="bottom-right" />
       {/* Ctrl/Cmd+K 快速切换器浮层 */}
@@ -124,5 +135,40 @@ export default function AppShell() {
       {/* 全屏设置面板（Ctrl/Cmd+, 或用户菜单打开） */}
       <SettingsPanel />
     </SidebarProvider>
+  )
+}
+
+/**
+ * 卡片外顶部条：
+ * - 整条区域可拖拽窗口（修复三卡片布局后 padding 区域无法拖动的问题）；
+ * - 居中显示当前服务器名；有 icon_url 时左侧附圆形头像。
+ */
+function SelectedGuildTitleBar() {
+  const selectedGuildId = useUIStore((state) => state.selectedGuildId)
+  const guild = useGuildsStore((state) =>
+    state.guilds.find((g) => g.id === selectedGuildId)
+  )
+  const hasIcon = Boolean(guild?.icon_url?.trim())
+
+  return (
+    <div
+      className="absolute inset-x-0 top-0 z-20 flex h-(--app-top-inset) items-center justify-center px-4"
+      onMouseDown={dragWindowOnMouseDown}
+    >
+      {guild?.name ? (
+        <div className="flex max-w-md items-center justify-center gap-2">
+          {hasIcon ? (
+            <GuildAvatar
+              guild={guild}
+              shape="circle"
+              className="size-5 shrink-0"
+            />
+          ) : null}
+          <h1 className="min-w-0 truncate text-center text-sm font-semibold text-sidebar-foreground select-none">
+            {guild.name}
+          </h1>
+        </div>
+      ) : null}
+    </div>
   )
 }

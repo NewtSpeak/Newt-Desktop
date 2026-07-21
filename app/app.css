@@ -157,3 +157,16 @@
     background-color: color-mix(in oklab, var(--muted-foreground) 40%, transparent);
   }
 }
+
+/* 用户名渐变流动（RoleNameStyle.animated） */
+@keyframes name-gradient {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}

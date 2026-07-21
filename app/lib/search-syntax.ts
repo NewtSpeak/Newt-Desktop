@@ -57,12 +57,20 @@ function resolveMember(name: string): { userId: string; label: string } | null {
   for (const members of Object.values(byGuild)) {
     for (const member of members) {
       const username = member.username.toLowerCase()
-      const nickname = member.nickname.toLowerCase()
-      if (username === query || nickname === query) {
-        return { userId: member.user_id, label: member.nickname || member.username }
+      const nickname = (member.nickname ?? "").toLowerCase()
+      const display = (member.display_name ?? "").toLowerCase()
+      const label =
+        member.nickname?.trim() || member.display_name?.trim() || member.username
+      if (username === query || nickname === query || display === query) {
+        return { userId: member.user_id, label }
       }
-      if (!prefixHit && (username.startsWith(query) || (nickname && nickname.startsWith(query)))) {
-        prefixHit = { userId: member.user_id, label: member.nickname || member.username }
+      if (
+        !prefixHit &&
+        (username.startsWith(query) ||
+          (nickname && nickname.startsWith(query)) ||
+          (display && display.startsWith(query)))
+      ) {
+        prefixHit = { userId: member.user_id, label }
       }
     }
   }

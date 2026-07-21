@@ -14,6 +14,7 @@ import { create } from "zustand"
 import { listVoiceStates } from "~/lib/api/voice"
 import type { VoiceState } from "~/lib/api/types"
 import type { VoiceStateUpdatePayload } from "~/lib/gateway/events"
+import { useStageStore } from "~/stores/stage"
 
 const LOCAL_MUTES_KEY = "owl.voice.local_mutes"
 const USER_VOLUMES_KEY = "owl.voice.user_volumes"
@@ -136,15 +137,27 @@ type VoiceStoreState = {
   localMuted: Record<string, true>
   /** 每用户本地音量（百分比 0–200，缺省 100），持久化 */
   userVolumes: Record<string, number>
+  /**
+   * 当前会话所在频道是否被提示「正在音频审计」（CHANNEL_AUDIT_NOTICE）。
+   * 仅本人视角；静默审计不会置 true。
+   */
+  channelAudited: boolean
 
   /** Gateway VOICE_STATE_UPDATE handler：两种形态按 user_id 合并 */
   applyVoiceStateUpdate: (payload: VoiceStateUpdatePayload) => void
   setChannelStates: (channelId: string, states: VoiceState[]) => void
+  /**
+   * READY / GUILD_CREATE 快照：按 channel_id 分组整体替换已知频道的参与者列表
+   *（刷新后恢复语音树，docs 09 FR-06）。
+   */
+  applyVoiceStatesSnapshot: (states: VoiceState[]) => void
   /** 拉取频道语音成员快照；404（频道不可见）按空列表处理 */
   fetchChannelStates: (guildId: string, channelId: string) => Promise<void>
 
   setSession: (session: VoiceSession | null) => void
   patchSession: (patch: Partial<VoiceSession>) => void
+  /** CHANNEL_AUDIT_NOTICE：更新当前会话频道的审计提示态 */
+  setChannelAudited: (channelId: string, audited: boolean) => void
 
   setSpeakingUserIds: (userIds: string[]) => void
   setSelfSpeaking: (speaking: boolean) => void
@@ -162,6 +175,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set) => ({
   selfSpeaking: false,
   localMuted: loadLocalMutes(),
   userVolumes: loadUserVolumes(),
+  channelAudited: false,
 
   applyVoiceStateUpdate: (payload) =>
     set((state) => {
@@ -199,20 +213,84 @@ export const useVoiceStore = create<VoiceStoreState>()((set) => ({
   setChannelStates: (channelId, states) =>
     set((prev) => ({ byChannel: { ...prev.byChannel, [channelId]: states } })),
 
+  applyVoiceStatesSnapshot: (states) =>
+    set((prev) => {
+      // 按 channel_id 聚合；仅处理仍在房内的状态（channel_id 非空）
+      const grouped: Record<string, VoiceState[]> = {}
+      for (const state of states) {
+        const channelId = state.channel_id
+        if (!channelId) continue
+        const list = grouped[channelId] ?? []
+        list.push(state)
+        grouped[channelId] = list
+      }
+      // 合并进现有缓存：快照覆盖命中频道；未出现在快照中的频道保留
+      //（READY 按 guild 下发，可能只覆盖本服可见频道）
+      return { byChannel: { ...prev.byChannel, ...grouped } }
+    }),
+
   fetchChannelStates: async (guildId, channelId) => {
     try {
       const states = await listVoiceStates(guildId, channelId)
-      set((prev) => ({ byChannel: { ...prev.byChannel, [channelId]: states } }))
+      set((prev) => {
+        const existing = prev.byChannel[channelId]
+        // 内容相同时不换引用，避免语音列表多实例订阅时无意义重渲染
+        if (
+          existing &&
+          existing.length === states.length &&
+          existing.every((item, index) => {
+            const next = states[index]
+            return (
+              item.user_id === next?.user_id &&
+              item.channel_id === next?.channel_id &&
+              item.self_mute === next?.self_mute &&
+              item.self_deaf === next?.self_deaf &&
+              item.server_mute === next?.server_mute &&
+              item.server_deaf === next?.server_deaf &&
+              item.self_stream === next?.self_stream
+            )
+          })
+        ) {
+          // 即使 byChannel 未变，仍用快照同步 shares（刷新后 Gateway START 已错过）
+          useStageStore.getState().hydrateSharesFromVoiceStates(channelId, states)
+          return prev
+        }
+        // 从 self_stream 回填活跃共享列表，避免刷新后 LIVE 角标全丢
+        useStageStore.getState().hydrateSharesFromVoiceStates(channelId, states)
+        return { byChannel: { ...prev.byChannel, [channelId]: states } }
+      })
     } catch {
       // 404 / 网络失败：保持现有缓存，由 Gateway 增量继续维护
     }
   },
 
   setSession: (session) =>
-    set(session === null ? { session: null, selfSpeaking: false, speakingUserIds: {} } : { session }),
+    set(
+      session === null
+        ? {
+            session: null,
+            selfSpeaking: false,
+            speakingUserIds: {},
+            channelAudited: false,
+          }
+        : {
+            session,
+            // 切频道/重进：清除旧审计提示，等待新的 CHANNEL_AUDIT_NOTICE
+            channelAudited: false,
+          }
+    ),
 
   patchSession: (patch) =>
     set((state) => (state.session ? { session: { ...state.session, ...patch } } : state)),
+
+  setChannelAudited: (channelId, audited) =>
+    set((state) => {
+      // 只接受当前本人所在频道的提示，避免跨频道串扰
+      if (!state.session || state.session.channelId !== channelId) {
+        return state
+      }
+      return state.channelAudited === audited ? state : { channelAudited: audited }
+    }),
 
   setSpeakingUserIds: (userIds) => {
     const map: Record<string, true> = {}
@@ -248,6 +326,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set) => ({
       session: null,
       speakingUserIds: {},
       selfSpeaking: false,
+      channelAudited: false,
       // localMuted / userVolumes 是用户偏好，登出不清持久化，仅重载
       localMuted: loadLocalMutes(),
       userVolumes: loadUserVolumes(),

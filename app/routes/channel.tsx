@@ -19,6 +19,7 @@ import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
 import { useUIStore } from "~/stores/ui"
+import { resolveProfileAssetUrl } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 
 /** 频道页头部「成员」图标按钮：切换右侧成员面板开合（docs 02 FR-22） */
@@ -86,6 +87,14 @@ export default function ChannelPage() {
       useUIStore.getState().selectChannel(guildId, channelId)
     }
   }, [guildId, channelId])
+
+  // 角色列表：用户名颜色/渐变与徽章依赖 Role.style / color
+  useEffect(() => {
+    if (!guildId) return
+    void import("~/stores/roles").then((m) =>
+      m.useRolesStore.getState().fetchRoles(guildId).catch(() => undefined),
+    )
+  }, [guildId])
 
   const channelType = channel?.type
 
@@ -172,13 +181,33 @@ export default function ChannelPage() {
     }
   }, [channels, channelId, navigate, unavailable])
 
-  // 用户 ID → 显示名（昵称 > 用户名 > ID 片段）
+  // 用户 ID → 显示名（服内昵称 > 系统显示名 > 用户名）
   const resolveName = useCallback(
     (userId: string): string => {
       const member = members?.find((item) => item.user_id === userId)
-      if (member) return member.nickname || member.username
-      if (userId === user?.id) return user.username
+      if (member) {
+        return (
+          member.nickname?.trim() ||
+          member.display_name?.trim() ||
+          member.username ||
+          `用户${userId.slice(0, 6)}`
+        )
+      }
+      if (userId === user?.id) {
+        return user.display_name?.trim() || user.username
+      }
       return `用户${userId.slice(0, 6)}`
+    },
+    [members, user]
+  )
+
+  const resolveAvatarUrl = useCallback(
+    (userId: string): string | undefined => {
+      const member = members?.find((item) => item.user_id === userId)
+      const raw =
+        member?.avatar_url?.trim() ||
+        (userId === user?.id ? user?.avatar_url?.trim() : undefined)
+      return resolveProfileAssetUrl(raw)
     },
     [members, user]
   )
@@ -200,7 +229,7 @@ export default function ChannelPage() {
   if (unavailable) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <header className="flex h-12 shrink-0 items-center gap-2 px-4">
           <HashIcon className="size-4 text-muted-foreground" />
           <span className="text-sm font-medium">{channel?.name ?? "频道"}</span>
           <MemberPanelToggle />
@@ -231,7 +260,7 @@ export default function ChannelPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 频道头部 */}
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      <header className="flex h-12 shrink-0 items-center gap-2 px-4">
         <HashIcon className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">{channelName}</span>
         <MemberPanelToggle />
@@ -241,10 +270,12 @@ export default function ChannelPage() {
       <MessageList
         key={channelId}
         channelId={channelId}
+        guildId={guildId}
         channelName={channelName}
         selfId={user?.id}
-        selfName={user?.username ?? "我"}
+        selfName={user?.display_name?.trim() || user?.username || "我"}
         resolveName={resolveName}
+        resolveAvatarUrl={resolveAvatarUrl}
         editingId={editingId}
         onStartEdit={setEditingId}
         onStopEdit={() => setEditingId(null)}

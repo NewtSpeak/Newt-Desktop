@@ -35,9 +35,17 @@ export const useUIStore = create<UIState>()(
         ),
 
       selectChannel: (guildId, channelId) =>
-        set({ selectedGuildId: guildId, selectedChannelId: channelId }),
+        set((state) =>
+          state.selectedGuildId === guildId &&
+          state.selectedChannelId === channelId
+            ? state
+            : { selectedGuildId: guildId, selectedChannelId: channelId },
+        ),
 
-      setGatewayStatus: (status) => set({ gatewayStatus: status }),
+      setGatewayStatus: (status) =>
+        set((state) =>
+          state.gatewayStatus === status ? state : { gatewayStatus: status },
+        ),
 
       toggleMemberPanel: () =>
         set((state) => ({ memberPanelOpen: !state.memberPanelOpen })),

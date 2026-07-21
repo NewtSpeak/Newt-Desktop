@@ -320,13 +320,23 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 }
 
 export type MentionResolver = (userId: string) => string
+/** 提及头像解析（可选） */
+export type MentionAvatarResolver = (userId: string) => string | undefined
+
+type InlineRenderOpts = {
+  resolveMention: MentionResolver
+  resolveMentionAvatar?: MentionAvatarResolver
+  selfId?: string
+  /** 回复摘要等场景：@卡片略缩小以贴合单行高度 */
+  compact?: boolean
+}
 
 function renderInline(
   nodes: InlineNode[],
-  resolveMention: MentionResolver,
-  selfId: string | undefined,
+  opts: InlineRenderOpts,
   keyPrefix: string,
 ): ReactNode[] {
+  const { resolveMention, resolveMentionAvatar, selfId, compact } = opts
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`
     switch (node.kind) {
@@ -341,13 +351,13 @@ function renderInline(
       case "bold":
         return (
           <strong key={key} className="font-semibold">
-            {renderInline(node.children, resolveMention, selfId, key)}
+            {renderInline(node.children, opts, key)}
           </strong>
         )
       case "italic":
-        return <em key={key}>{renderInline(node.children, resolveMention, selfId, key)}</em>
+        return <em key={key}>{renderInline(node.children, opts, key)}</em>
       case "strike":
-        return <s key={key}>{renderInline(node.children, resolveMention, selfId, key)}</s>
+        return <s key={key}>{renderInline(node.children, opts, key)}</s>
       case "link":
         return (
           <a
@@ -362,18 +372,42 @@ function renderInline(
         )
       case "mention": {
         const name = resolveMention(node.userId)
+        const avatarUrl = resolveMentionAvatar?.(node.userId)
         const isSelf = selfId !== undefined && node.userId === selfId
+        const avatarSize = compact ? "size-3.5" : "size-4"
         return (
           <span
             key={key}
             className={cn(
-              "mx-0.5 rounded-md px-1 py-0.5 text-[0.95em] font-medium",
+              "mx-0.5 inline-flex items-center gap-1 rounded-md font-medium align-middle",
+              compact
+                ? "py-px pr-1 pl-0.5 text-[0.9em]"
+                : "py-0.5 pr-1.5 pl-0.5 text-[0.95em]",
               isSelf
                 ? "bg-amber-500/30 text-amber-700 dark:text-amber-300"
                 : "bg-primary/15 text-primary",
             )}
           >
-            @{name}
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt=""
+                className={cn(avatarSize, "shrink-0 rounded-full object-cover")}
+                draggable={false}
+              />
+            ) : (
+              <span
+                className={cn(
+                  "flex shrink-0 items-center justify-center rounded-full text-[9px] font-semibold",
+                  avatarSize,
+                  isSelf ? "bg-amber-600/40 text-amber-50" : "bg-primary/30 text-primary-foreground",
+                )}
+                aria-hidden
+              >
+                {(name || "?").slice(0, 1).toUpperCase()}
+              </span>
+            )}
+            <span>@{name}</span>
           </span>
         )
       }
@@ -384,20 +418,100 @@ function renderInline(
 export function MarkdownContent({
   content,
   resolveMention,
+  resolveMentionAvatar,
   selfId,
   className,
+  /**
+   * 紧凑模式：用于回复引用摘要等单行场景。
+   * 块级结构压成行内，@提及仍渲染为与正文一致的头像卡片样式。
+   */
+  compact = false,
 }: {
   content: string
   /** 用户 ID → 显示名（members store 查不到时返回原 ID 片段） */
   resolveMention: MentionResolver
+  /** 用户 ID → 头像 URL（@ 提及左侧） */
+  resolveMentionAvatar?: MentionAvatarResolver
   selfId?: string
   className?: string
+  compact?: boolean
 }) {
   const blocks = useMemo(() => parseMarkdown(content), [content])
   const jumbo = useMemo(() => isJumboEmoji(content), [content])
+  const inlineOpts: InlineRenderOpts = {
+    resolveMention,
+    resolveMentionAvatar,
+    selfId,
+    compact,
+  }
 
-  if (jumbo) {
+  if (jumbo && !compact) {
     return <p className={cn("text-4xl leading-snug", className)}>{content.trim()}</p>
+  }
+
+  // 回复摘要：全部块压成同一行内流，保留 @ 卡片 / 粗斜体等行内样式。
+  if (compact) {
+    const parts: ReactNode[] = []
+    blocks.forEach((block, index) => {
+      if (index > 0) {
+        parts.push(
+          <span key={`sp-${index}`} className="text-muted-foreground/60">
+            {" "}
+          </span>,
+        )
+      }
+      switch (block.kind) {
+        case "paragraph":
+          if (block.children.length > 0) {
+            parts.push(
+              <span key={`p${index}`}>
+                {renderInline(block.children, inlineOpts, `cp${index}`)}
+              </span>,
+            )
+          }
+          break
+        case "codeblock":
+          parts.push(
+            <code
+              key={`c${index}`}
+              className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+            >
+              [代码]
+            </code>,
+          )
+          break
+        case "quote":
+          block.lines.forEach((line, lineIndex) => {
+            if (lineIndex > 0) parts.push(" ")
+            parts.push(
+              <span key={`q${index}-${lineIndex}`} className="text-muted-foreground">
+                {renderInline(line, inlineOpts, `cq${index}-${lineIndex}`)}
+              </span>,
+            )
+          })
+          break
+        case "list":
+          block.items.forEach((item, itemIndex) => {
+            if (itemIndex > 0) parts.push(" ")
+            parts.push(
+              <span key={`l${index}-${itemIndex}`}>
+                · {renderInline(item, inlineOpts, `cl${index}-${itemIndex}`)}
+              </span>,
+            )
+          })
+          break
+      }
+    })
+    return (
+      <span
+        className={cn(
+          "min-w-0 truncate align-middle [&_.inline-flex]:align-middle",
+          className,
+        )}
+      >
+        {parts.length > 0 ? parts : null}
+      </span>
+    )
   }
 
   return (
@@ -410,7 +524,7 @@ export function MarkdownContent({
               <div key={index} className="h-[0.75em]" aria-hidden />
             ) : (
               <p key={index} className="leading-relaxed">
-                {renderInline(block.children, resolveMention, selfId, `p${index}`)}
+                {renderInline(block.children, inlineOpts, `p${index}`)}
               </p>
             )
           case "codeblock":
@@ -423,7 +537,7 @@ export function MarkdownContent({
               >
                 {block.lines.map((line, lineIndex) => (
                   <p key={lineIndex} className="leading-relaxed">
-                    {renderInline(line, resolveMention, selfId, `q${index}-${lineIndex}`)}
+                    {renderInline(line, inlineOpts, `q${index}-${lineIndex}`)}
                   </p>
                 ))}
               </blockquote>
@@ -433,7 +547,7 @@ export function MarkdownContent({
               <ul key={index} className="my-0.5 list-disc pl-5">
                 {block.items.map((item, itemIndex) => (
                   <li key={itemIndex} className="leading-relaxed">
-                    {renderInline(item, resolveMention, selfId, `l${index}-${itemIndex}`)}
+                    {renderInline(item, inlineOpts, `l${index}-${itemIndex}`)}
                   </li>
                 ))}
               </ul>

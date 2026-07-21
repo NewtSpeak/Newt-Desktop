@@ -106,6 +106,14 @@ type StageStoreState = {
   applyQuotaUpdate: (payload: ScreenQuotaUpdatePayload) => void
   /** 拉服级配额快照（失败静默，保留缓存） */
   fetchQuota: (guildId: string) => Promise<void>
+  /**
+   * 用 voice states 快照回填 sharesByChannel（刷新后会错过 SCREEN_SHARE_START）。
+   * 仅根据 self_stream 重建该频道的活跃共享集合。
+   */
+  hydrateSharesFromVoiceStates: (
+    channelId: string,
+    states: VoiceState[],
+  ) => void
 
   setRemoteVideo: (userId: string, stream: MediaStream | null) => void
   clearRemoteVideos: () => void
@@ -208,6 +216,34 @@ export const useStageStore = create<StageStoreState>()((set) => ({
         sharesByChannel: {
           ...state.sharesByChannel,
           [payload.channel_id]: rest,
+        },
+      }
+    }),
+
+  hydrateSharesFromVoiceStates: (channelId, states) =>
+    set((state) => {
+      const next: Record<string, ScreenShareEntry> = {}
+      for (const item of states) {
+        if (item.self_stream && item.user_id) {
+          // 保留已有 quality 等字段；快照仅有布尔 self_stream
+          next[item.user_id] = state.sharesByChannel[channelId]?.[
+            item.user_id
+          ] ?? { userId: item.user_id }
+        }
+      }
+      const prev = state.sharesByChannel[channelId] ?? {}
+      const prevKeys = Object.keys(prev)
+      const nextKeys = Object.keys(next)
+      if (
+        prevKeys.length === nextKeys.length &&
+        nextKeys.every((id) => prev[id])
+      ) {
+        return state
+      }
+      return {
+        sharesByChannel: {
+          ...state.sharesByChannel,
+          [channelId]: next,
         },
       }
     }),

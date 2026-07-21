@@ -4,17 +4,18 @@
 //   - READY read_states 快照重建（服务端为准，防漂移 FR-05）；
 //   - READ_STATE_UPDATE 定向事件对齐（本人他端 ack / 被提及计数增长，绝对值覆盖）；
 //   - MESSAGE_CREATE 本地推进：跟踪每频道最新消息 ID（未读判定的另一半）、
-//     自己发的消息自动已读、被提及本地乐观 +1（随后被服务端事件的绝对值覆盖）；
+//     未读消息数 +1、自己发的消息自动已读、被提及本地乐观 +1；
 //   - ack 上报：本地立即推进 + 1s 节流调 POST /channels/:id/ack。
 //
 // 未读判定（FR-01）= 频道最新已知消息 ID > last_read_message_id（雪花字符串比较）。
 // 频道对象（READY guilds 内嵌 / REST listChannels / CHANNEL_* 事件）携带
 // last_message_id（无消息为 "0"），冷启动/重连后据此恢复离线期间的普通未读。
+// 未读条数：在线 MESSAGE_CREATE 精确累加；冷启动仅知「有未读」时保底为 1。
 
 import { create } from "zustand"
 
 import { ackChannel as apiAckChannel, ackGuild as apiAckGuild } from "~/lib/api/users"
-import type { Channel, Message } from "~/lib/api/types"
+import { MESSAGE_TYPE_SYSTEM_ADMIN, type Channel, type Message } from "~/lib/api/types"
 import type { ReadStateUpdatePayload, ReadyReadState } from "~/lib/gateway/events"
 import { compareSnowflake } from "~/lib/snowflake"
 
@@ -25,6 +26,8 @@ type ReadStatesState = {
   lastReadByChannel: Record<string, string>
   /** channelId → 未读提及数 */
   mentionsByChannel: Record<string, number>
+  /** channelId → 未读消息条数（频道列表红色数字胶囊；在线事件精确累加） */
+  unreadCountByChannel: Record<string, number>
   /** channelId → 已知最新消息 ID（MESSAGE_CREATE / 消息加载路径喂入） */
   latestByChannel: Record<string, string>
   /** channelId → guildId（服务器栏聚合用；READY 快照与消息事件喂入） */
@@ -42,6 +45,11 @@ type ReadStatesState = {
   seedFromChannels: (channels: Channel[]) => void
   /** 频道删除 / 不可见：清计数（docs 15 US-8 兜底） */
   removeChannel: (channelId: string) => void
+  /**
+   * 按消息缓存精确回写未读条数（MESSAGE_CREATE / 拉历史后调用）。
+   * count≤0 时清除；用于修正「只保底 1」或累加漂移。
+   */
+  setUnreadCountExact: (channelId: string, count: number) => void
 
   /** 已读推进：本地立即生效 + 节流上报服务端 */
   ack: (channelId: string) => void
@@ -49,6 +57,25 @@ type ReadStatesState = {
   ackGuild: (guildId: string) => void
 
   reset: () => void
+}
+
+/** 是否系统管理员临场消息（不走「自己发的自动已读」） */
+export function isSystemAdminMessageType(type: string | undefined): boolean {
+  return type === MESSAGE_TYPE_SYSTEM_ADMIN
+}
+
+/** 统计 messageIds 中严格晚于 lastRead 的条数 */
+export function countIdsAfterLastRead(
+  lastRead: string | undefined,
+  messageIds: Iterable<string>,
+): number {
+  let count = 0
+  for (const id of messageIds) {
+    const messageId = String(id)
+    if (!messageId) continue
+    if (!lastRead || compareSnowflake(messageId, lastRead) > 0) count += 1
+  }
+  return count
 }
 
 /** 频道是否未读（不含提及语义） */
@@ -61,6 +88,23 @@ export function isChannelUnread(
   const lastRead = state.lastReadByChannel[channelId]
   if (!lastRead) return true
   return compareSnowflake(latest, lastRead) > 0
+}
+
+/** 未读角标数字：超过 9999 显示 9999+ */
+export function formatUnreadBadge(count: number): string {
+  if (count > 9999) return "9999+"
+  return String(count)
+}
+
+/** 频道未读消息条数（用于列表红色胶囊） */
+export function channelUnreadCount(
+  state: Pick<ReadStatesState, "unreadCountByChannel" | "lastReadByChannel" | "latestByChannel">,
+  channelId: string,
+): number {
+  const tracked = state.unreadCountByChannel[channelId] ?? 0
+  if (tracked > 0) return tracked
+  // 冷启动/仅 last_message_id 播种：知有未读但无精确条数 → 保底 1
+  return isChannelUnread(state, channelId) ? 1 : 0
 }
 
 // ack 节流状态（模块级，不进 store）
@@ -81,6 +125,7 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
   return {
     lastReadByChannel: {},
     mentionsByChannel: {},
+    unreadCountByChannel: {},
     latestByChannel: {},
     guildByChannel: {},
 
@@ -89,6 +134,7 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
         const lastReadByChannel: Record<string, string> = {}
         const mentionsByChannel: Record<string, number> = {}
         const latestByChannel = { ...state.latestByChannel }
+        const prevUnread = state.unreadCountByChannel
         for (const entry of states) {
           lastReadByChannel[entry.channel_id] = entry.last_read_message_id
           if (entry.mention_count > 0) {
@@ -102,11 +148,26 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
             }
           }
         }
+        // 按新游标校正未读条数：已读清零；仍有未读时保留本地精确计数，否则保底 1
+        const unreadCountByChannel: Record<string, number> = {}
+        const mergedGuild = { ...state.guildByChannel, ...guildByChannel }
+        const channelIds = new Set([
+          ...Object.keys(latestByChannel),
+          ...Object.keys(lastReadByChannel),
+          ...Object.keys(prevUnread),
+        ])
+        for (const channelId of channelIds) {
+          const probe = { lastReadByChannel, latestByChannel, unreadCountByChannel: {} }
+          if (!isChannelUnread(probe, channelId)) continue
+          const prev = prevUnread[channelId] ?? 0
+          unreadCountByChannel[channelId] = prev > 0 ? prev : 1
+        }
         return {
           lastReadByChannel,
           mentionsByChannel,
+          unreadCountByChannel,
           latestByChannel,
-          guildByChannel: { ...state.guildByChannel, ...guildByChannel },
+          guildByChannel: mergedGuild,
         }
       }),
 
@@ -121,48 +182,107 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
           !current || compareSnowflake(payload.last_read_message_id, current) > 0
             ? payload.last_read_message_id
             : current
+        const lastReadByChannel = {
+          ...state.lastReadByChannel,
+          [payload.channel_id]: advanced,
+        }
+        const unreadCountByChannel = { ...state.unreadCountByChannel }
+        // 他端/本端 ack 推进到最新后清未读条数
+        const latest = state.latestByChannel[payload.channel_id]
+        if (!latest || compareSnowflake(advanced, latest) >= 0) {
+          delete unreadCountByChannel[payload.channel_id]
+        }
         return {
           mentionsByChannel: mentions,
-          lastReadByChannel: { ...state.lastReadByChannel, [payload.channel_id]: advanced },
+          lastReadByChannel,
+          unreadCountByChannel,
         }
       }),
 
     noteMessageCreate: (message, selfId, mentioned) =>
       set((state) => {
-        const channelId = message.channel_id
+        const channelId = String(message.channel_id)
+        const messageId = String(message.id)
+        if (!channelId || !messageId) return state
+
+        const prevLatest = state.latestByChannel[channelId]
+        const latestByChannel = {
+          ...state.latestByChannel,
+          // 最新 ID 只前进不后退（防乱序 DISPATCH）
+          [channelId]:
+            !prevLatest || compareSnowflake(messageId, prevLatest) > 0
+              ? messageId
+              : prevLatest,
+        }
         const next: Partial<ReadStatesState> = {
-          latestByChannel: { ...state.latestByChannel, [channelId]: message.id },
+          latestByChannel,
           guildByChannel: message.guild_id
-            ? { ...state.guildByChannel, [channelId]: message.guild_id }
+            ? { ...state.guildByChannel, [channelId]: String(message.guild_id) }
             : state.guildByChannel,
         }
-        if (selfId && message.author_id === selfId) {
+        // 普通消息：自己发的自动已读。系统管理员临场发言（SYSTEM_ADMIN，后台控制台
+        // PostAsUser）虽 author_id 为本人，但对客户端是「广播公告」语义——须照常
+        // 点亮频道/服务器未读，等打开频道或滚到底部再 ack（与 docs 15 FR-01/FR-02 对齐）。
+        const isOwnComposerMessage =
+          Boolean(selfId) &&
+          message.author_id === selfId &&
+          !isSystemAdminMessageType(message.type)
+        if (isOwnComposerMessage) {
           // 自己发的消息自动已读（本地推进即可；服务端游标由下一次 ack 对齐）
           next.lastReadByChannel = {
             ...state.lastReadByChannel,
-            [channelId]: message.id,
+            [channelId]: messageId,
           }
-          if (state.mentionsByChannel[channelId]) {
-            const mentions = { ...state.mentionsByChannel }
-            delete mentions[channelId]
-            next.mentionsByChannel = mentions
+          const mentions = { ...state.mentionsByChannel }
+          delete mentions[channelId]
+          next.mentionsByChannel = mentions
+          const unread = { ...state.unreadCountByChannel }
+          delete unread[channelId]
+          next.unreadCountByChannel = unread
+        } else {
+          // 仅当本条严格新于 last_read、且严格新于此前 latest 时 +1（避免乱序/重复事件虚增）
+          const lastRead = state.lastReadByChannel[channelId]
+          const afterRead = !lastRead || compareSnowflake(messageId, lastRead) > 0
+          const isNewHead = !prevLatest || compareSnowflake(messageId, prevLatest) > 0
+          if (afterRead && isNewHead) {
+            next.unreadCountByChannel = {
+              ...state.unreadCountByChannel,
+              [channelId]: (state.unreadCountByChannel[channelId] ?? 0) + 1,
+            }
           }
-        } else if (mentioned) {
-          // 本地乐观 +1；服务端随后的 READ_STATE_UPDATE 会以绝对值覆盖
-          next.mentionsByChannel = {
-            ...state.mentionsByChannel,
-            [channelId]: (state.mentionsByChannel[channelId] ?? 0) + 1,
+          if (mentioned) {
+            // 本地乐观 +1；服务端随后的 READ_STATE_UPDATE 会以绝对值覆盖
+            next.mentionsByChannel = {
+              ...state.mentionsByChannel,
+              [channelId]: (state.mentionsByChannel[channelId] ?? 0) + 1,
+            }
           }
         }
         return next as ReadStatesState
+      }),
+
+    setUnreadCountExact: (channelId, count) =>
+      set((state) => {
+        const unreadCountByChannel = { ...state.unreadCountByChannel }
+        if (count <= 0) delete unreadCountByChannel[channelId]
+        else unreadCountByChannel[channelId] = count
+        return { unreadCountByChannel }
       }),
 
     noteLatestMessage: (channelId, guildId, messageId) =>
       set((state) => {
         const current = state.latestByChannel[channelId]
         if (current && compareSnowflake(current, messageId) >= 0) return state
+        // 仅校正最新 ID，不改未读条数（历史加载/补缺口路径，条数由 MESSAGE_CREATE 维护）
+        const latestByChannel = { ...state.latestByChannel, [channelId]: messageId }
+        const lastRead = state.lastReadByChannel[channelId]
+        const unreadCountByChannel = { ...state.unreadCountByChannel }
+        if (lastRead && compareSnowflake(messageId, lastRead) > 0 && !unreadCountByChannel[channelId]) {
+          unreadCountByChannel[channelId] = 1
+        }
         return {
-          latestByChannel: { ...state.latestByChannel, [channelId]: messageId },
+          latestByChannel,
+          unreadCountByChannel,
           guildByChannel: guildId
             ? { ...state.guildByChannel, [channelId]: guildId }
             : state.guildByChannel,
@@ -174,6 +294,7 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
         let changed = false
         const latestByChannel = { ...state.latestByChannel }
         const guildByChannel = { ...state.guildByChannel }
+        const unreadCountByChannel = { ...state.unreadCountByChannel }
         for (const channel of channels) {
           if (channel.guild_id && guildByChannel[channel.id] !== channel.guild_id) {
             guildByChannel[channel.id] = channel.guild_id
@@ -186,8 +307,17 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
             latestByChannel[channel.id] = latest
             changed = true
           }
+          // 有 last_message 且超过 last_read、尚无计数 → 保底 1，便于冷启动显示红色数字
+          const lastRead = state.lastReadByChannel[channel.id]
+          if (
+            (!lastRead || compareSnowflake(latest, lastRead) > 0) &&
+            !unreadCountByChannel[channel.id]
+          ) {
+            unreadCountByChannel[channel.id] = 1
+            changed = true
+          }
         }
-        return changed ? { latestByChannel, guildByChannel } : state
+        return changed ? { latestByChannel, guildByChannel, unreadCountByChannel } : state
       }),
 
     removeChannel: (channelId) =>
@@ -199,6 +329,7 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
         return {
           lastReadByChannel: omit(state.lastReadByChannel),
           mentionsByChannel: omit(state.mentionsByChannel),
+          unreadCountByChannel: omit(state.unreadCountByChannel),
           latestByChannel: omit(state.latestByChannel),
           guildByChannel: omit(state.guildByChannel),
         }
@@ -210,16 +341,20 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
       if (!latest) return
       const lastRead = state.lastReadByChannel[channelId]
       const hasMentions = (state.mentionsByChannel[channelId] ?? 0) > 0
-      // 已是最新且无提及：无事可做（避免空转请求）
-      if (!hasMentions && lastRead && compareSnowflake(lastRead, latest) >= 0) return
+      const hasUnread = (state.unreadCountByChannel[channelId] ?? 0) > 0
+      // 已是最新且无提及/未读：无事可做（避免空转请求）
+      if (!hasMentions && !hasUnread && lastRead && compareSnowflake(lastRead, latest) >= 0) return
 
       // 本地立即生效（白点/角标秒清），上报按 1s 节流合并
       set((current) => {
         const mentions = { ...current.mentionsByChannel }
         delete mentions[channelId]
+        const unread = { ...current.unreadCountByChannel }
+        delete unread[channelId]
         return {
           lastReadByChannel: { ...current.lastReadByChannel, [channelId]: latest },
           mentionsByChannel: mentions,
+          unreadCountByChannel: unread,
         }
       })
 
@@ -235,17 +370,23 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
     },
 
     ackGuild: (guildId) => {
-      // 本地：该服全部已知频道推进到最新并清提及
+      // 本地：该服全部已知频道推进到最新并清提及/未读条数
       set((state) => {
         const lastRead = { ...state.lastReadByChannel }
         const mentions = { ...state.mentionsByChannel }
+        const unread = { ...state.unreadCountByChannel }
         for (const [channelId, channelGuild] of Object.entries(state.guildByChannel)) {
           if (channelGuild !== guildId) continue
           const latest = state.latestByChannel[channelId]
           if (latest) lastRead[channelId] = latest
           delete mentions[channelId]
+          delete unread[channelId]
         }
-        return { lastReadByChannel: lastRead, mentionsByChannel: mentions }
+        return {
+          lastReadByChannel: lastRead,
+          mentionsByChannel: mentions,
+          unreadCountByChannel: unread,
+        }
       })
       void apiAckGuild(guildId).catch(() => undefined)
     },
@@ -256,6 +397,7 @@ export const useReadStatesStore = create<ReadStatesState>()((set, get) => {
       set({
         lastReadByChannel: {},
         mentionsByChannel: {},
+        unreadCountByChannel: {},
         latestByChannel: {},
         guildByChannel: {},
       })

@@ -22,15 +22,16 @@ import {
 } from "~/components/ui/sidebar"
 import { CircleUserRoundIcon, LogOutIcon, SettingsIcon } from "lucide-react"
 import type { GatewayStatus } from "~/lib/gateway/client"
+import {
+  nameInitials,
+  resolveProfileAssetUrl,
+  userDisplayName,
+} from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { setManualPresence, usePresenceStore } from "~/stores/presence"
 import { useSettingsStore, type ManualPresenceStatus } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
-
-function userInitials(username: string): string {
-  return username.trim().slice(0, 2) || "?"
-}
 
 function statusLabel(status: GatewayStatus): string {
   switch (status) {
@@ -80,6 +81,9 @@ export function NavUser() {
 
   if (!user) return null
 
+  const display = userDisplayName(user)
+  const avatarSrc = resolveProfileAssetUrl(user.avatar_url)
+
   // 本人有效状态：手动 online 时叠加空闲检测；未连接时按离线灰点
   const selfStatus =
     gatewayStatus === "connected"
@@ -96,32 +100,30 @@ export function NavUser() {
 
   return (
     <SidebarMenu>
-      <SidebarMenuItem>
+      <SidebarMenuItem className="relative overflow-visible">
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
               <SidebarMenuButton
                 size="lg"
-                className="justify-center aria-expanded:bg-muted group-data-[collapsible=icon]:p-1!"
+                // 与服务器栏一致：去掉内边距，头像铺满 size-10 按钮区域
+                className="relative justify-center overflow-hidden rounded-lg p-0! group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:p-0! aria-expanded:bg-muted"
               />
             }
           >
-            {/* 仅显示头像：居中、方形带圆角；右下角 Presence 状态点 */}
-            <span className="relative">
-              <Avatar className="size-8 rounded-lg">
-                {user.avatar_url && <AvatarImage src={user.avatar_url} alt={user.username} />}
-                <AvatarFallback className="rounded-lg text-xs">
-                  {userInitials(user.username)}
-                </AvatarFallback>
-              </Avatar>
-              <span
-                aria-label={statusLabel(gatewayStatus)}
-                className={cn(
-                  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-sidebar",
-                  presenceDotClass(selfStatus),
-                )}
-              />
-            </span>
+            {/* 头像完整填充按钮（状态点独立在外侧，不随头像裁切） */}
+            <Avatar className="absolute inset-0 size-full! h-full! w-full! rounded-lg after:rounded-lg after:border-0">
+              {avatarSrc ? (
+                <AvatarImage
+                  src={avatarSrc}
+                  alt={display}
+                  className="size-full! rounded-lg object-cover"
+                />
+              ) : null}
+              <AvatarFallback className="size-full! rounded-lg text-xs font-semibold">
+                {nameInitials(display)}
+              </AvatarFallback>
+            </Avatar>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-56"
@@ -132,18 +134,22 @@ export function NavUser() {
             <DropdownMenuGroup>
               <DropdownMenuLabel className="p-0 font-normal">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                  <Avatar className="size-8">
-                    {user.avatar_url && (
-                      <AvatarImage src={user.avatar_url} alt={user.username} />
-                    )}
+                  <Avatar className="size-8 rounded-lg after:rounded-lg after:border-0">
+                    {avatarSrc ? (
+                      <AvatarImage
+                        src={avatarSrc}
+                        alt={display}
+                        className="rounded-lg object-cover"
+                      />
+                    ) : null}
                     <AvatarFallback className="rounded-lg text-xs">
-                      {userInitials(user.username)}
+                      {nameInitials(display)}
                     </AvatarFallback>
                   </Avatar>
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">{user.username}</span>
+                    <span className="truncate font-medium">{display}</span>
                     <span className="truncate text-xs text-muted-foreground">
-                      {user.email}
+                      @{user.username}
                     </span>
                   </div>
                   <span
@@ -185,10 +191,10 @@ export function NavUser() {
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuItem
-                onClick={() => useSettingsStore.getState().openPanel("account")}
+                onClick={() => useSettingsStore.getState().openPanel("profile")}
               >
                 <CircleUserRoundIcon />
-                账户
+                个人资料
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => useSettingsStore.getState().openPanel()}>
                 <SettingsIcon />
@@ -202,6 +208,14 @@ export function NavUser() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {/* Presence 状态点：独立于头像区块，叠在按钮右下角外沿，不被 overflow 裁切 */}
+        <span
+          aria-label={statusLabel(gatewayStatus)}
+          className={cn(
+            "pointer-events-none absolute -right-0.5 -bottom-0.5 z-10 size-2.5 rounded-full ring-2 ring-sidebar",
+            presenceDotClass(selfStatus),
+          )}
+        />
       </SidebarMenuItem>
     </SidebarMenu>
   )

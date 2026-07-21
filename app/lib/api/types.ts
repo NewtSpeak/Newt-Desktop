@@ -7,18 +7,49 @@
 // 用户与鉴权
 // ---------------------------------------------------------------------------
 
+/** 平台身份徽章（登录 / @me / READY 附带；系统所有者自动拥有） */
+export type PlatformBadge = {
+  id: string
+  kind: string
+  name: string
+  description: string
+  emoji: string
+  color: string
+  badge_id?: string
+  granted_at?: string
+  expires_at?: string | null
+}
+
 export type User = {
   id: string
   username: string
   email: string
   system_admin: boolean
   is_bot: boolean
+  /** 显示名（1–32）；空串表示未设置，展示回退用户名 */
+  display_name: string
+  /** 个性签名 / About Me（≤190） */
+  bio: string
   avatar_url: string
   avatar_animated: boolean
   banner_url: string
   accent_color: string
+  /** 平台徽章（如系统所有者 👑）；登录与 GET @me 返回 */
+  badges?: PlatformBadge[]
   created_at: string
   updated_at: string
+}
+
+/** 他人公开资料（GET /users/:id；不含 email 等私有字段） */
+export type PublicUserProfile = {
+  id: string
+  username: string
+  display_name: string
+  avatar: string
+  avatar_animated?: boolean
+  banner?: string
+  accent_color?: string
+  bio: string
 }
 
 export type TokenResponse = {
@@ -33,15 +64,34 @@ export type TokenResponse = {
 // 服务器 / 频道 / 成员
 // ---------------------------------------------------------------------------
 
-export type Guild = {
+/** 服务器 banner（多张有序；docs 协议/服务器外观资产.md） */
+export type GuildBanner = {
   id: string
-  name: string
-  owner_user_id: string
+  guild_id: string
+  /** 公开访问路径（/public-assets/profile/...），不可变可长缓存 */
+  url: string
+  /** 展示顺序（0 起连续升序） */
+  position: number
   created_at?: string
   updated_at?: string
 }
 
-export type ChannelType = "TEXT" | "VOICE"
+export type Guild = {
+  id: string
+  name: string
+  description?: string
+  owner_user_id: string
+  /** 服务器图标公开 URL（/public-assets/profile/...），空串表示未设置 */
+  icon_url?: string
+  /** 兼容旧单张 banner；多张时优先 banners 列表 */
+  banner_url?: string
+  /** 多 banner 列表（position 升序）；列表/READY/GUILD_UPDATE 可携带 */
+  banners?: GuildBanner[]
+  created_at?: string
+  updated_at?: string
+}
+
+export type ChannelType = "TEXT" | "VOICE" | "CATEGORY"
 
 export type Channel = {
   id: string
@@ -50,19 +100,53 @@ export type Channel = {
   type: ChannelType
   /** 服务端当前模型未含 position 字段，预留：缺失时按 0 处理 */
   position?: number
+  /** 所属分类（CATEGORY 的 id）；仅 TEXT/VOICE */
+  parent_id?: string | null
   /** 频道最新消息雪花 ID（字符串，无消息为 "0"）；未读白点恢复用 */
   last_message_id?: string
   created_at?: string
   updated_at?: string
 }
 
+/** 创建邀请响应（POST /guilds/:id/invites） */
+export type GuildInvite = {
+  id: string
+  guild_id: string
+  code: string
+  created_by: string
+  expires_at?: string | null
+  max_uses: number
+  uses: number
+  created_at?: string
+  /** 部分列表接口会附带完整分享链接 */
+  share_url?: string
+}
+
 export type GuildMember = {
   id: string
   user_id: string
   username: string
+  /** 系统显示名（全局）；展示优先级：nickname > display_name > username */
+  display_name?: string
   nickname: string
+  avatar_url?: string
+  avatar_animated?: boolean
+  banner_url?: string
+  bio?: string
   is_owner: boolean
   role_ids: string[]
+}
+
+/**
+ * 角色名样式（Role.Style jsonb，customization/style.go）：
+ * solid / linear / radial；colors 为 #RRGGBB。
+ */
+export type RoleNameStyle = {
+  type?: "solid" | "linear" | "radial" | ""
+  colors?: string[]
+  angle?: number
+  shape?: "circle" | "ellipse" | string
+  animated?: boolean
 }
 
 /** 服务器角色（model.Role；permissions 为 int64 位掩码，JSON 序列化为 number） */
@@ -75,7 +159,10 @@ export type Role = {
   is_everyone: boolean
   /** 服务端内置托管角色（如「管理员」，permissions 为 ADMINISTRATOR）；普通角色缺省 */
   managed?: boolean
+  /** 基础色 #RRGGBB（成员列表/用户名着色） */
   color?: string
+  /** 高级用户名样式 JSON 字符串或对象 */
+  style?: string | RoleNameStyle
   hoist?: boolean
   mentionable?: boolean
   created_at?: string
@@ -110,6 +197,17 @@ export type MessageAttachment = {
 
 export type MessageType = string
 
+/** 系统管理员临场发言（adminpresence）；客户端特殊头像/徽章渲染 */
+export const MESSAGE_TYPE_SYSTEM_ADMIN = "SYSTEM_ADMIN" as const
+
+/** 服务端 messageView 反应聚合（docs 05 FR-26）：count 为总数，me 标记调用者是否已反应 */
+export type ReactionSummary = {
+  emoji: string
+  count: number
+  /** 列表/单条 REST 带 viewer 时准确；Gateway MESSAGE_* 广播常省略或为 false */
+  me?: boolean
+}
+
 export type Message = {
   /** 雪花 ID（后端序列化为字符串） */
   id: string
@@ -127,6 +225,8 @@ export type Message = {
   mention_roles?: string[]
   /** 正文含 @everyone/@here 且作者具备 MENTION_EVERYONE 权限 */
   mention_everyone?: boolean
+  /** 表情反应聚合；列表/单条拉取时服务端始终返回（可为空数组） */
+  reactions?: ReactionSummary[]
   edit_count: number
   edited_at?: string
   nonce?: string
@@ -210,6 +310,11 @@ export type VoiceState = {
   joined_at?: string | null
   created_at?: string
   updated_at?: string
+  /** 展示字段（listVoiceStates / VOICE_STATE_UPDATE 附带，成员缓存未就绪时用） */
+  username?: string
+  display_name?: string
+  avatar_url?: string
+  nickname?: string
   // stage 模块增量字段（VOICE_STATE_UPDATE 第二形态，按 user_id 合并）
   stage_role?: StageRoleWire | null
   capacity_muted?: boolean

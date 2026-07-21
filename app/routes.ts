@@ -10,5 +10,7 @@ export default [
   layout("routes/app-shell.tsx", [
     index("routes/home.tsx"),
     route("channels/:guildId/:channelId", "routes/channel.tsx"),
+    // 服务器管理员操作面板（语音静音/禁听/踢出、成员踢封、封禁列表）
+    route("guilds/:guildId/moderation", "routes/moderation.tsx"),
   ]),
 ] satisfies RouteConfig

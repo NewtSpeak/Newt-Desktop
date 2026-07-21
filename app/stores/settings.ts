@@ -128,6 +128,7 @@ export type PresenceSettings = {
 
 export type SettingsSection =
   | "account"
+  | "profile"
   | "voice"
   | "notifications"
   | "appearance"

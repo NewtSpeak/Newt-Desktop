@@ -1,6 +1,54 @@
-// 用户级数据：已读推进（ack）/ read state 快照 / 服务端设置文档（userapi 模块）。
+// 用户级数据：资料（显示名/签名/头像/横幅）、已读推进、服务端设置文档（userapi 模块）。
 
 import { api, qs } from "./http"
+import type { PublicUserProfile, User } from "./types"
+
+// ---------------------------------------------------------------------------
+// 个人资料（docs 01 §3.3）
+// ---------------------------------------------------------------------------
+
+export type PatchMeInput = {
+  /** 传空串清除（回退用户名展示） */
+  display_name?: string
+  /** 传空串清除 */
+  bio?: string
+}
+
+/** 修改显示名 / 个性签名 → 触发 USER_UPDATE */
+export const patchMe = (input: PatchMeInput) =>
+  api<User>("/users/@me", { method: "PATCH", body: JSON.stringify(input) })
+
+/** 上传头像（multipart file，≤8MB，png/jpeg/webp/gif） */
+export function uploadAvatar(file: File | Blob) {
+  const body = new FormData()
+  body.append("file", file)
+  return api<{ avatar: string; user: User }>("/users/@me/avatar", {
+    method: "POST",
+    body,
+  })
+}
+
+/** 移除头像 */
+export const deleteAvatar = () =>
+  api<User>("/users/@me/avatar", { method: "DELETE" })
+
+/** 上传个人横幅（multipart file，≤12MB） */
+export function uploadBanner(file: File | Blob) {
+  const body = new FormData()
+  body.append("file", file)
+  return api<{ banner: string; user: User }>("/users/@me/banner", {
+    method: "POST",
+    body,
+  })
+}
+
+/** 移除个人横幅 */
+export const deleteBanner = () =>
+  api<User>("/users/@me/banner", { method: "DELETE" })
+
+/** 查看他人公开资料（须共享至少一个服务器，否则 404） */
+export const getPublicProfile = (userId: string) =>
+  api<PublicUserProfile>(`/users/${userId}`)
 
 // ---------------------------------------------------------------------------
 // 已读（docs 15 §7-1）

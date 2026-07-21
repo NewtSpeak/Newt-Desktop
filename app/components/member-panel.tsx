@@ -1,20 +1,32 @@
-// 成员面板（docs 02 §3.7 FR-22/23，简化版）：
-//   应用壳主内容区右侧可折叠 240px 面板，按在线/离线两组展示（presence 驱动，
-//   离线沉底灰显）；条目 = 头像 + 状态点 + 昵称优先显示名 + owner 皇冠 +
-//   管理员盾牌（role_ids 含管理员角色）。
+// 成员面板（docs 02 §3.7 FR-22/23）：
+//   右侧可折叠 240px 面板，按在线/离线分组；条目 = 头像 + 状态点 + 显示名 + 徽章。
 //
-// 成员点击菜单（DropdownMenu）：资料摘要（头像/用户名/角色名列表）+ 管理操作——
-//   - 设为管理员 / 移除管理员：对「管理员」角色 PUT/DELETE member role，
-//     乐观更新 + 失败回滚 toast；入口仅当自己是 owner 或有 ADMINISTRATOR
-//     且目标不是 owner/自己时显示（本地预判，服务端兜底裁决）；
-//   - 踢出 / 封禁：按 KICK_MEMBERS / BAN_MEMBERS 位预判显隐，红色确认弹窗
-//     （封禁带原因输入）；403 toast 提示、404 按“已不存在”收敛。
+// 成员点击菜单（Discord 风格资料卡，尽量丰富）：
+//   - 横幅 / 大头像 / 显示名 / 用户名 / 状态 / 签名 / 彩色角色标签
+//   - 复制用户 ID、复制用户名、复制 @提及 token
+//   - 修改昵称（本人 CHANGE_NICKNAME / 他人 MANAGE_NICKNAMES）
+//   - 身份组子菜单（MANAGE_ROLES 时复选分配，@everyone / managed 不可改）
+//   - 设为/移除管理员、踢出、封禁
+//   - 本人：编辑资料（打开设置）
 
 import { useEffect, useMemo, useState } from "react"
-import { CrownIcon, ShieldIcon } from "lucide-react"
+import type { CSSProperties } from "react"
+import {
+  AtSignIcon,
+  BanIcon,
+  CopyIcon,
+  CrownIcon,
+  HashIcon,
+  LogOutIcon,
+  PencilIcon,
+  SettingsIcon,
+  ShieldIcon,
+  UserRoundIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
-import { Avatar, AvatarFallback } from "~/components/ui/avatar"
+import { AdminMemberMenuSection } from "~/components/admin/admin-member-menu"
+import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
   Dialog,
@@ -25,14 +37,18 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "~/components/ui/dropdown-menu"
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "~/components/ui/context-menu"
 import { Input } from "~/components/ui/input"
 import { presenceDotClass } from "~/components/nav-user"
 import {
@@ -40,13 +56,21 @@ import {
   banUser,
   kickMember,
   removeMemberRole,
+  updateMemberNickname,
 } from "~/lib/api/guilds"
 import { ApiError, isNotFound } from "~/lib/api/http"
+import { copyText } from "~/lib/clipboard"
 import type { GuildMember, Role } from "~/lib/api/types"
 import { hasPermission, Permissions } from "~/lib/permissions"
+import {
+  memberDisplayName,
+  nameInitials,
+  resolveProfileAssetUrl,
+} from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { useMembersStore } from "~/stores/members"
+import type { PresenceStatus } from "~/lib/gateway/events"
 import { effectiveSelfStatus, usePresenceStore } from "~/stores/presence"
 import {
   findAdminRole,
@@ -54,19 +78,45 @@ import {
   memberIsAdmin,
   useRolesStore,
 } from "~/stores/roles"
+import { useSettingsStore } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
 
-function memberInitials(name: string): string {
-  return name.trim().slice(0, 2) || "?"
-}
-
 function displayName(member: GuildMember): string {
-  return member.nickname || member.username || member.user_id.slice(0, 6)
+  return memberDisplayName(member)
 }
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.message) return error.message
   return fallback
+}
+
+function presenceLabel(status: string | undefined): string {
+  switch (status) {
+    case "online":
+      return "在线"
+    case "idle":
+      return "闲置"
+    case "dnd":
+      return "勿扰"
+    case "invisible":
+      return "隐身"
+    default:
+      return "离线"
+  }
+}
+
+/** 角色色 → 可读的 CSS 颜色；缺省用 muted */
+function roleColorStyle(color: string | undefined): CSSProperties | undefined {
+  if (!color?.trim()) return undefined
+  const c = color.trim()
+  if (c.startsWith("#") || c.startsWith("rgb") || c.startsWith("hsl") || c.startsWith("oklch")) {
+    return { backgroundColor: c, color: "#fff" }
+  }
+  // 纯 hex 无 # 前缀
+  if (/^[0-9a-fA-F]{3,8}$/.test(c)) {
+    return { backgroundColor: `#${c}`, color: "#fff" }
+  }
+  return undefined
 }
 
 type ConfirmState =
@@ -75,7 +125,7 @@ type ConfirmState =
   | null
 
 // ---------------------------------------------------------------------------
-// 成员条目 + 菜单
+// 成员条目 + 丰富资料卡菜单
 // ---------------------------------------------------------------------------
 
 function MemberRow({
@@ -96,28 +146,82 @@ function MemberRow({
   const selfId = useAuthStore((state) => state.user?.id)
   const presence = usePresenceStore((state) => state.statusByUser[member.user_id])
   const isSelf = member.user_id === selfId
-  const status = isSelf ? effectiveSelfStatus() : presence
+  const status: PresenceStatus | undefined = isSelf
+    ? effectiveSelfStatus()
+    : presence
   const online = isSelf || Boolean(presence)
   const isAdmin = memberIsAdmin(member, roles)
   const name = displayName(member)
+  const avatarSrc = resolveProfileAssetUrl(member.avatar_url)
+  const bannerSrc = resolveProfileAssetUrl(member.banner_url)
+  const username = member.username?.trim() || member.user_id.slice(0, 8)
+  const globalDisplay = member.display_name?.trim()
+  const nick = member.nickname?.trim()
 
-  // 本地权限预判（服务端兜底裁决）：owner 或 ADMINISTRATOR 才能任命管理员
   const adminRole = findAdminRole(roles)
   const selfPerms = memberGuildPermissions(self, roles)
   const canAppoint =
     Boolean(adminRole) &&
-    (Boolean(self?.is_owner) || hasPermission(selfPerms, Permissions.ADMINISTRATOR))
+    (Boolean(self?.is_owner) ||
+      hasPermission(selfPerms, Permissions.ADMINISTRATOR))
   const canKick = hasPermission(selfPerms, Permissions.KICK_MEMBERS)
   const canBan = hasPermission(selfPerms, Permissions.BAN_MEMBERS)
-  // 对自己 / owner 不显示管理区块
+  const canManageRoles = hasPermission(selfPerms, Permissions.MANAGE_ROLES)
+  const canEditNickname =
+    (isSelf && hasPermission(selfPerms, Permissions.CHANGE_NICKNAME)) ||
+    (!isSelf && hasPermission(selfPerms, Permissions.MANAGE_NICKNAMES))
   const manageable = !isSelf && !member.is_owner
-  const showManage = manageable && (canAppoint || canKick || canBan)
+  const showModeration = manageable && (canAppoint || canKick || canBan)
 
-  const roleNames = (roles ?? [])
-    .filter((role) => !role.is_everyone && member.role_ids.includes(role.id))
-    .map((role) => role.name)
+  const memberRoles = useMemo(
+    () =>
+      (roles ?? [])
+        .filter((role) => !role.is_everyone && member.role_ids.includes(role.id))
+        .sort((a, b) => b.position - a.position),
+    [roles, member.role_ids],
+  )
 
-  // 管理员任命/移除：乐观更新 role_ids，失败回滚 + toast
+  const assignableRoles = useMemo(
+    () =>
+      (roles ?? [])
+        .filter((role) => !role.is_everyone && !role.managed)
+        .sort((a, b) => b.position - a.position),
+    [roles],
+  )
+
+  const [nickOpen, setNickOpen] = useState(false)
+  const [nickDraft, setNickDraft] = useState(nick ?? "")
+  const [nickPending, setNickPending] = useState(false)
+  const [rolePendingId, setRolePendingId] = useState<string | null>(null)
+
+  const openNickDialog = () => {
+    setNickDraft(nick ?? "")
+    setNickOpen(true)
+  }
+
+  const saveNickname = async () => {
+    setNickPending(true)
+    const previous = member.nickname
+    const next = nickDraft.trim()
+    useMembersStore.getState().upsertMember(guildId, {
+      user_id: member.user_id,
+      nickname: next,
+    })
+    try {
+      await updateMemberNickname(guildId, member.id, next)
+      toast.success(next ? "昵称已更新" : "昵称已清除")
+      setNickOpen(false)
+    } catch (error) {
+      useMembersStore.getState().upsertMember(guildId, {
+        user_id: member.user_id,
+        nickname: previous,
+      })
+      toast.error(errorMessage(error, "修改昵称失败"))
+    } finally {
+      setNickPending(false)
+    }
+  }
+
   const toggleAdmin = async (makeAdmin: boolean) => {
     if (!adminRole) return
     const previous = member.role_ids
@@ -131,6 +235,7 @@ function MemberRow({
     try {
       if (makeAdmin) await assignMemberRole(guildId, member.id, adminRole.id)
       else await removeMemberRole(guildId, member.id, adminRole.id)
+      toast.success(makeAdmin ? "已设为管理员" : "已移除管理员")
     } catch (error) {
       useMembersStore.getState().upsertMember(guildId, {
         user_id: member.user_id,
@@ -142,96 +247,385 @@ function MemberRow({
     }
   }
 
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
-          online ? "text-sidebar-foreground/90" : "opacity-50",
-        )}
-      >
-        <span className="relative shrink-0">
-          <Avatar className="size-7">
-            <AvatarFallback className="text-[10px]">
-              {memberInitials(name)}
-            </AvatarFallback>
-          </Avatar>
-          <span
-            className={cn(
-              "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-sidebar",
-              presenceDotClass(status),
-            )}
-          />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
-        {member.is_owner && (
-          <CrownIcon
-            aria-label="服务器所有者"
-            className="size-3.5 shrink-0 text-amber-500"
-          />
-        )}
-        {!member.is_owner && isAdmin && (
-          <ShieldIcon
-            aria-label="管理员"
-            className="size-3.5 shrink-0 text-sky-500"
-          />
-        )}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent className="min-w-56" side="left" align="start">
-        {/* 资料摘要（GroupLabel 必须位于 Group 内，否则 Base UI 抛缺少上下文错误） */}
-        <DropdownMenuGroup>
-          <DropdownMenuLabel className="p-0 font-normal">
-            <div className="flex items-center gap-2 px-1 py-1.5">
-              <Avatar className="size-9">
-                <AvatarFallback className="text-xs">
-                  {memberInitials(name)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="grid min-w-0 flex-1 leading-tight">
-                <span className="truncate text-sm font-medium">{name}</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  @{member.username || member.user_id.slice(0, 8)}
-                </span>
-              </div>
-            </div>
-          </DropdownMenuLabel>
-        </DropdownMenuGroup>
-        <div className="px-2 pb-1.5 text-xs text-muted-foreground">
-          {member.is_owner ? "服务器所有者" : null}
-          {member.is_owner && roleNames.length > 0 ? " · " : null}
-          {roleNames.length > 0 ? `角色：${roleNames.join("、")}` : null}
-          {!member.is_owner && roleNames.length === 0 ? "暂无角色" : null}
-        </div>
+  const toggleRole = async (role: Role, assigned: boolean) => {
+    setRolePendingId(role.id)
+    const previous = member.role_ids
+    const next = assigned
+      ? previous.filter((id) => id !== role.id)
+      : [...previous, role.id]
+    useMembersStore.getState().upsertMember(guildId, {
+      user_id: member.user_id,
+      role_ids: next,
+    })
+    try {
+      if (assigned) await removeMemberRole(guildId, member.id, role.id)
+      else await assignMemberRole(guildId, member.id, role.id)
+    } catch (error) {
+      useMembersStore.getState().upsertMember(guildId, {
+        user_id: member.user_id,
+        role_ids: previous,
+      })
+      toast.error(errorMessage(error, assigned ? "移除角色失败" : "分配角色失败"))
+    } finally {
+      setRolePendingId(null)
+    }
+  }
 
-        {showManage && (
-          <>
-            <DropdownMenuSeparator />
-            {canAppoint &&
-              (isAdmin ? (
-                <DropdownMenuItem onClick={() => void toggleAdmin(false)}>
-                  <ShieldIcon className="size-4" />
-                  移除管理员
-                </DropdownMenuItem>
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger
+          className={cn(
+            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/70",
+            online ? "text-foreground/90" : "opacity-50",
+          )}
+          onClick={(event) => {
+            // 左键也打开同一右键菜单（合成 contextmenu 事件）
+            event.currentTarget.dispatchEvent(
+              new MouseEvent("contextmenu", {
+                bubbles: true,
+                clientX: event.clientX,
+                clientY: event.clientY,
+              }),
+            )
+          }}
+        >
+          <span className="relative shrink-0">
+            <Avatar className="size-7 rounded-lg after:rounded-lg after:border-0">
+              {avatarSrc && (
+                <AvatarImage
+                  src={avatarSrc}
+                  alt={name}
+                  className="rounded-lg object-cover"
+                />
+              )}
+              <AvatarFallback className="rounded-lg text-[10px]">
+                {nameInitials(name)}
+              </AvatarFallback>
+            </Avatar>
+            <span
+              className={cn(
+                "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-background",
+                presenceDotClass(status),
+              )}
+            />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
+          {member.is_owner && (
+            <CrownIcon
+              aria-label="服务器所有者"
+              className="size-3.5 shrink-0 text-amber-500"
+            />
+          )}
+          {!member.is_owner && isAdmin && (
+            <ShieldIcon
+              aria-label="管理员"
+              className="size-3.5 shrink-0 text-sky-500"
+            />
+          )}
+        </ContextMenuTrigger>
+
+        <ContextMenuContent
+          className="w-72 overflow-hidden p-0"
+          side="left"
+          align="start"
+          sideOffset={8}
+        >
+          {/* —— 资料卡头部：横幅 + 头像 + 身份 —— */}
+          <div className="relative">
+            <div
+              className={cn(
+                "h-16 w-full",
+                bannerSrc
+                  ? "bg-muted"
+                  : "bg-gradient-to-br from-sky-500/80 via-violet-500/70 to-fuchsia-500/60",
+              )}
+            >
+              {bannerSrc ? (
+                <img
+                  src={bannerSrc}
+                  alt=""
+                  className="size-full object-cover"
+                  draggable={false}
+                />
+              ) : null}
+            </div>
+
+            <div className="relative px-3 pb-2">
+              {/* 头像压在横幅下沿，状态点独立于头像外 */}
+              <div className="relative -mt-8 mb-2 size-16">
+                <Avatar className="size-16 rounded-2xl ring-4 ring-popover after:rounded-2xl after:border-0">
+                  {avatarSrc ? (
+                    <AvatarImage
+                      src={avatarSrc}
+                      alt={name}
+                      className="rounded-2xl object-cover"
+                    />
+                  ) : null}
+                  <AvatarFallback className="rounded-2xl text-lg font-semibold">
+                    {nameInitials(name)}
+                  </AvatarFallback>
+                </Avatar>
+                <span
+                  title={presenceLabel(status)}
+                  className={cn(
+                    "absolute -right-0.5 -bottom-0.5 size-3.5 rounded-full ring-[3px] ring-popover",
+                    presenceDotClass(status),
+                  )}
+                />
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-base font-semibold leading-tight">
+                    {name}
+                  </span>
+                  {member.is_owner && (
+                    <CrownIcon className="size-3.5 shrink-0 text-amber-500" />
+                  )}
+                  {!member.is_owner && isAdmin && (
+                    <ShieldIcon className="size-3.5 shrink-0 text-sky-500" />
+                  )}
+                </div>
+                <p className="truncate text-xs text-muted-foreground">
+                  @{username}
+                  {nick && globalDisplay ? ` · ${globalDisplay}` : null}
+                </p>
+                <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      presenceDotClass(status),
+                    )}
+                  />
+                  {presenceLabel(status)}
+                  {member.is_owner
+                    ? " · 服务器所有者"
+                    : isAdmin
+                      ? " · 管理员"
+                      : null}
+                </p>
+              </div>
+
+              {member.bio?.trim() ? (
+                <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
+                  {member.bio.trim()}
+                </p>
+              ) : null}
+
+              {/* 角色彩色标签 */}
+              {memberRoles.length > 0 ? (
+                <div className="mt-2.5 flex flex-wrap gap-1">
+                  {memberRoles.map((role) => (
+                    <span
+                      key={role.id}
+                      className={cn(
+                        "inline-flex max-w-full items-center gap-1 truncate rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        !role.color && "bg-muted text-muted-foreground",
+                      )}
+                      style={roleColorStyle(role.color)}
+                      title={role.name}
+                    >
+                      {role.color ? (
+                        <span className="size-1.5 shrink-0 rounded-full bg-white/90" />
+                      ) : null}
+                      <span className="truncate">{role.name}</span>
+                    </span>
+                  ))}
+                </div>
               ) : (
-                <DropdownMenuItem onClick={() => void toggleAdmin(true)}>
-                  <ShieldIcon className="size-4" />
-                  设为管理员
-                </DropdownMenuItem>
-              ))}
-            {canKick && (
-              <DropdownMenuItem variant="destructive" onClick={() => onKick(member)}>
-                踢出服务器
-              </DropdownMenuItem>
-            )}
-            {canBan && (
-              <DropdownMenuItem variant="destructive" onClick={() => onBan(member)}>
-                封禁
-              </DropdownMenuItem>
-            )}
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+                <p className="mt-2 text-[11px] text-muted-foreground/70">
+                  暂无身份组
+                </p>
+              )}
+            </div>
+          </div>
+
+          <ContextMenuSeparator className="my-0" />
+
+          {/* —— 快捷操作 —— */}
+          <ContextMenuGroup className="p-1.5">
+            <ContextMenuLabel className="px-2 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              快捷操作
+            </ContextMenuLabel>
+            <ContextMenuItem
+              onClick={() =>
+                void copyText("提及", `<@${member.user_id}>`)
+              }
+            >
+              <AtSignIcon />
+              复制 @提及
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => void copyText("用户名", username)}
+            >
+              <UserRoundIcon />
+              复制用户名
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => void copyText("用户 ID", member.user_id)}
+            >
+              <HashIcon />
+              复制用户 ID
+              <span className="ml-auto max-w-20 truncate font-mono text-[10px] text-muted-foreground">
+                {member.user_id.slice(0, 8)}…
+              </span>
+            </ContextMenuItem>
+            {isSelf ? (
+              <ContextMenuItem
+                onClick={() => useSettingsStore.getState().openPanel("profile")}
+              >
+                <SettingsIcon />
+                编辑个人资料
+              </ContextMenuItem>
+            ) : null}
+          </ContextMenuGroup>
+
+          {(canEditNickname || (canManageRoles && assignableRoles.length > 0)) && (
+            <>
+              <ContextMenuSeparator className="my-0" />
+              <ContextMenuGroup className="p-1.5">
+                <ContextMenuLabel className="px-2 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  成员管理
+                </ContextMenuLabel>
+                {canEditNickname ? (
+                  <ContextMenuItem onClick={openNickDialog}>
+                    <PencilIcon />
+                    {isSelf ? "修改我的昵称" : "修改昵称"}
+                    {nick ? (
+                      <span className="ml-auto max-w-24 truncate text-xs text-muted-foreground">
+                        {nick}
+                      </span>
+                    ) : null}
+                  </ContextMenuItem>
+                ) : null}
+                {canManageRoles && assignableRoles.length > 0 ? (
+                  <ContextMenuSub>
+                    <ContextMenuSubTrigger>
+                      <ShieldIcon />
+                      身份组
+                    </ContextMenuSubTrigger>
+                    <ContextMenuSubContent className="min-w-44" side="left">
+                      {assignableRoles.map((role) => {
+                        const assigned = member.role_ids.includes(role.id)
+                        return (
+                          <ContextMenuCheckboxItem
+                            key={role.id}
+                            checked={assigned}
+                            disabled={rolePendingId === role.id}
+                            onCheckedChange={() =>
+                              void toggleRole(role, assigned)
+                            }
+                            // 保持子菜单打开便于连续勾选
+                            onSelect={(event) => event.preventDefault()}
+                          >
+                            <span
+                              className="size-2 shrink-0 rounded-full"
+                              style={{
+                                backgroundColor:
+                                  role.color?.trim() ||
+                                  "var(--color-muted-foreground)",
+                              }}
+                            />
+                            <span className="truncate">{role.name}</span>
+                          </ContextMenuCheckboxItem>
+                        )
+                      })}
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                ) : null}
+              </ContextMenuGroup>
+            </>
+          )}
+
+          {showModeration && (
+            <>
+              <ContextMenuSeparator className="my-0" />
+              <ContextMenuGroup className="p-1.5">
+                <ContextMenuLabel className="px-2 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                  管理操作
+                </ContextMenuLabel>
+                {canAppoint &&
+                  (isAdmin ? (
+                    <ContextMenuItem onClick={() => void toggleAdmin(false)}>
+                      <ShieldIcon />
+                      移除管理员
+                    </ContextMenuItem>
+                  ) : (
+                    <ContextMenuItem onClick={() => void toggleAdmin(true)}>
+                      <ShieldIcon />
+                      设为管理员
+                    </ContextMenuItem>
+                  ))}
+                {canKick && (
+                  <ContextMenuItem
+                    variant="destructive"
+                    onClick={() => onKick(member)}
+                  >
+                    <LogOutIcon />
+                    踢出服务器
+                  </ContextMenuItem>
+                )}
+                {canBan && (
+                  <ContextMenuItem
+                    variant="destructive"
+                    onClick={() => onBan(member)}
+                  >
+                    <BanIcon />
+                    封禁成员
+                  </ContextMenuItem>
+                )}
+              </ContextMenuGroup>
+            </>
+          )}
+
+          {/* 语音管理 + 管理员视图入口（分割线在组件内） */}
+          <AdminMemberMenuSection
+            guildId={guildId}
+            targetUserId={member.user_id}
+          />
+        </ContextMenuContent>
+      </ContextMenu>
+
+      {/* 修改昵称对话框 */}
+      <Dialog open={nickOpen} onOpenChange={setNickOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {isSelf ? "修改我的昵称" : `修改「${name}」的昵称`}
+            </DialogTitle>
+            <DialogDescription>
+              服务器昵称仅在本服显示，优先于系统显示名。留空则清除昵称。
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={nickDraft}
+            onChange={(event) => setNickDraft(event.target.value)}
+            placeholder={globalDisplay || username || "昵称"}
+            maxLength={32}
+            autoFocus
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void saveNickname()
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setNickOpen(false)}
+              disabled={nickPending}
+            >
+              取消
+            </Button>
+            <Button onClick={() => void saveNickname()} disabled={nickPending}>
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -246,14 +640,15 @@ export function MemberPanel() {
   const members = useMembersStore((state) =>
     guildId ? state.byGuild[guildId] : undefined,
   )
-  const roles = useRolesStore((state) => (guildId ? state.byGuild[guildId] : undefined))
+  const roles = useRolesStore((state) =>
+    guildId ? state.byGuild[guildId] : undefined,
+  )
   const statusByUser = usePresenceStore((state) => state.statusByUser)
 
   const [confirm, setConfirm] = useState<ConfirmState>(null)
   const [banReason, setBanReason] = useState("")
   const [pending, setPending] = useState(false)
 
-  // 选中服务器变化时拉取成员与角色（members 在频道列表已拉，这里兜底幂等）
   useEffect(() => {
     if (!guildId || !open) return
     void useMembersStore.getState().fetchMembers(guildId).catch(() => undefined)
@@ -265,8 +660,8 @@ export function MemberPanel() {
     const online: GuildMember[] = []
     const offline: GuildMember[] = []
     for (const member of list) {
-      // 本人恒显示在在线组（隐身时他人视角由服务端掩码，自己知道自己在线）
-      if (member.user_id === selfId || statusByUser[member.user_id]) online.push(member)
+      if (member.user_id === selfId || statusByUser[member.user_id])
+        online.push(member)
       else offline.push(member)
     }
     const byName = (a: GuildMember, b: GuildMember) =>
@@ -287,7 +682,6 @@ export function MemberPanel() {
     setBanReason("")
   }
 
-  // 踢出/封禁执行：404 按“成员已不存在”收敛（本地移除，不报错）
   const executeConfirm = async () => {
     if (!confirm) return
     const { kind, member } = confirm
@@ -307,7 +701,9 @@ export function MemberPanel() {
         useMembersStore.getState().removeMember(guildId, member.user_id)
         closeConfirm()
       } else {
-        toast.error(errorMessage(error, kind === "kick" ? "踢出失败" : "封禁失败"))
+        toast.error(
+          errorMessage(error, kind === "kick" ? "踢出失败" : "封禁失败"),
+        )
       }
     } finally {
       setPending(false)
@@ -317,7 +713,7 @@ export function MemberPanel() {
   const renderGroup = (label: string, list: GuildMember[]) =>
     list.length > 0 && (
       <div className="flex flex-col gap-0.5">
-        <p className="px-2 pt-3 pb-1 text-xs font-medium text-sidebar-foreground/60 select-none">
+        <p className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground select-none">
           {label} — {list.length}
         </p>
         {list.map((member) => (
@@ -334,11 +730,27 @@ export function MemberPanel() {
       </div>
     )
 
+  const total = (members?.length ?? 0)
+
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-l bg-sidebar text-sidebar-foreground">
+    <aside className="flex w-60 shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
+      {/* 面板头 */}
+      <div className="flex h-10 shrink-0 items-center justify-between px-3">
+        <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase select-none">
+          成员
+        </span>
+        {members !== undefined && (
+          <span className="text-[11px] tabular-nums text-muted-foreground select-none">
+            {total}
+          </span>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto px-2 pb-3">
         {members === undefined ? (
-          <p className="px-2 pt-3 text-xs text-sidebar-foreground/60">成员加载中…</p>
+          <p className="px-2 pt-3 text-xs text-muted-foreground">成员加载中…</p>
+        ) : total === 0 ? (
+          <p className="px-2 pt-3 text-xs text-muted-foreground">暂无成员</p>
         ) : (
           <>
             {renderGroup("在线", onlineMembers)}
@@ -347,8 +759,10 @@ export function MemberPanel() {
         )}
       </div>
 
-      {/* 踢出 / 封禁确认弹窗（危险操作红色按钮，docs 02 UI/UX-1） */}
-      <Dialog open={confirm !== null} onOpenChange={(next) => !next && closeConfirm()}>
+      <Dialog
+        open={confirm !== null}
+        onOpenChange={(next) => !next && closeConfirm()}
+      >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>

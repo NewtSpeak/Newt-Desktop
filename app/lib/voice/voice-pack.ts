@@ -170,7 +170,11 @@ export function handleVoicePackPlay(payload: VoicePackPlayPayload) {
   const member = useMembersStore
     .getState()
     .byGuild[payload.guild_id]?.find((item) => item.user_id === payload.user_id)
-  const name = member?.nickname || member?.username || `用户${payload.user_id.slice(0, 6)}`
+  const name =
+    member?.nickname?.trim() ||
+    member?.display_name?.trim() ||
+    member?.username ||
+    `用户${payload.user_id.slice(0, 6)}`
   toast(`🔊 ${name} 使用了入场语音`, { duration: 4_000 })
 
   // 本地过滤链：①②③

@@ -95,7 +95,11 @@ export function QuickSwitcher({
         for (const member of members) {
           if (seen.has(member.user_id)) continue
           seen.add(member.user_id)
-          pushIf({ kind: "member", id: member.user_id, name: member.nickname || member.username })
+          pushIf({
+            kind: "member",
+            id: member.user_id,
+            name: member.nickname?.trim() || member.display_name?.trim() || member.username,
+          })
         }
       }
     }

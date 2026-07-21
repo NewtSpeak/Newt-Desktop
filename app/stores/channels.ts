@@ -2,7 +2,7 @@
 
 import { create } from "zustand"
 
-import { listChannels } from "~/lib/api/guilds"
+import { listChannels, type ChannelReorderItem } from "~/lib/api/guilds"
 import { isNotFound } from "~/lib/api/http"
 import type { Channel } from "~/lib/api/types"
 import { useReadStatesStore } from "./read-states"
@@ -22,6 +22,11 @@ type ChannelsState = {
   setChannels: (guildId: string, channels: Channel[]) => void
   /** CHANNEL_CREATE / CHANNEL_UPDATE 增量维护 */
   upsertChannel: (channel: Channel) => void
+  /**
+   * 拖拽排序乐观写入：按 items 合并 position / parent_id，再全局重排。
+   * 失败时由调用方 fetchChannels 回滚。
+   */
+  applyReorder: (guildId: string, items: ChannelReorderItem[]) => void
   removeChannel: (guildId: string, channelId: string) => void
   removeGuild: (guildId: string) => void
   reset: () => void
@@ -79,6 +84,26 @@ export const useChannelsStore = create<ChannelsState>()((set, get) => ({
       }
     })
   },
+
+  applyReorder: (guildId, items) =>
+    set((state) => {
+      const channels = state.byGuild[guildId]
+      if (!channels?.length) return state
+      const patch = new Map(items.map((item) => [item.id, item]))
+      const next = channels.map((channel) => {
+        const entry = patch.get(channel.id)
+        if (!entry) return channel
+        return {
+          ...channel,
+          position: entry.position,
+          parent_id:
+            entry.parent_id === undefined
+              ? channel.parent_id
+              : entry.parent_id,
+        }
+      })
+      return { byGuild: { ...state.byGuild, [guildId]: sortChannels(next) } }
+    }),
 
   removeChannel: (guildId, channelId) =>
     set((state) => {

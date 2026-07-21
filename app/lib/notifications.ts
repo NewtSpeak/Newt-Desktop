@@ -96,7 +96,7 @@ function previewOf(message: Message): string {
     const flat = message.content.replace(/\s+/g, " ").trim()
     return flat.length > PREVIEW_MAX_CHARS ? `${flat.slice(0, PREVIEW_MAX_CHARS)}…` : flat
   }
-  if (message.attachments.length > 0) {
+  if ((message.attachments?.length ?? 0) > 0) {
     const first = message.attachments[0]
     return first.preview === "image" ? "[图片]" : `[${first.filename}]`
   }
@@ -154,7 +154,11 @@ export function maybeNotifyMessage(message: Message, mentioned: boolean) {
   const member = useMembersStore
     .getState()
     .byGuild[message.guild_id]?.find((item) => item.user_id === message.author_id)
-  const author = member?.nickname || member?.username || message.author_username
+  const author =
+    member?.nickname?.trim() ||
+    member?.display_name?.trim() ||
+    member?.username ||
+    message.author_username
 
   void deliver(`${guildName} · #${channelName}`, `${author}: ${previewOf(message)}`)
 

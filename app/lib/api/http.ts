@@ -244,7 +244,12 @@ export async function api<T>(
     await refreshSession()
   }
   const headers = new Headers(init.headers)
-  if (init.body != null && !headers.has("Content-Type")) {
+  // FormData 必须由浏览器自动带 multipart boundary，禁止强制 application/json
+  if (
+    init.body != null &&
+    !headers.has("Content-Type") &&
+    !(typeof FormData !== "undefined" && init.body instanceof FormData)
+  ) {
     headers.set("Content-Type", "application/json")
   }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`)
@@ -281,7 +286,11 @@ export async function apiPublic<T>(
   init: ApiInit = {}
 ): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body != null && !headers.has("Content-Type")) {
+  if (
+    init.body != null &&
+    !headers.has("Content-Type") &&
+    !(typeof FormData !== "undefined" && init.body instanceof FormData)
+  ) {
     headers.set("Content-Type", "application/json")
   }
   let response: Response

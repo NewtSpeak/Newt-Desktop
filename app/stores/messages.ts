@@ -2,8 +2,10 @@
 // 表情反应增量维护、typing 集合（10s 过期）、断线重连 after 游标补缺口。
 //
 // 排序约定：内部 messages 数组恒按雪花 ID 升序（旧 → 新），渲染时新消息在下。
-// 服务端 messageView 不含 reactions 字段，反应完全由 Gateway 事件在客户端增量累积
-//（历史消息的既有反应首期不可见，与服务端能力对齐）。
+// 反应数据源：
+//   1. REST list/get 的 messageView.reactions（{emoji,count,me}）— 刷新/首屏权威来源；
+//   2. Gateway MESSAGE_REACTION_ADD/REMOVE — 实时增量，按 user_id 幂等去重；
+//   3. MESSAGE_CREATE/UPDATE 也可能带 reactions（广播省略 me，合并时保留本地 me）。
 
 import { create } from "zustand"
 
@@ -17,9 +19,9 @@ import {
   removeReaction,
 } from "~/lib/api/messages"
 import { ApiError, isNotFound } from "~/lib/api/http"
-import type { Message } from "~/lib/api/types"
+import type { Message, ReactionSummary } from "~/lib/api/types"
 import { compareSnowflake } from "~/lib/snowflake"
-import { useReadStatesStore } from "./read-states"
+import { countIdsAfterLastRead, useReadStatesStore } from "./read-states"
 import type {
   MessageDeletePayload,
   MessageReactionPayload,
@@ -39,14 +41,33 @@ const TYPING_TTL_MS = 10_000
 /** 断线补缺口的单次上限；补拉打满说明缺口过大，直接清空重拉 */
 const GAP_FILL_LIMIT = 100
 
+/** 占位反应者 ID 前缀：REST 只给 count/me 时补齐计数，不含真实用户 */
+const UNKNOWN_REACTOR_PREFIX = "__reactor:"
+
+/** 按频道消息缓存精确回写未读条数（拉历史 / 补缺口后调用） */
+function syncUnreadCountFromCache(channelId: string) {
+  const messages = useMessagesStore.getState().byChannel[channelId]?.messages ?? []
+  if (messages.length === 0) return
+  const lastRead = useReadStatesStore.getState().lastReadByChannel[channelId]
+  const count = countIdsAfterLastRead(
+    lastRead,
+    messages.map((message) => message.id),
+  )
+  // 取 max：在线事件已累加的值若更大（缓存被 CACHE_LIMIT 截断）则保留
+  const tracked = useReadStatesStore.getState().unreadCountByChannel[channelId] ?? 0
+  useReadStatesStore
+    .getState()
+    .setUnreadCountExact(channelId, Math.max(tracked, count))
+}
+
 export type ReactionEntry = {
   emoji: string
-  /** 已反应用户 ID（事件幂等去重的依据；计数 = 长度） */
+  /** 已反应用户 ID（Gateway 事件幂等去重；计数 = 长度） */
   userIds: string[]
 }
 
-/** 客户端消息 = 服务端 messageView + 本地累积的反应 */
-export type ChatMessage = Message & { reactions: ReactionEntry[] }
+/** 客户端消息 = 服务端 messageView，reactions 归一为本地 userIds 结构 */
+export type ChatMessage = Omit<Message, "reactions"> & { reactions: ReactionEntry[] }
 
 export type PendingAttachmentMeta = {
   id: string
@@ -139,12 +160,75 @@ type MessagesState = {
 
 export { compareSnowflake }
 
-function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
-  // MESSAGE_UPDATE / REST 响应不带 reactions：保留本地累积的反应
-  return { ...raw, reactions: previous?.reactions ?? [] }
+function isUnknownReactor(id: string): boolean {
+  return id.startsWith(UNKNOWN_REACTOR_PREFIX)
 }
 
-/** 合并进有序数组：按 ID 去重（保留新数据、继承旧 reactions），恒升序 */
+/**
+ * 将服务端 {emoji,count,me} 转为本地 {emoji,userIds}。
+ * - 优先保留 Gateway 已累积的真实 user_id；
+ * - count 不足时用稳定占位符补齐（保证刷新后计数正确）；
+ * - me 为 boolean 时（REST 带 viewer）权威；省略时（Gateway 广播）保留本地 me。
+ */
+function userIdsFromSummary(
+  summary: ReactionSummary,
+  previous: ReactionEntry | undefined,
+  selfId: string | undefined,
+): string[] {
+  const count = Math.max(0, Number(summary.count) || 0)
+  if (count === 0) return []
+
+  const previousMe = Boolean(selfId && previous?.userIds.includes(selfId))
+  const me = typeof summary.me === "boolean" ? summary.me : previousMe
+
+  const realIds = (previous?.userIds ?? []).filter((id) => !isUnknownReactor(id))
+  let userIds = [...realIds]
+
+  if (selfId) {
+    if (me && !userIds.includes(selfId)) userIds = [selfId, ...userIds]
+    if (!me) userIds = userIds.filter((id) => id !== selfId)
+  }
+
+  if (userIds.length > count) {
+    const self = selfId && userIds.includes(selfId) ? [selfId] : []
+    const others = userIds.filter((id) => id !== selfId)
+    userIds = [...self, ...others].slice(0, count)
+  }
+
+  let pad = 0
+  while (userIds.length < count) {
+    userIds.push(`${UNKNOWN_REACTOR_PREFIX}${summary.emoji}:${pad++}`)
+  }
+  return userIds
+}
+
+function hydrateReactions(raw: Message, previous?: ChatMessage): ReactionEntry[] {
+  // 服务端 messageView 始终附带 reactions（可为空数组）；缺字段时才回退本地
+  if (raw.reactions === undefined) {
+    return previous?.reactions ?? []
+  }
+  const selfId = useAuthStore.getState().user?.id
+  return raw.reactions.map((summary) => {
+    const prev = previous?.reactions.find((entry) => entry.emoji === summary.emoji)
+    return {
+      emoji: summary.emoji,
+      userIds: userIdsFromSummary(summary, prev, selfId),
+    }
+  })
+}
+
+function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
+  const { reactions: _serverReactions, attachments: rawAttachments, ...rest } = raw
+  // 部分 Gateway payload（如管理员临场发言）可能省略 attachments；
+  // 缺字段时保留本地已有列表，否则回落空数组，避免渲染层读 .length 崩溃。
+  return {
+    ...rest,
+    attachments: rawAttachments ?? previous?.attachments ?? [],
+    reactions: hydrateReactions(raw, previous),
+  }
+}
+
+/** 合并进有序数组：按 ID 去重（保留新数据、合并 reactions），恒升序 */
 function mergeSorted(existing: ChatMessage[], incoming: Message[]): ChatMessage[] {
   if (incoming.length === 0) return existing
   const byId = new Map<string, ChatMessage>()
@@ -231,9 +315,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       }
     })
 
-  /** 乐观消息转正：删 pending + 插入正式消息 */
-  const ackPending = (channelId: string, nonce: string, message: Message) => {
-    removePendingEntry(channelId, nonce)
+  /** 乐观消息转正：单次 set 内删 pending + 插入正式消息，避免中间帧空白/头像闪烁 */
+  const ackPending = (_channelId: string, _nonce: string, message: Message) => {
+    // applyMessageCreate 会在同一快照中清 nonce 对应 pending 并写入消息
     get().applyMessageCreate(message)
   }
 
@@ -293,6 +377,8 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
             },
           }
         })
+        // 用本页+缓存精确回写未读条数（离线多条未读不再卡在保底 1）
+        syncUnreadCountFromCache(channelId)
       } catch (error) {
         patchChannel(channelId, { loadingInitial: false })
         if (isNotFound(error)) {
@@ -413,6 +499,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
               },
             }
           })
+          syncUnreadCountFromCache(channelId)
         }
       } catch (error) {
         if (isNotFound(error)) {
@@ -503,10 +590,6 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
     applyMessageCreate: (message) => {
       const selfId = useAuthStore.getState().user?.id
-      // nonce 匹配的乐观消息转正（自己在本端发出的）
-      if (message.nonce && message.author_id === selfId) {
-        removePendingEntry(message.channel_id, message.nonce)
-      }
       set((state) => {
         const channel = channelState(state, message.channel_id)
         // 收到该用户消息即清除其 typing 条目
@@ -526,8 +609,20 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
           messages = messages.slice(-CACHE_LIMIT)
           reachedStart = false
         }
+        // 与消息写入同一帧清掉对应 pending，避免「pending 消失 → 正式消息出现」两帧闪烁
+        let pendingByChannel = state.pendingByChannel
+        if (message.nonce && message.author_id === selfId) {
+          const queue = state.pendingByChannel[message.channel_id]
+          if (queue?.some((item) => item.nonce === message.nonce)) {
+            pendingByChannel = {
+              ...state.pendingByChannel,
+              [message.channel_id]: queue.filter((item) => item.nonce !== message.nonce),
+            }
+          }
+        }
         return {
           typingByChannel: nextTyping,
+          pendingByChannel,
           byChannel: {
             ...state.byChannel,
             [message.channel_id]: { ...channel, messages, reachedStart },

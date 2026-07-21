@@ -483,12 +483,25 @@ class VoiceConnectionManager {
     if (!session) return
     if (payload.guild_id && payload.guild_id !== session.guildId) return
 
-    // 服务端权威把我们移出语音（如他端顶替）：不自动重连
+    // 服务端权威把我们移出语音（如他端顶替）：不自动重连。
+    // 但进房/重进途中 join 会先 internalLeave（同频道重进也摘旧会话）并广播
+    // channel_id=null——若此时当踢出处理会清掉 session，导致刷新后「进不去」。
     if (
       Object.prototype.hasOwnProperty.call(payload, "channel_id") &&
       !payload.channel_id &&
       payload.connected === false
     ) {
+      const midConnect =
+        session.phase === "joining" ||
+        session.phase === "signaling" ||
+        session.phase === "negotiating" ||
+        session.phase === "recovering"
+      if (midConnect) {
+        vlog("忽略进房途中的 leave 事件（同频道重进/摘旧会话）", {
+          phase: session.phase,
+        })
+        return
+      }
       vlog("VOICE_STATE_UPDATE：服务端已将本端移出语音")
       this.cleanupToIdle()
       toast.info("语音连接已断开")
@@ -1424,6 +1437,34 @@ class VoiceConnectionManager {
       clearTimeout(this.drainingTimer)
       this.drainingTimer = null
     }
+  }
+
+  /** 连接诊断：RTT / 电平 / 上下行流量（语音面板状态浮窗） */
+  async getDiagnostics() {
+    if (!this.activeLink || this.activeLink.isDestroyed) {
+      return {
+        rttMs: null as number | null,
+        inputLevel: 0,
+        bitrateUpBps: 0,
+        bitrateDownBps: 0,
+        bytesSent: 0,
+        bytesReceived: 0,
+        streams: [] as import("./webrtc").VoiceStreamStat[],
+        connectionState: null as string | null,
+        iceState: null as string | null,
+      }
+    }
+    return this.activeLink.getDiagnostics()
+  }
+
+  /** 运行中同步设置：输入增益 / 主输出音量 / 输出设备 → 已接入的 SFU 链路 */
+  applyVoiceSettings(patch: {
+    inputVolume?: number
+    outputVolume?: number
+    outputDeviceId?: string | null
+  }) {
+    this.activeLink?.applyVoiceSettings(patch)
+    this.pendingLink?.applyVoiceSettings(patch)
   }
 
   /** 完整退出语音态（用户离开 / 被踢 / 不可恢复错误）：双链路与全部定时器清理 */

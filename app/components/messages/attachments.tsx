@@ -236,10 +236,10 @@ export function MessageAttachments({
   attachments,
   className,
 }: {
-  attachments: MessageAttachment[]
+  attachments?: MessageAttachment[] | null
   className?: string
 }) {
-  if (attachments.length === 0) return null
+  if (!attachments?.length) return null
   return (
     <div className={cn("mt-1 flex flex-col gap-1.5", className)}>
       {attachments.map((attachment) => (

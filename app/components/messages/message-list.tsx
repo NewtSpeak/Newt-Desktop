@@ -65,10 +65,12 @@ function WelcomeBlock({ channelName }: { channelName: string }) {
 
 export type MessageListProps = {
   channelId: string
+  guildId?: string
   channelName: string
   selfId?: string
   selfName: string
   resolveName: MentionResolver
+  resolveAvatarUrl?: (userId: string) => string | undefined
   editingId: string | null
   onStartEdit: (messageId: string) => void
   onStopEdit: () => void
@@ -81,10 +83,12 @@ export type MessageListProps = {
 
 export function MessageList({
   channelId,
+  guildId,
   channelName,
   selfId,
   selfName,
   resolveName,
+  resolveAvatarUrl,
   editingId,
   onStartEdit,
   onStopEdit,
@@ -251,20 +255,32 @@ export function MessageList({
         rows.push(<NewMessagesDivider key={`new-${message.id}`} />)
       }
     }
+    // 系统管理员临场发言不与普通消息合并分组，保证皇冠头像 + 徽章始终可见。
+    // type 空/缺省归一，避免 pending 转正时字段差异拆组导致头像闪一下。
+    const normalizeType = (type: string | undefined) => type?.trim() || ""
+    const sameType =
+      normalizeType(previousMessage?.type) === normalizeType(message.type)
+    const timeDelta =
+      previousMessage !== null
+        ? new Date(message.created_at).getTime() -
+          new Date(previousMessage.created_at).getTime()
+        : Number.POSITIVE_INFINITY
     const grouped =
       previousMessage !== null &&
-      previousMessage.author_id === message.author_id &&
+      String(previousMessage.author_id) === String(message.author_id) &&
+      sameType &&
       dayKey(previousMessage.created_at) === dayKey(message.created_at) &&
-      new Date(message.created_at).getTime() - new Date(previousMessage.created_at).getTime() <
-        GROUP_WINDOW_MS
+      (Number.isFinite(timeDelta) ? timeDelta < GROUP_WINDOW_MS : true)
     rows.push(
       <MessageRow
         key={message.id}
         message={message}
         channelId={channelId}
+        guildId={guildId}
         grouped={grouped}
         selfId={selfId}
         resolveName={resolveName}
+        resolveAvatarUrl={resolveAvatarUrl}
         editing={editingId === message.id}
         onStartEdit={onStartEdit}
         onStopEdit={onStopEdit}
@@ -293,20 +309,43 @@ export function MessageList({
           <p className="py-8 text-center text-sm text-muted-foreground">消息加载中…</p>
         )}
         {rows}
-        {pendingList.map((item) => (
-          <PendingRow
-            key={item.nonce}
-            nonce={item.nonce}
-            channelId={channelId}
-            content={item.content}
-            attachments={item.attachments}
-            status={item.status}
-            errorMessage={item.errorMessage}
-            selfName={selfName}
-            selfId={selfId}
-            resolveName={resolveName}
-          />
-        ))}
+        {pendingList.map((item, index) => {
+          // 与上一条正式消息 / 上一条 pending 合并：连发时不重复出头像
+          const prevMessage =
+            index === 0 ? (messages[messages.length - 1] ?? null) : null
+          const prevPending = index > 0 ? pendingList[index - 1] : null
+          const prevTime = prevMessage
+            ? new Date(prevMessage.created_at).getTime()
+            : NaN
+          // 时间解析失败时偏向合并，避免连发误拆分组露出文字头像
+          const withinWindow =
+            !Number.isFinite(prevTime) ||
+            Date.now() - prevTime < GROUP_WINDOW_MS
+          const groupedWithPrevMessage = Boolean(
+            prevMessage &&
+              selfId &&
+              String(prevMessage.author_id) === String(selfId) &&
+              withinWindow,
+          )
+          const groupedWithPrevPending = Boolean(prevPending)
+          const grouped = groupedWithPrevMessage || groupedWithPrevPending
+          return (
+            <PendingRow
+              key={item.nonce}
+              nonce={item.nonce}
+              channelId={channelId}
+              content={item.content}
+              attachments={item.attachments}
+              status={item.status}
+              errorMessage={item.errorMessage}
+              selfName={selfName}
+              selfId={selfId}
+              resolveName={resolveName}
+              avatarUrl={selfId ? resolveAvatarUrl?.(selfId) : undefined}
+              grouped={grouped}
+            />
+          )
+        })}
       </div>
       {newCount > 0 && (
         <button

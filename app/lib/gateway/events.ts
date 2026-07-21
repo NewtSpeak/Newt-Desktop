@@ -5,6 +5,7 @@
 import type {
   Channel,
   Guild,
+  GuildBanner,
   Message,
   StageConfig,
   StageQueueBrief,
@@ -32,6 +33,8 @@ export const GatewayEvents = {
   VoiceMigrating: "VOICE_MIGRATING",
   VoiceMigrated: "VOICE_MIGRATED",
   VoicePackPlay: "VOICE_PACK_PLAY",
+  /** 频道音频审计提示（adminpresence：record∧notify 时 audited=true） */
+  ChannelAuditNotice: "CHANNEL_AUDIT_NOTICE",
 
   RestrictionCreate: "RESTRICTION_CREATE",
   RestrictionUpdate: "RESTRICTION_UPDATE",
@@ -60,10 +63,11 @@ export const GatewayEvents = {
   GuildRoleUpdate: "GUILD_ROLE_UPDATE",
   GuildRoleDelete: "GUILD_ROLE_DELETE",
 
-  // 未读 / 在线状态 / 用户设置（docs 15 §7-1、docs 01 §3.4、docs 16 §7-1）
+  // 未读 / 在线状态 / 用户设置 / 用户资料（docs 15 §7-1、docs 01 §3.3–3.4、docs 16 §7-1）
   ReadStateUpdate: "READ_STATE_UPDATE",
   PresenceUpdate: "PRESENCE_UPDATE",
   UserSettingsUpdate: "USER_SETTINGS_UPDATE",
+  UserUpdate: "USER_UPDATE",
 } as const
 
 export type GatewayEventName =
@@ -164,6 +168,14 @@ export type VoicePackPlayPayload = {
   event_at?: string
 }
 
+/** CHANNEL_AUDIT_NOTICE：本频道是否向用户提示「正在被音频审计」 */
+export type ChannelAuditNoticePayload = {
+  guild_id: string
+  channel_id: string
+  /** true = 显示「本频道被审计」提示；false = 清除提示（静默审计 / 已关闭） */
+  audited: boolean
+}
+
 export type RestrictionEventPayload = {
   id: string
   guild_id: string
@@ -230,14 +242,18 @@ export type GuildCreatePayload = {
   guild: Guild
   channels: Channel[]
   roles: unknown[]
+  /** 服务器多 banner 列表（position 升序） */
+  banners?: GuildBanner[]
   member: MemberSnapshot
   voice_states: VoiceState[]
   presences: PresenceEntry[]
   event_at: string
 }
 
+/** GUILD_UPDATE：guild 全量；banners 仅在 banner 增删/排序时携带（最新全量，客户端整体替换） */
 export type GuildUpdatePayload = {
   guild: Guild
+  banners?: GuildBanner[]
   event_at: string
 }
 
@@ -322,6 +338,20 @@ export type PresenceUpdatePayload = {
   event_at: string
 }
 
+/** USER_UPDATE：用户资料公开投影（头像/横幅/显示名/签名等；不含 email） */
+export type UserUpdatePayload = {
+  id: string
+  username: string
+  display_name: string
+  /** 头像公开路径，空串表示未设置 */
+  avatar: string
+  avatar_animated?: boolean
+  banner?: string
+  accent_color?: string
+  bio?: string
+  event_at: string
+}
+
 /** USER_SETTINGS_UPDATE：合并后的全量设置文档（其他端整体替换本地副本） */
 export type UserSettingsUpdatePayload = {
   settings: Record<string, unknown>
@@ -343,6 +373,7 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.VoiceMigrating]: VoiceMigratingPayload
   [GatewayEvents.VoiceMigrated]: VoiceMigratedPayload
   [GatewayEvents.VoicePackPlay]: VoicePackPlayPayload
+  [GatewayEvents.ChannelAuditNotice]: ChannelAuditNoticePayload
   [GatewayEvents.RestrictionCreate]: RestrictionEventPayload
   [GatewayEvents.RestrictionUpdate]: RestrictionEventPayload
   [GatewayEvents.RestrictionLift]: RestrictionEventPayload
@@ -367,6 +398,7 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.ReadStateUpdate]: ReadStateUpdatePayload
   [GatewayEvents.PresenceUpdate]: PresenceUpdatePayload
   [GatewayEvents.UserSettingsUpdate]: UserSettingsUpdatePayload
+  [GatewayEvents.UserUpdate]: UserUpdatePayload
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +448,8 @@ export type ReadyGuild = {
   guild: Guild
   channels: Channel[]
   roles: unknown[]
+  /** 服务器多 banner 列表（position 升序） */
+  banners?: GuildBanner[]
   member: MemberSnapshot
   voice_states: VoiceState[]
   presences: PresenceEntry[]

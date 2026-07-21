@@ -88,7 +88,7 @@ function ResultCard({
       <p className="mt-1 line-clamp-3 text-sm break-words whitespace-pre-wrap">
         <HighlightedText text={message.content} keyword={keyword} />
       </p>
-      {message.attachments.length > 0 && (
+      {(message.attachments?.length ?? 0) > 0 && (
         <p className="mt-1 text-xs text-muted-foreground">
           {message.attachments.length} 个附件
         </p>
@@ -202,7 +202,7 @@ export function SearchPanel() {
 
   return (
     <aside
-      className="flex w-[420px] shrink-0 flex-col overflow-hidden border-l bg-background"
+      className="flex w-[420px] shrink-0 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground"
       aria-label="消息搜索"
     >
       {/* 顶部：标题 + 关闭 */}

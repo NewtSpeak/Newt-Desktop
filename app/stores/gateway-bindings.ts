@@ -13,6 +13,7 @@
 
 import { toast } from "sonner"
 
+import type { VoiceState } from "~/lib/api/types"
 import { gateway } from "~/lib/gateway/client"
 import { GatewayEvents } from "~/lib/gateway/events"
 import { maybeNotifyMessage } from "~/lib/notifications"
@@ -30,13 +31,45 @@ import { useGuildsStore } from "./guilds"
 import { useMembersStore } from "./members"
 import { useMessagesStore } from "./messages"
 import { reportSelfPresence, usePresenceStore } from "./presence"
-import { messageMentionsSelf, useReadStatesStore } from "./read-states"
+import {
+  countIdsAfterLastRead,
+  messageMentionsSelf,
+  useReadStatesStore,
+} from "./read-states"
+import { compareSnowflake } from "~/lib/snowflake"
 import { useRolesStore } from "./roles"
 import { useStageStore } from "./stage"
 import { useUIStore } from "./ui"
 import { useVoiceStore } from "./voice"
 
 let bound = false
+
+/**
+ * 按该频道消息缓存精确回写未读条数。
+ * 在 noteMessageCreate（可能已自动已读）之后调用，故 last_read 已是最新语义。
+ * 取 max(缓存统计, 已有累加)：缓存被 CACHE_LIMIT 截断时不压低在线累加值。
+ */
+export function reconcileUnreadFromMessageCache(channelId: string) {
+  if (!channelId) return
+  const read = useReadStatesStore.getState()
+  const lastRead = read.lastReadByChannel[channelId]
+  const latest = read.latestByChannel[channelId]
+  const tracked = read.unreadCountByChannel[channelId] ?? 0
+  // last_read 已追上 latest → 已读清零（含自己发消息自动已读）
+  if (latest && lastRead && compareSnowflake(lastRead, latest) >= 0) {
+    if (tracked > 0) read.setUnreadCountExact(channelId, 0)
+    return
+  }
+  const messages = useMessagesStore.getState().byChannel[channelId]?.messages ?? []
+  if (messages.length === 0) return
+  const fromCache = countIdsAfterLastRead(
+    lastRead,
+    messages.map((message) => message.id),
+  )
+  // 临场/他人多条：缓存统计为权威下限；与 tracked 取 max 防止截断少计
+  const next = Math.max(tracked, fromCache)
+  if (next !== tracked) read.setUnreadCountExact(channelId, next)
+}
 
 /** 自己所在服被移除（被踢/Ban/删服）时的统一清理 */
 function dropGuildLocally(guildId: string) {
@@ -60,20 +93,42 @@ export function bindGatewayToStores() {
   })
 
   // READY = IDENTIFY 全量路径（首连 / resume 失败重建会话）：
-  // 消费快照（presences / read_states / guilds 内嵌频道），再 REST 重拉兜底对齐；
+  // 消费快照（presences / read_states / guilds 内嵌频道 / voice_states），再 REST 重拉兜底对齐；
   // 消息域对当前打开的频道用 after 游标补断连期间的缺口（FR-48）。
+  // 语音：若本人仍在某语音频道（刷新/杀进程后服务端 VoiceState 残留），透明 rejoin（docs 09 FR-06 / 13 FR-19）。
   gateway.onReady((ready) => {
     usePresenceStore.getState().applySnapshot(ready.presences ?? [])
 
     const guildByChannel: Record<string, string> = {}
+    const allVoiceStates: VoiceState[] = []
+    let selfVoice: { guildId: string; channelId: string } | null = null
+    const selfId = ready.user?.id ?? useAuthStore.getState().user?.id
+
     if (ready.guilds?.length) {
       for (const snapshot of ready.guilds) {
-        useGuildsStore.getState().upsertGuild(snapshot.guild)
+        useGuildsStore
+          .getState()
+          .upsertGuild(snapshot.guild, { banners: snapshot.banners })
         useChannelsStore.getState().setChannels(snapshot.guild.id, snapshot.channels)
         for (const channel of snapshot.channels) {
           guildByChannel[channel.id] = snapshot.guild.id
         }
+        const voiceStates = snapshot.voice_states ?? []
+        for (const state of voiceStates) {
+          allVoiceStates.push(state)
+          if (
+            selfId &&
+            state.user_id === selfId &&
+            state.channel_id &&
+            !selfVoice
+          ) {
+            selfVoice = { guildId: snapshot.guild.id, channelId: state.channel_id }
+          }
+        }
       }
+    }
+    if (allVoiceStates.length > 0) {
+      useVoiceStore.getState().applyVoiceStatesSnapshot(allVoiceStates)
     }
     useReadStatesStore.getState().applySnapshot(ready.read_states ?? [], guildByChannel)
 
@@ -91,6 +146,15 @@ export function bindGatewayToStores() {
 
     // 恢复手动 presence（隐身/勿扰等跨连接保持，docs 01 §9.2）
     reportSelfPresence()
+
+    // 刷新后服务端仍记着本人在语音频道：自动 rejoin 恢复媒体（UI 已从快照显示名单）
+    if (selfVoice) {
+      const session = useVoiceStore.getState().session
+      // 已有本地会话（resume 路径）则不重复 join
+      if (!session || session.channelId !== selfVoice.channelId) {
+        void voiceConnection.join(selfVoice.guildId, selfVoice.channelId)
+      }
+    }
   })
 
   // RESUMED = 断连期间事件已按序补齐：不做全量重拉，只重放 presence
@@ -118,6 +182,14 @@ export function bindGatewayToStores() {
     voiceConnection.handleVoiceMigrated(payload)
   })
 
+  // 音频审计提示（adminpresence）：本频道是否向用户显示「正在被审计」
+  gateway.subscribe(GatewayEvents.ChannelAuditNotice, (payload) => {
+    if (!payload?.channel_id) return
+    useVoiceStore
+      .getState()
+      .setChannelAudited(payload.channel_id, Boolean(payload.audited))
+  })
+
   // 入场语音包（docs 12）：本地过滤 + 队列串行播放 + 视觉提示
   gateway.subscribe(GatewayEvents.VoicePackPlay, (payload) => {
     handleVoicePackPlay(payload)
@@ -134,6 +206,9 @@ export function bindGatewayToStores() {
       : undefined
     const mentioned = messageMentionsSelf(payload, selfId, selfRoleIds)
     useReadStatesStore.getState().noteMessageCreate(payload, selfId, mentioned)
+    // 以消息缓存精确回写未读条数：修正在线多条 MESSAGE_CREATE 后角标卡在 1 的问题
+    //（累加路径与「保底 1」在临场/乱序场景下可能漂移；缓存条数是权威值）。
+    reconcileUnreadFromMessageCache(payload.channel_id)
     maybeNotifyMessage(payload, mentioned)
   })
   gateway.subscribe(GatewayEvents.MessageUpdate, (payload) => {
@@ -196,11 +271,16 @@ export function bindGatewayToStores() {
 
   // GUILD_CREATE：建服/加入服务器（含他端操作）——定向全量快照直接落库
   gateway.subscribe(GatewayEvents.GuildCreate, (payload) => {
-    useGuildsStore.getState().upsertGuild(payload.guild)
+    useGuildsStore
+      .getState()
+      .upsertGuild(payload.guild, { banners: payload.banners })
     useChannelsStore.getState().setChannels(payload.guild.id, payload.channels)
   })
+  // GUILD_UPDATE：图标/名称等字段在 guild 上；banners 仅 banner 增删/排序时携带
   gateway.subscribe(GatewayEvents.GuildUpdate, (payload) => {
-    useGuildsStore.getState().upsertGuild(payload.guild)
+    useGuildsStore.getState().upsertGuild(payload.guild, {
+      banners: payload.banners,
+    })
   })
   gateway.subscribe(GatewayEvents.GuildDelete, (payload) => {
     const selected = useUIStore.getState().selectedGuildId === payload.guild_id
@@ -225,7 +305,12 @@ export function bindGatewayToStores() {
       id: payload.member.id,
       user_id: payload.member.user_id,
       username: payload.user?.username ?? "",
+      display_name: payload.user?.display_name ?? "",
       nickname: payload.member.nickname ?? "",
+      avatar_url: payload.user?.avatar_url ?? "",
+      avatar_animated: payload.user?.avatar_animated ?? false,
+      banner_url: payload.user?.banner_url ?? "",
+      bio: payload.user?.bio ?? "",
       role_ids: payload.member.role_ids ?? [],
     })
   })
@@ -234,6 +319,33 @@ export function bindGatewayToStores() {
       user_id: payload.member.user_id,
       nickname: payload.member.nickname ?? "",
       role_ids: payload.role_ids ?? payload.member.role_ids ?? [],
+    })
+  })
+  // 资料变更：更新本人 auth.user，并按 user_id 合并进已缓存的各服成员列表
+  gateway.subscribe(GatewayEvents.UserUpdate, (payload) => {
+    const selfId = useAuthStore.getState().user?.id
+    if (payload.id === selfId) {
+      const current = useAuthStore.getState().user
+      if (current) {
+        useAuthStore.getState().setUser({
+          ...current,
+          username: payload.username || current.username,
+          display_name: payload.display_name ?? "",
+          bio: payload.bio ?? "",
+          avatar_url: payload.avatar ?? "",
+          avatar_animated: payload.avatar_animated ?? false,
+          banner_url: payload.banner ?? "",
+          accent_color: payload.accent_color ?? current.accent_color,
+        })
+      }
+    }
+    useMembersStore.getState().applyUserProfile(payload.id, {
+      username: payload.username,
+      display_name: payload.display_name,
+      avatar_url: payload.avatar,
+      avatar_animated: payload.avatar_animated,
+      banner_url: payload.banner,
+      bio: payload.bio,
     })
   })
   gateway.subscribe(GatewayEvents.GuildMemberRemove, (payload) => {

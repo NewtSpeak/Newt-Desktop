@@ -1,12 +1,30 @@
 // 窗口右上角悬浮控制区（挂载于 root，覆盖全部路由与全屏面板）：
 //   - 主题切换按钮：在浅色/深色之间切换（写入 settings store 的 appearance.theme，
 //     与设置面板·外观联动；当前为「跟随系统」时按实际生效主题取反）。
-//   - Windows/Linux（无边框窗口）：主题按钮右侧渲染最小化/最大化/关闭三键，
-//     对齐系统标题栏习惯；macOS 交通灯在左上角，此处仅渲染主题按钮。
+//   - 私信占位入口：主题按钮右侧邮件图标；服务端尚无 DM API，点击仅展示空态说明。
+//   - Windows/Linux（无边框窗口）：再右侧渲染最小化/最大化/关闭三键，
+//     对齐系统标题栏习惯；macOS 交通灯在左上角，此处仅渲染主题 + 私信。
 
 import { useEffect, useState } from "react"
-import { CopyIcon, MinusIcon, MoonIcon, SquareIcon, SunIcon, XIcon } from "lucide-react"
+import {
+  CopyIcon,
+  MailIcon,
+  MinusIcon,
+  MoonIcon,
+  SquareIcon,
+  SunIcon,
+  XIcon,
+} from "lucide-react"
 
+import { Button } from "~/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog"
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip"
 import { useIsMacDesktop, useIsTauri } from "~/lib/platform"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
@@ -29,6 +47,9 @@ function useEffectiveDark() {
   return theme === "dark" || (theme === "system" && systemDark)
 }
 
+const titlebarIconBtnClass =
+  "flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+
 function ThemeToggleButton() {
   const isDark = useEffectiveDark()
   const setAppearance = useSettingsStore((state) => state.setAppearance)
@@ -38,7 +59,7 @@ function ThemeToggleButton() {
       <TooltipTrigger
         aria-label={isDark ? "切换到日间模式" : "切换到夜间模式"}
         onClick={() => setAppearance({ theme: isDark ? "light" : "dark" })}
-        className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={titlebarIconBtnClass}
       >
         {isDark ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
       </TooltipTrigger>
@@ -46,6 +67,45 @@ function ThemeToggleButton() {
         {isDark ? "切换到日间模式" : "切换到夜间模式"}
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+/** 私信占位：后端尚无 DM API，仅预留入口与空态说明 */
+function DmPlaceholderButton() {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          aria-label="私信"
+          onClick={() => setOpen(true)}
+          className={titlebarIconBtnClass}
+        >
+          <MailIcon className="size-4" />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">私信</TooltipContent>
+      </Tooltip>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader className="items-center text-center sm:items-center sm:text-center">
+            <div className="mb-1 flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+              <MailIcon className="size-6" />
+            </div>
+            <DialogTitle>私信</DialogTitle>
+            <DialogDescription className="text-center">
+              私信功能即将推出。服务端尚未提供一对一私聊接口，入口已预留，后续版本将支持私信列表与消息收发。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="sm:justify-center">
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              知道了
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -127,12 +187,13 @@ export function TitlebarControls() {
     <div
       // 与 --app-top-inset（32px）等高；空白处仍可拖拽窗口
       className={cn(
-        "fixed top-0 right-0 z-60 flex h-8 items-center",
-        showWindowControls ? "gap-1" : "pr-2",
+        "fixed top-0 right-0 z-60 flex h-8 items-center gap-0.5",
+        showWindowControls ? "pr-0" : "pr-2",
       )}
       onMouseDown={dragWindowOnMouseDown}
     >
       <ThemeToggleButton />
+      <DmPlaceholderButton />
       {showWindowControls && <WindowControls />}
     </div>
   )

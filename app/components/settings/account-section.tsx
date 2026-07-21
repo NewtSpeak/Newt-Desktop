@@ -1,11 +1,16 @@
-// 设置 · 我的账号（docs 16 FR-04 P0）：头像/用户名/邮箱（脱敏）+ 登出；
-// 改密码等能力等服务端账号体系补齐，先占位。
+// 设置 · 我的账号（docs 16 FR-04 P0）：账号标识/邮箱（脱敏）+ 登出；
+// 头像与显示名等展示资料见「个人资料」分栏。
 
 import { useNavigate } from "react-router"
 import { LogOutIcon } from "lucide-react"
 
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
+import {
+  nameInitials,
+  resolveProfileAssetUrl,
+  userDisplayName,
+} from "~/lib/user-display"
 import { useAuthStore } from "~/stores/auth"
 import { useSettingsStore } from "~/stores/settings"
 import { ComingSoon, GroupLabel, SectionTitle, SettingRow } from "./section"
@@ -26,6 +31,9 @@ export function AccountSection() {
 
   if (!user) return null
 
+  const display = userDisplayName(user)
+  const avatarSrc = resolveProfileAssetUrl(user.avatar_url)
+
   const handleLogout = async () => {
     useSettingsStore.getState().closePanel()
     await useAuthStore.getState().logout()
@@ -40,19 +48,27 @@ export function AccountSection() {
       {/* 账号信息卡片 */}
       <div className="flex items-center gap-4 rounded-2xl bg-muted/50 p-4">
         <Avatar className="size-16 rounded-2xl">
-          {user.avatar_url && (
-            <AvatarImage src={user.avatar_url} alt={user.username} />
-          )}
+          {avatarSrc && <AvatarImage src={avatarSrc} alt={display} />}
           <AvatarFallback className="rounded-2xl text-lg">
-            {user.username.trim().slice(0, 2) || "?"}
+            {nameInitials(display)}
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0">
-          <p className="truncate text-base font-semibold">{user.username}</p>
+          <p className="truncate text-base font-semibold">{display}</p>
+          <p className="truncate text-sm text-muted-foreground">@{user.username}</p>
           <p className="truncate text-sm text-muted-foreground">
             {maskEmail(user.email)}
           </p>
         </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="ml-auto shrink-0"
+          onClick={() => useSettingsStore.getState().openPanel("profile")}
+        >
+          编辑资料
+        </Button>
       </div>
 
       <GroupLabel>账号管理</GroupLabel>

@@ -20,7 +20,8 @@ import {
   type ReadyPayload,
   type VoiceCloseInfo,
 } from "./signaling"
-import { VoiceRtc } from "./webrtc"
+import { VoiceRtc, type VoiceMediaDiagnostics } from "./webrtc"
+import { useSettingsStore } from "~/stores/settings"
 
 /** 一条链路的接入目标（join 响应 / VOICE_SERVER_UPDATE 载荷解析产物） */
 export type VoiceLinkTarget = {
@@ -169,10 +170,34 @@ export class VoiceLink {
     return this.destroyed
   }
 
+  /** 连接诊断（RTT / 电平 / 上下行流量），供语音面板展示 */
+  getDiagnostics(): Promise<VoiceMediaDiagnostics> {
+    return this.rtc.getDiagnostics()
+  }
+
+  /** 设置项变更落到 RTC（输入增益 / 主输出 / 输出设备） */
+  applyVoiceSettings(patch: {
+    inputVolume?: number
+    outputVolume?: number
+    outputDeviceId?: string | null
+  }) {
+    if (typeof patch.inputVolume === "number")
+      this.rtc.setInputVolume(patch.inputVolume)
+    if (typeof patch.outputVolume === "number")
+      this.rtc.setMasterOutputVolume(patch.outputVolume)
+    if (patch.outputDeviceId !== undefined)
+      void this.rtc.setOutputDevice(patch.outputDeviceId)
+  }
+
   /** 采集麦克风 + 建 WSS（auth 首帧由 signaling 层在 open 时发出） */
   async start(): Promise<void> {
     const hasMic = await this.rtc.initMic()
     if (this.destroyed) return
+    // 把设置面板里的输入/输出音量与输出设备落到实际 RTC 链路上
+    const voice = useSettingsStore.getState().voice
+    this.rtc.setInputVolume(voice.inputVolume ?? 100)
+    this.rtc.setMasterOutputVolume(voice.outputVolume ?? 100)
+    void this.rtc.setOutputDevice(voice.outputDeviceId ?? null)
     this.callbacks.onMicAvailability(this, hasMic)
     this.applyMicGate()
 
@@ -285,19 +310,36 @@ export class VoiceLink {
    * 发布屏幕轨（docs 11 FR-04）：客户端主动 addTrack + createOffer 重协商，
    * 经信令 offer 帧发出，SFU 回 answer（信令双向已支持）。
    * 返回是否成功发出 offer（信令不可用 / PC 缺失时 false）。
+   * 失败自动重试一次（整屏采集后 PC 偶发非 stable）。
    */
   async publishScreen(
     track: MediaStreamTrack,
     stream: MediaStream
   ): Promise<boolean> {
-    if (!this.signaling?.isOpen) return false
-    const sdp = await this.rtc.publishScreenTrack(track, stream)
-    if (this.destroyed) return false
-    // sdp=null 且已有 sender：replaceTrack 无需重协商
-    if (sdp === null) return this.rtc.hasScreenTrack
-    this.signaling.sendOffer(sdp)
-    vlog("屏幕轨 renegotiation offer 已发出", this.logCtx())
-    return true
+    if (!this.signaling?.isOpen || this.destroyed) return false
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (this.destroyed || !this.signaling?.isOpen) return false
+      try {
+        const sdp = await this.rtc.publishScreenTrack(track, stream)
+        if (this.destroyed) return false
+        // sdp=null 且已有 sender：replaceTrack 无需重协商
+        if (sdp === null) {
+          if (this.rtc.hasScreenTrack) return true
+        } else if (sdp.length > 0) {
+          this.signaling.sendOffer(sdp)
+          vlog("屏幕轨 renegotiation offer 已发出", this.logCtx(), {
+            attempt: attempt + 1,
+          })
+          return true
+        }
+      } catch (error) {
+        verror("屏幕轨发布 attempt 失败", error, this.logCtx())
+      }
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350))
+      }
+    }
+    return this.rtc.hasScreenTrack
   }
 
   /** 停止屏幕轨发布：removeTrack + 重协商（尽力而为，链路已死时静默） */

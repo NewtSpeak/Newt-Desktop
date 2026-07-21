@@ -55,3 +55,27 @@ export const listVoiceStates = (guildId: string, channelId: string) =>
 
 /** Media Token 验签公钥（无需登录） */
 export const getVoicePublicKey = () => apiPublic<VoicePublicKey>("/voice/public-key")
+
+/**
+ * 管理员：服务器静音 / 耳聋（docs 05）。
+ * server_mute 需 MUTE_MEMBERS；server_deaf 需 DEAFEN_MEMBERS；目标须在语音内。
+ */
+export const patchServerVoiceState = (
+  guildId: string,
+  userId: string,
+  patch: { server_mute?: boolean; server_deaf?: boolean },
+) =>
+  api<VoiceState>(`/guilds/${guildId}/voice/states/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  })
+
+/**
+ * 管理员：将用户踢出语音（MOVE_MEMBERS 或 MUTE_MEMBERS + 层级）。
+ * 目标不在语音 → 404 NOT_IN_VOICE。
+ */
+export const disconnectVoiceUser = (guildId: string, userId: string) =>
+  api<{ disconnected?: boolean }>(`/guilds/${guildId}/voice/disconnect`, {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId }),
+  })
