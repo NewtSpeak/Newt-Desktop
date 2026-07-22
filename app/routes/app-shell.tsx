@@ -21,6 +21,7 @@ import { WelcomeShell } from "~/components/welcome-shell"
 import { SidebarProvider } from "~/components/ui/sidebar"
 import { Toaster } from "~/components/ui/sonner"
 import { useAuthBootstrap } from "~/hooks/use-auth-bootstrap"
+import { isFriendsLocation } from "~/lib/friends-route"
 import {
   dragWindowOnMouseDown,
   dragWindowOnSelfMouseDown,
@@ -166,9 +167,7 @@ function SelectedGuildTitleBar() {
   )
   const hasIcon = Boolean(guild?.icon_url?.trim())
   const isDm = selectedGuildId === "@me"
-  const isFriends =
-    location.pathname === "/friends" ||
-    location.pathname.startsWith("/friends/")
+  const isFriends = isFriendsLocation(location)
   const isHome = !selectedGuildId && !isFriends
   const title = isFriends
     ? "好友"

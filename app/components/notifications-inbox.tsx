@@ -19,6 +19,7 @@ import {
 } from "~/components/ui/popover"
 import { ApiError } from "~/lib/api/http"
 import type { NotificationItem } from "~/lib/api/social"
+import { FRIENDS_PATH } from "~/lib/friends-route"
 import { cn } from "~/lib/utils"
 import { useNotificationsStore } from "~/stores/notifications-inbox"
 import { useRelationshipsStore } from "~/stores/relationships"
@@ -195,7 +196,7 @@ function NotificationRow({ item }: { item: NotificationItem }) {
             className="mt-1.5 text-[12px] text-primary transition-opacity hover:opacity-80"
             onClick={() => {
               useUIStore.getState().selectGuild(null)
-              navigate("/friends")
+              navigate(FRIENDS_PATH)
             }}
           >
             查看好友

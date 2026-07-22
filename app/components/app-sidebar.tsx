@@ -33,6 +33,7 @@ import {
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 
+import { isFriendsLocation } from "~/lib/friends-route"
 import { cn } from "~/lib/utils"
 import { useGuildsStore } from "~/stores/guilds"
 import { useSettingsStore } from "~/stores/settings"
@@ -68,9 +69,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const guilds = useGuildsStore((state) => state.guilds)
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
   const [addOpen, setAddOpen] = React.useState(false)
-  const isFriendsRoute =
-    location.pathname === "/friends" ||
-    location.pathname.startsWith("/friends/")
+  const isFriendsRoute = isFriendsLocation(location)
 
   // 服务器栏个人排序（docs 17 FR-23）：guildOrder 优先，未收录的按加入时间排末尾
   const guildOrder = useSettingsStore((state) => state.guildOrder)

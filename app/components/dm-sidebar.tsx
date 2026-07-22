@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner"
 
 import { presenceDotClass } from "~/components/nav-user"
+import { FRIENDS_PATH, isFriendsLocation } from "~/lib/friends-route"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
@@ -301,7 +302,8 @@ export function DmSidebar() {
 
   const openFriends = () => {
     useUIStore.getState().selectGuild(null)
-    navigate("/friends")
+    // 走 index 路由 + query，避免仅注册在后加 /friends 上时热更新未同步导致 404
+    navigate(FRIENDS_PATH)
   }
 
   /** 关闭会话后回到私信落地页（非好友页） */
@@ -351,9 +353,7 @@ export function DmSidebar() {
     }
   }
 
-  const friendsActive =
-    location.pathname === "/friends" ||
-    location.pathname.startsWith("/friends/")
+  const friendsActive = isFriendsLocation(location)
 
   return (
     <aside

@@ -14,6 +14,7 @@ import {
 
 import { NotificationsInboxButton } from "~/components/notifications-inbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip"
+import { FRIENDS_PATH } from "~/lib/friends-route"
 import { useIsMacDesktop, useIsTauri } from "~/lib/platform"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
 import { cn } from "~/lib/utils"
@@ -105,7 +106,7 @@ function FriendsButton() {
         }
         onClick={() => {
           useUIStore.getState().selectGuild(null)
-          navigate("/friends")
+          navigate(FRIENDS_PATH)
         }}
         className={titlebarIconBtnClass}
       >
