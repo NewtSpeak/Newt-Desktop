@@ -269,7 +269,7 @@ export default function ChannelPage() {
 
       {/* 消息流（key 按频道重挂载，隔离滚动与本地交互态） */}
       <MessageList
-        key={channelId}
+        key={`message-list:${channelId}`}
         channelId={channelId}
         guildId={guildId}
         channelName={channelName}
@@ -290,7 +290,7 @@ export default function ChannelPage() {
 
       {/* 输入区（key 按频道重挂载，清空草稿与待发附件） */}
       <Composer
-        key={channelId}
+        key={`composer:${channelId}`}
         channelId={channelId}
         guildId={guildId}
         channelName={channelName}
