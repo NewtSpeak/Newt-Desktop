@@ -52,6 +52,14 @@ export default function App() {
   )
 }
 
+export function HydrateFallback() {
+  return (
+    <main className="flex h-svh items-center justify-center bg-background">
+      <p className="text-sm text-muted-foreground">正在加载 OwlSpeak…</p>
+    </main>
+  )
+}
+
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let message = "Oops!"
   let details = "An unexpected error occurred."
