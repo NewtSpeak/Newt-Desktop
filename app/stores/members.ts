@@ -5,6 +5,7 @@ import { create } from "zustand"
 import { listMembers } from "~/lib/api/guilds"
 import { isNotFound } from "~/lib/api/http"
 import type { GuildMember } from "~/lib/api/types"
+import { reconcileList } from "~/lib/reconcile-list"
 
 /** USER_UPDATE 带来的全局资料片段（按 user_id 合并进各服缓存） */
 export type MemberProfilePatch = {
@@ -30,21 +31,63 @@ type MembersState = {
   reset: () => void
 }
 
+const fetchesByGuild = new Map<string, Promise<GuildMember[] | null>>()
+
+function sameRoleIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((roleId) => b.includes(roleId))
+}
+
+function sameMember(a: GuildMember, b: GuildMember): boolean {
+  return (
+    a.id === b.id &&
+    a.user_id === b.user_id &&
+    a.username === b.username &&
+    a.display_name === b.display_name &&
+    a.nickname === b.nickname &&
+    a.avatar_url === b.avatar_url &&
+    a.avatar_animated === b.avatar_animated &&
+    a.banner_url === b.banner_url &&
+    a.bio === b.bio &&
+    a.is_owner === b.is_owner &&
+    sameRoleIds(a.role_ids, b.role_ids)
+  )
+}
+
 export const useMembersStore = create<MembersState>()((set, get) => ({
   byGuild: {},
 
-  fetchMembers: async (guildId) => {
-    try {
-      const members = await listMembers(guildId)
-      set((state) => ({ byGuild: { ...state.byGuild, [guildId]: members } }))
-      return members
-    } catch (error) {
-      if (isNotFound(error)) {
-        get().removeGuild(guildId)
-        return null
+  fetchMembers: (guildId) => {
+    const active = fetchesByGuild.get(guildId)
+    if (active) return active
+
+    const request = (async () => {
+      try {
+        const members = await listMembers(guildId)
+        set((state) => {
+          const previous = state.byGuild[guildId]
+          const next = reconcileList(
+            previous,
+            members,
+            (member) => member.user_id,
+            sameMember
+          )
+          if (next === previous) return state
+          return { byGuild: { ...state.byGuild, [guildId]: next } }
+        })
+        return get().byGuild[guildId] ?? members
+      } catch (error) {
+        if (isNotFound(error)) {
+          get().removeGuild(guildId)
+          return null
+        }
+        throw error
+      } finally {
+        fetchesByGuild.delete(guildId)
       }
-      throw error
-    }
+    })()
+
+    fetchesByGuild.set(guildId, request)
+    return request
   },
 
   upsertMember: (guildId, member) =>

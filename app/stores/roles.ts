@@ -13,6 +13,7 @@ import { create } from "zustand"
 import { listRoles } from "~/lib/api/guilds"
 import { isNotFound } from "~/lib/api/http"
 import type { GuildMember, Role } from "~/lib/api/types"
+import { reconcileList } from "~/lib/reconcile-list"
 import {
   computeGuildPermissions,
   hasPermission,
@@ -29,21 +30,61 @@ type RolesState = {
   reset: () => void
 }
 
+const fetchesByGuild = new Map<string, Promise<Role[] | null>>()
+
+function sameRole(a: Role, b: Role): boolean {
+  return (
+    a.id === b.id &&
+    a.guild_id === b.guild_id &&
+    a.name === b.name &&
+    a.permissions === b.permissions &&
+    a.position === b.position &&
+    a.is_everyone === b.is_everyone &&
+    a.managed === b.managed &&
+    a.color === b.color &&
+    JSON.stringify(a.style) === JSON.stringify(b.style) &&
+    a.hoist === b.hoist &&
+    a.mentionable === b.mentionable &&
+    a.created_at === b.created_at &&
+    a.updated_at === b.updated_at
+  )
+}
+
 export const useRolesStore = create<RolesState>()((set, get) => ({
   byGuild: {},
 
-  fetchRoles: async (guildId) => {
-    try {
-      const roles = await listRoles(guildId)
-      set((state) => ({ byGuild: { ...state.byGuild, [guildId]: roles } }))
-      return roles
-    } catch (error) {
-      if (isNotFound(error)) {
-        get().removeGuild(guildId)
-        return null
+  fetchRoles: (guildId) => {
+    const active = fetchesByGuild.get(guildId)
+    if (active) return active
+
+    const request = (async () => {
+      try {
+        const roles = await listRoles(guildId)
+        set((state) => {
+          const previous = state.byGuild[guildId]
+          const next = reconcileList(
+            previous,
+            roles,
+            (role) => role.id,
+            sameRole
+          )
+          if (next === previous) return state
+          return { byGuild: { ...state.byGuild, [guildId]: next } }
+        })
+        return get().byGuild[guildId] ?? roles
+      } catch (error) {
+        if (isNotFound(error)) {
+          get().removeGuild(guildId)
+          return null
+        }
+        throw error
+      } finally {
+        fetchesByGuild.delete(guildId)
       }
-      throw error
-    }
+    })()
+
+    fetchesByGuild.set(guildId, request)
+    return request
   },
 
   removeGuild: (guildId) =>
