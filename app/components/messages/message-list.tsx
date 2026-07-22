@@ -2,7 +2,7 @@
 // 滚动到顶 before 翻页（prepend 滚动补偿）、底部粘滞自动滚动、
 // 上翻时浮动「↓ N 条新消息」按钮、到头渲染频道欢迎块。
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ArrowDownIcon, HashIcon } from "lucide-react"
 
 import type { MentionResolver } from "~/lib/markdown"
@@ -81,7 +81,7 @@ export type MessageListProps = {
   onFocusDone?: () => void
 }
 
-export function MessageList({
+function MessageList({
   channelId,
   guildId,
   channelName,
@@ -120,10 +120,10 @@ export function MessageList({
     () => useReadStatesStore.getState().lastReadByChannel[channelId] ?? null,
   )
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     const el = containerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }
+  }, [])
 
   /** 已读推进（docs 15 FR-02）：处于底部且窗口聚焦时 ack（store 内 1s 节流） */
   const ackIfAtBottom = () => {
@@ -215,7 +215,7 @@ export function MessageList({
     }
   }
 
-  const jumpTo = (messageId: string, flashMs = 1200) => {
+  const jumpTo = useCallback((messageId: string, flashMs = 1200) => {
     const target = document.getElementById(`message-${messageId}`)
     if (!target) return false
     // 离开底部粘滞，避免新消息到达时把定位拉回底部
@@ -224,7 +224,7 @@ export function MessageList({
     setFlashingId(messageId)
     setTimeout(() => setFlashingId((current) => (current === messageId ? null : current)), flashMs)
     return true
-  }
+  }, [])
 
   // 搜索跳转锚点：消息渲染到列表后定位并高亮 2s
   useEffect(() => {
@@ -410,3 +410,6 @@ export function TypingIndicator({
     </p>
   )
 }
+
+export const MemoizedMessageList = memo(MessageList)
+export { MemoizedMessageList as MessageList }

@@ -64,6 +64,7 @@ export default function ChannelPage() {
 
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const stopEditing = useCallback(() => setEditingId(null), [])
 
   // 搜索结果跳转定位（?around=消息ID）：加载目标前后上下文并高亮闪烁
   const [searchParams, setSearchParams] = useSearchParams()
@@ -278,7 +279,7 @@ export default function ChannelPage() {
         resolveAvatarUrl={resolveAvatarUrl}
         editingId={editingId}
         onStartEdit={setEditingId}
-        onStopEdit={() => setEditingId(null)}
+        onStopEdit={stopEditing}
         onReply={setReplyTo}
         focusMessageId={focusId}
         onFocusDone={clearAroundParam}

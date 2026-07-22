@@ -592,6 +592,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       const selfId = useAuthStore.getState().user?.id
       set((state) => {
         const channel = channelState(state, message.channel_id)
+        const alreadyExists = channel.messages.some((item) => item.id === message.id)
         // 收到该用户消息即清除其 typing 条目
         const typing = state.typingByChannel[message.channel_id]
         const nextTyping =
@@ -603,7 +604,11 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
                 ),
               }
             : state.typingByChannel
-        let messages = mergeSorted(channel.messages, [message])
+        // REST 首屏与 Gateway 重放可能包含同一条 MESSAGE_CREATE。
+        // CREATE 按消息 ID 幂等：已存在时保持数组引用，避免每条重放都触发整表渲染。
+        let messages = alreadyExists
+          ? channel.messages
+          : mergeSorted(channel.messages, [message])
         let reachedStart = channel.reachedStart
         if (messages.length > CACHE_LIMIT) {
           messages = messages.slice(-CACHE_LIMIT)
@@ -619,6 +624,13 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
               [message.channel_id]: queue.filter((item) => item.nonce !== message.nonce),
             }
           }
+        }
+        if (
+          messages === channel.messages &&
+          nextTyping === state.typingByChannel &&
+          pendingByChannel === state.pendingByChannel
+        ) {
+          return state
         }
         return {
           typingByChannel: nextTyping,

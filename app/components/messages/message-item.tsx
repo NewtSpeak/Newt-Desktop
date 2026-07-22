@@ -2,7 +2,7 @@
 // 右键菜单（复制/回复/编辑/删除/反应/复制 ID）、反应胶囊、内联编辑态、
 // 回复引用摘要、(已编辑) 标记、本人被提及高亮。
 
-import { useEffect, useRef, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 import {
   AtSignIcon,
   CopyIcon,
@@ -580,7 +580,7 @@ export type MessageRowProps = {
   flashing: boolean
 }
 
-export function MessageRow({
+export const MessageRow = memo(function MessageRow({
   message,
   channelId,
   guildId,
@@ -857,7 +857,7 @@ export function MessageRow({
       </Dialog>
     </>
   )
-}
+})
 
 // ---------------------------------------------------------------------------
 // 乐观 / 失败消息行
