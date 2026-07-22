@@ -3,7 +3,10 @@
 import { useEffect, useState } from "react"
 
 import { getStickerItem } from "~/lib/api/stickers"
-import { stickerAssetUrl } from "~/lib/stickers/format"
+import {
+  isStickerVideoAsset,
+  stickerAssetUrl,
+} from "~/lib/stickers/format"
 import { cn } from "~/lib/utils"
 import { useStickersStore } from "~/stores/stickers"
 
@@ -87,7 +90,27 @@ export function CustomEmoteImg({
     )
   }
 
-  const img = (
+  const isVideo = isStickerVideoAsset(url)
+  const media = isVideo ? (
+    <video
+      src={url}
+      width={dim}
+      height={dim}
+      autoPlay
+      loop
+      muted
+      playsInline
+      draggable={false}
+      onError={() => setFailed(true)}
+      className={cn(
+        "inline-block object-contain align-middle",
+        onClick && "cursor-pointer",
+        className,
+      )}
+      style={{ width: dim, height: dim }}
+      aria-label={label}
+    />
+  ) : (
     <img
       src={url}
       alt={label}
@@ -113,11 +136,11 @@ export function CustomEmoteImg({
         className="inline-flex cursor-pointer rounded-md active:scale-[0.96] transition-transform duration-150"
         aria-label={`查看表情包：${label}`}
       >
-        {img}
+        {media}
       </button>
     )
   }
-  return img
+  return media
 }
 
 /** 贴图消息主体（大图，可点开包预览） */

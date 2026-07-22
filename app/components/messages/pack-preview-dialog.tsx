@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog"
+import { StickerMedia } from "~/components/messages/sticker-media"
 import {
   copyStickerItem,
   getStickerPack,
@@ -198,12 +199,12 @@ export function PackPreviewDialog() {
                       highlight && "bg-primary/10 ring-2 ring-primary/40",
                     )}
                   >
-                    <img
-                      src={resolveApiUrl(item.asset_url)}
+                    <StickerMedia
+                      src={item.asset_url}
                       alt={item.name || item.mark}
                       width={64}
                       height={64}
-                      className="size-14 object-contain"
+                      className="size-14"
                       draggable={false}
                     />
                     <span className="max-w-full truncate text-[10px] text-muted-foreground tabular-nums">

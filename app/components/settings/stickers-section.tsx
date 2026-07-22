@@ -44,7 +44,12 @@ import type {
   StickerPack,
   StickerPackScope,
 } from "~/lib/api/types"
-import { itemDisplayName } from "~/lib/stickers/format"
+import {
+  itemDisplayName,
+  isStickerVideoAsset,
+  STICKER_UPLOAD_ACCEPT,
+  stickerAssetUrl,
+} from "~/lib/stickers/format"
 import { cn } from "~/lib/utils"
 import { useGuildsStore } from "~/stores/guilds"
 import { useStickersStore } from "~/stores/stickers"
@@ -215,7 +220,7 @@ export function StickersSection() {
     if (name === null) return // 取消
     const input = document.createElement("input")
     input.type = "file"
-    input.accept = "image/png,image/jpeg,image/webp,image/gif"
+    input.accept = STICKER_UPLOAD_ACCEPT
     input.onchange = () => {
       const file = input.files?.[0]
       if (!file) return
@@ -278,7 +283,7 @@ export function StickersSection() {
   const onUploadCover = (pack: StickerPack) => {
     const input = document.createElement("input")
     input.type = "file"
-    input.accept = "image/png,image/jpeg,image/webp,image/gif"
+    input.accept = STICKER_UPLOAD_ACCEPT
     input.onchange = () => {
       const file = input.files?.[0]
       if (!file) return
@@ -598,12 +603,24 @@ export function StickersSection() {
                           key={item.id}
                           className="flex flex-col items-center gap-1.5 rounded-xl bg-muted/40 p-2"
                         >
-                          <img
-                            src={resolveApiUrl(item.asset_url)}
-                            alt={itemDisplayName(item)}
-                            className="size-14 object-contain"
-                            draggable={false}
-                          />
+                          {isStickerVideoAsset(item.asset_url) ? (
+                            <video
+                              src={stickerAssetUrl(item.asset_url)}
+                              className="size-14 object-contain"
+                              autoPlay
+                              loop
+                              muted
+                              playsInline
+                              draggable={false}
+                            />
+                          ) : (
+                            <img
+                              src={resolveApiUrl(item.asset_url)}
+                              alt={itemDisplayName(item)}
+                              className="size-14 object-contain"
+                              draggable={false}
+                            />
+                          )}
                           <button
                             type="button"
                             onClick={() => void onRenameItem(pack, item)}

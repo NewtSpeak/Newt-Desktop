@@ -5,6 +5,7 @@ import {
   type ReactNodeViewProps,
 } from "@tiptap/react"
 
+import { StickerMedia } from "~/components/messages/sticker-media"
 import { stickerAssetUrl } from "~/lib/stickers/format"
 import type { CustomEmoteStorage } from "./custom-emote"
 
@@ -29,11 +30,11 @@ export function CustomEmoteChipView(props: ReactNodeViewProps) {
         title={mark || "小表情"}
       >
         {url ? (
-          <img
+          <StickerMedia
             src={url}
             alt={mark || "小表情"}
             draggable={false}
-            className="size-[1.35em] object-contain"
+            className="size-[1.35em]"
           />
         ) : (
           <span className="text-[0.75em] text-muted-foreground">:{mark}:</span>

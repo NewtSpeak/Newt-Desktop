@@ -14,6 +14,7 @@ import { QuickSwitcher } from "~/components/quick-switcher"
 import { SearchPanel } from "~/components/search/search-panel"
 import { SettingsPanel } from "~/components/settings/settings-panel"
 import { ChannelSettingsPanel } from "~/components/channel-settings-panel"
+import { ChannelUnlockDialog } from "~/components/channel-unlock-dialog"
 import { GuildPersonalPanel } from "~/components/settings/guild-personal-panel"
 import { GuildAdminPanel } from "~/components/guild-settings/guild-settings-panel"
 import { PackPreviewDialog } from "~/components/messages/pack-preview-dialog"
@@ -22,6 +23,7 @@ import { SidebarProvider } from "~/components/ui/sidebar"
 import { Toaster } from "~/components/ui/sonner"
 import { useAuthBootstrap } from "~/hooks/use-auth-bootstrap"
 import { isFriendsLocation } from "~/lib/friends-route"
+import { isStickersLocation } from "~/lib/stickers-route"
 import {
   dragWindowOnMouseDown,
   dragWindowOnSelfMouseDown,
@@ -146,8 +148,10 @@ export default function AppShell() {
       <SettingsPanel />
       {/* 服务器个人设置中型面板（docs 17，右键服务器打开） */}
       <GuildPersonalPanel />
-      {/* 频道设置（docs 03/04，频道右键「编辑频道」） */}
+      {/* 频道设置（docs 03/04，频道右键「管理频道」） */}
       <ChannelSettingsPanel />
+      {/* 上锁频道访问密码 */}
+      <ChannelUnlockDialog />
       {/* 贴图包预览（消息内点击表情 / 贴图） */}
       <PackPreviewDialog />
     </SidebarProvider>
@@ -168,14 +172,17 @@ function SelectedGuildTitleBar() {
   const hasIcon = Boolean(guild?.icon_url?.trim())
   const isDm = selectedGuildId === "@me"
   const isFriends = isFriendsLocation(location)
-  const isHome = !selectedGuildId && !isFriends
+  const isStickers = isStickersLocation(location)
+  const isHome = !selectedGuildId && !isFriends && !isStickers
   const title = isFriends
     ? "好友"
-    : isHome
-      ? "私信"
-      : isDm
+    : isStickers
+      ? "贴图库"
+      : isHome
         ? "私信"
-        : guild?.name
+        : isDm
+          ? "私信"
+          : guild?.name
 
   return (
     <div
@@ -184,7 +191,7 @@ function SelectedGuildTitleBar() {
     >
       {title ? (
         <div className="flex max-w-md items-center justify-center gap-2">
-          {!isDm && !isHome && !isFriends && hasIcon && guild ? (
+          {!isDm && !isHome && !isFriends && !isStickers && hasIcon && guild ? (
             <GuildAvatar
               guild={guild}
               shape="circle"

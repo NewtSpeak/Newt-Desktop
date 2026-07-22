@@ -1,12 +1,13 @@
 // 频道设置中型面板（docs 03 / 04 FR-09–15）
-// 概览（改名/主题/慢速/人数）+ 权限覆盖三态编辑器 + 删除。
-// 入口：频道右键「编辑频道」。
+// 概览（改名/主题/慢速/人数/上锁/语音注释）+ 权限覆盖三态编辑器 + 删除。
+// 入口：频道右键「管理频道」。
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   CheckIcon,
   FolderSyncIcon,
   HashIcon,
+  LockIcon,
   MinusIcon,
   PlusIcon,
   Trash2Icon,
@@ -16,6 +17,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "~/components/ui/button"
+import { Checkbox } from "~/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -69,6 +71,12 @@ function maskFrom(value: number | string | undefined): bigint {
   } catch {
     return 0n
   }
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false
+  const expected = new Set(right)
+  return left.every((value) => expected.has(value))
 }
 
 /** 覆盖签名：用于比较频道与分类是否同步（docs 04 FR-14） */
@@ -255,7 +263,12 @@ export function ChannelSettingsPanel() {
   const [name, setName] = useState("")
   const [topic, setTopic] = useState("")
   const [rateLimit, setRateLimit] = useState(0)
+  const [rateLimitExemptRoleIds, setRateLimitExemptRoleIds] = useState<string[]>([])
   const [userLimit, setUserLimit] = useState(0)
+  const [voiceNote, setVoiceNote] = useState("")
+  const [locked, setLocked] = useState(false)
+  const [password, setPassword] = useState("")
+  const [passwordConfirm, setPasswordConfirm] = useState("")
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -284,7 +297,12 @@ export function ChannelSettingsPanel() {
     setName(channel.name)
     setTopic(channel.topic ?? "")
     setRateLimit(channel.rate_limit_per_user ?? 0)
+    setRateLimitExemptRoleIds(channel.rate_limit_exempt_role_ids ?? [])
     setUserLimit(channel.user_limit ?? 0)
+    setVoiceNote(channel.voice_note ?? "")
+    setLocked(Boolean(channel.locked))
+    setPassword("")
+    setPasswordConfirm("")
     setDirty(false)
     setTab("overview")
     setSelectedKey(null)
@@ -344,97 +362,16 @@ export function ChannelSettingsPanel() {
     setDraftDeny(maskFrom(hit?.deny_str ?? hit?.deny))
   }, [selectedKey, overwrites, owDirty])
 
-  if (!channelId || !channel || !guildId) return null
-
-  const Icon =
-    channel.type === "VOICE"
-      ? Volume2Icon
-      : channel.type === "CATEGORY"
-        ? FolderSyncIcon
-        : HashIcon
-
+  // hooks 必须在任何 early return 之前调用，否则 channel 从空→有时会触发
+  // “Rendered more hooks than during the previous render”
   const syncedWithParent = useMemo(() => {
-    if (!channel.parent_id || parentOverwrites === null || overwrites === null) {
+    if (!channel?.parent_id || parentOverwrites === null || overwrites === null) {
       return null
     }
     return (
       overwriteSignature(overwrites) === overwriteSignature(parentOverwrites)
     )
-  }, [channel.parent_id, overwrites, parentOverwrites])
-
-  const onSyncWithParent = async () => {
-    if (!guildId || !channel.parent_id) return
-    const ok = window.confirm(
-      "将用分类上的权限覆盖完整替换本频道的覆盖（现有覆盖会被删除）。继续吗？",
-    )
-    if (!ok) return
-    setSyncing(true)
-    try {
-      await syncOverwritesFromParent(guildId, channel.id, channel.parent_id)
-      toast.success("已与分类同步")
-      setOwDirty(false)
-      loadOverwrites()
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "同步失败")
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  const markOverviewDirty = (
-    nextName: string,
-    nextTopic: string,
-    nextRate: number,
-    nextUser: number,
-  ) => {
-    setDirty(
-      nextName !== channel.name ||
-        nextTopic !== (channel.topic ?? "") ||
-        nextRate !== (channel.rate_limit_per_user ?? 0) ||
-        nextUser !== (channel.user_limit ?? 0),
-    )
-  }
-
-  const saveOverview = async () => {
-    const trimmed = name.trim()
-    if (!trimmed) {
-      toast.error("名称不能为空")
-      return
-    }
-    setSaving(true)
-    try {
-      const updated = await updateChannel(channel.id, {
-        name: trimmed,
-        topic: topic.trim(),
-        ...(channel.type === "TEXT"
-          ? { rate_limit_per_user: rateLimit }
-          : {}),
-        ...(channel.type === "VOICE" ? { user_limit: userLimit } : {}),
-      })
-      useChannelsStore.getState().upsertChannel({ ...channel, ...updated })
-      setDirty(false)
-      toast.success("频道已保存")
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "保存失败")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const onDelete = async () => {
-    const ok = window.confirm(
-      `确定删除${channel.type === "CATEGORY" ? "类别" : "频道"}「${channel.name}」？此操作不可恢复。`,
-    )
-    if (!ok) return
-    try {
-      await deleteChannel(channel.id)
-      useChannelsStore.getState().removeChannel(guildId, channel.id)
-      toast.success("已删除")
-      close()
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "删除失败")
-    }
-  }
+  }, [channel?.parent_id, overwrites, parentOverwrites])
 
   // ---- 覆盖目标列表 ----
   const targetList = useMemo(() => {
@@ -473,6 +410,128 @@ export function ChannelSettingsPanel() {
     }
     return rows
   }, [roles, overwrites])
+
+  if (!channelId || !channel || !guildId) return null
+
+  const Icon =
+    channel.type === "VOICE"
+      ? Volume2Icon
+      : channel.type === "CATEGORY"
+        ? FolderSyncIcon
+        : HashIcon
+
+  const onSyncWithParent = async () => {
+    if (!guildId || !channel.parent_id) return
+    const ok = window.confirm(
+      "将用分类上的权限覆盖完整替换本频道的覆盖（现有覆盖会被删除）。继续吗？",
+    )
+    if (!ok) return
+    setSyncing(true)
+    try {
+      await syncOverwritesFromParent(guildId, channel.id, channel.parent_id)
+      toast.success("已与分类同步")
+      setOwDirty(false)
+      loadOverwrites()
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "同步失败")
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const markOverviewDirty = (
+    nextName: string,
+    nextTopic: string,
+    nextRate: number,
+    nextUser: number,
+    nextVoiceNote: string,
+    nextLocked: boolean,
+    nextPassword: string,
+  ) => {
+    const baseDirty =
+      nextName !== channel.name ||
+      nextTopic !== (channel.topic ?? "") ||
+      nextRate !== (channel.rate_limit_per_user ?? 0) ||
+      !sameStringSet(rateLimitExemptRoleIds, channel.rate_limit_exempt_role_ids ?? []) ||
+      nextUser !== (channel.user_limit ?? 0) ||
+      nextVoiceNote !== (channel.voice_note ?? "") ||
+      nextLocked !== Boolean(channel.locked)
+    const passwordDirty = nextLocked && nextPassword.length > 0
+    setDirty(baseDirty || passwordDirty)
+  }
+
+  const saveOverview = async () => {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast.error("名称不能为空")
+      return
+    }
+    if (locked && !channel.locked && !password) {
+      toast.error("上锁时请设置访问密码")
+      return
+    }
+    if (password && password !== passwordConfirm) {
+      toast.error("两次输入的密码不一致")
+      return
+    }
+    if (password && (password.length < 1 || password.length > 64)) {
+      toast.error("密码长度需为 1–64 个字符")
+      return
+    }
+    setSaving(true)
+    try {
+      const body: Parameters<typeof updateChannel>[1] = {
+        name: trimmed,
+        topic: topic.trim(),
+        ...(channel.type === "TEXT"
+          ? {
+              rate_limit_per_user: rateLimit,
+              rate_limit_exempt_role_ids: rateLimitExemptRoleIds,
+            }
+          : {}),
+        ...(channel.type === "VOICE"
+          ? { user_limit: userLimit, voice_note: voiceNote.trim() }
+          : {}),
+      }
+      if (channel.type === "TEXT" || channel.type === "VOICE") {
+        if (!locked && channel.locked) {
+          body.locked = false
+        } else if (password) {
+          body.password = password
+        } else if (locked && !channel.locked) {
+          // 理论上已被上面拦截
+          body.password = password
+        }
+      }
+      const updated = await updateChannel(channel.id, body)
+      useChannelsStore.getState().upsertChannel({ ...channel, ...updated })
+      setPassword("")
+      setPasswordConfirm("")
+      setLocked(Boolean(updated.locked))
+      setVoiceNote(updated.voice_note ?? "")
+      setDirty(false)
+      toast.success("频道已保存")
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "保存失败")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onDelete = async () => {
+    const ok = window.confirm(
+      `确定删除${channel.type === "CATEGORY" ? "类别" : "频道"}「${channel.name}」？此操作不可恢复。`,
+    )
+    if (!ok) return
+    try {
+      await deleteChannel(channel.id)
+      useChannelsStore.getState().removeChannel(guildId, channel.id)
+      toast.success("已删除")
+      close()
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "删除失败")
+    }
+  }
 
   const selectedTarget = targetList.find((t) => t.key === selectedKey)
 
@@ -599,10 +658,10 @@ export function ChannelSettingsPanel() {
       }}
     >
       <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
-        <DialogHeader className="border-b px-5 py-4">
+        <DialogHeader className="px-5 py-4">
           <DialogTitle className="flex items-center gap-2">
             <Icon className="size-4 text-muted-foreground" />
-            {channel.type === "CATEGORY" ? "编辑分类" : "编辑频道"}
+            {channel.type === "CATEGORY" ? "管理分类" : "管理频道"}
           </DialogTitle>
           <DialogDescription className="truncate">
             {channel.name}
@@ -612,7 +671,7 @@ export function ChannelSettingsPanel() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-1 border-b px-5">
+        <div className="flex gap-1 px-5">
           {(
             [
               ["overview", "概览"],
@@ -661,6 +720,9 @@ export function ChannelSettingsPanel() {
                       topic,
                       rateLimit,
                       userLimit,
+                      voiceNote,
+                      locked,
+                      password,
                     )
                   }}
                 />
@@ -683,55 +745,230 @@ export function ChannelSettingsPanel() {
                         e.target.value,
                         rateLimit,
                         userLimit,
+                        voiceNote,
+                        locked,
+                        password,
                       )
                     }}
                   />
                 </label>
               )}
               {channel.type === "TEXT" && (
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    慢速模式（秒，0 = 关闭）
-                  </span>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={21600}
-                    value={rateLimit}
-                    disabled={!canManageChannel}
-                    onChange={(e) => {
-                      const v = Math.max(
-                        0,
-                        Math.min(21600, Number(e.target.value) || 0),
-                      )
-                      setRateLimit(v)
-                      markOverviewDirty(name, topic, v, userLimit)
-                    }}
-                  />
-                </label>
+                <div className="flex flex-col gap-3">
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      慢速模式（秒，0 = 关闭）
+                    </span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={21600}
+                      value={rateLimit}
+                      disabled={!canManageChannel}
+                      onChange={(e) => {
+                        const v = Math.max(
+                          0,
+                          Math.min(21600, Number(e.target.value) || 0),
+                        )
+                        setRateLimit(v)
+                        markOverviewDirty(
+                          name,
+                          topic,
+                          v,
+                          userLimit,
+                          voiceNote,
+                          locked,
+                          password,
+                        )
+                      }}
+                    />
+                  </label>
+                  <fieldset className="flex flex-col gap-2 rounded-lg border p-3">
+                    <legend className="px-1 text-xs font-medium text-muted-foreground">
+                      慢速模式豁免角色
+                    </legend>
+                    <p className="text-xs text-muted-foreground">
+                      默认对所有成员生效；选中的角色不受慢速模式限制。
+                    </p>
+                    <div className="grid max-h-40 gap-1 overflow-y-auto sm:grid-cols-2">
+                      {(roles ?? []).map((role) => {
+                        const checked = rateLimitExemptRoleIds.includes(role.id)
+                        return (
+                          <label
+                            key={role.id}
+                            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+                          >
+                            <Checkbox
+                              checked={checked}
+                              disabled={!canManageChannel}
+                              onCheckedChange={(next) => {
+                                const ids = Boolean(next)
+                                  ? [...rateLimitExemptRoleIds.filter((id) => id !== role.id), role.id]
+                                  : rateLimitExemptRoleIds.filter((id) => id !== role.id)
+                                setRateLimitExemptRoleIds(ids)
+                                setDirty(
+                                  !sameStringSet(ids, channel.rate_limit_exempt_role_ids ?? []) ||
+                                    name !== channel.name ||
+                                    topic !== (channel.topic ?? "") ||
+                                    rateLimit !== (channel.rate_limit_per_user ?? 0) ||
+                                    userLimit !== (channel.user_limit ?? 0) ||
+                                    voiceNote !== (channel.voice_note ?? "") ||
+                                    locked !== Boolean(channel.locked) ||
+                                    (locked && password.length > 0),
+                                )
+                              }}
+                            />
+                            <span className="truncate">
+                              {role.is_everyone ? "@everyone" : role.name}
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </fieldset>
+                </div>
               )}
               {channel.type === "VOICE" && (
-                <label className="flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    人数上限（0 = 不限，最大 99）
-                  </span>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={99}
-                    value={userLimit}
-                    disabled={!canManageChannel}
-                    onChange={(e) => {
-                      const v = Math.max(
-                        0,
-                        Math.min(99, Number(e.target.value) || 0),
-                      )
-                      setUserLimit(v)
-                      markOverviewDirty(name, topic, rateLimit, v)
-                    }}
-                  />
-                </label>
+                <>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      人数上限（0 = 不限，最大 99）
+                    </span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={99}
+                      value={userLimit}
+                      disabled={!canManageChannel}
+                      onChange={(e) => {
+                        const v = Math.max(
+                          0,
+                          Math.min(99, Number(e.target.value) || 0),
+                        )
+                        setUserLimit(v)
+                        markOverviewDirty(
+                          name,
+                          topic,
+                          rateLimit,
+                          v,
+                          voiceNote,
+                          locked,
+                          password,
+                        )
+                      }}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      活动注释
+                    </span>
+                    <Input
+                      value={voiceNote}
+                      maxLength={200}
+                      placeholder="例如：正在开黑打排位"
+                      disabled={!canManageChannel}
+                      onChange={(e) => {
+                        setVoiceNote(e.target.value)
+                        markOverviewDirty(
+                          name,
+                          topic,
+                          rateLimit,
+                          userLimit,
+                          e.target.value,
+                          locked,
+                          password,
+                        )
+                      }}
+                    />
+                    <span className="text-[11px] text-muted-foreground">
+                      显示在频道列表中该语音频道在线成员列表的最上方，提示频道正在做什么
+                    </span>
+                  </label>
+                </>
               )}
+
+              {(channel.type === "TEXT" || channel.type === "VOICE") &&
+                canManageChannel && (
+                  <div className="flex flex-col gap-3 rounded-xl border px-4 py-3">
+                    <label className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-1.5 text-sm font-medium">
+                          <LockIcon className="size-3.5 text-muted-foreground" />
+                          频道上锁
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          开启后，成员需输入密码才能访问本频道（文字与语音均生效）
+                        </p>
+                      </div>
+                      <Switch
+                        checked={locked}
+                        onCheckedChange={(on) => {
+                          setLocked(on)
+                          if (!on) {
+                            setPassword("")
+                            setPasswordConfirm("")
+                          }
+                          markOverviewDirty(
+                            name,
+                            topic,
+                            rateLimit,
+                            userLimit,
+                            voiceNote,
+                            on,
+                            on ? password : "",
+                          )
+                        }}
+                      />
+                    </label>
+                    {locked && (
+                      <div className="flex flex-col gap-2 pt-3">
+                        <label className="flex flex-col gap-1.5">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {channel.locked
+                              ? "新密码（留空则保持原密码）"
+                              : "访问密码"}
+                          </span>
+                          <Input
+                            type="password"
+                            value={password}
+                            maxLength={64}
+                            placeholder={
+                              channel.locked ? "输入新密码以更换" : "设置密码"
+                            }
+                            onChange={(e) => {
+                              setPassword(e.target.value)
+                              markOverviewDirty(
+                                name,
+                                topic,
+                                rateLimit,
+                                userLimit,
+                                voiceNote,
+                                locked,
+                                e.target.value,
+                              )
+                            }}
+                          />
+                        </label>
+                        {(password.length > 0 || !channel.locked) && (
+                          <label className="flex flex-col gap-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              确认密码
+                            </span>
+                            <Input
+                              type="password"
+                              value={passwordConfirm}
+                              maxLength={64}
+                              placeholder="再次输入密码"
+                              onChange={(e) =>
+                                setPasswordConfirm(e.target.value)
+                              }
+                            />
+                          </label>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
               {dirty && canManageChannel && (
                 <div className="flex items-center justify-between rounded-xl border bg-card px-4 py-3">
@@ -745,7 +982,12 @@ export function ChannelSettingsPanel() {
                         setName(channel.name)
                         setTopic(channel.topic ?? "")
                         setRateLimit(channel.rate_limit_per_user ?? 0)
+                        setRateLimitExemptRoleIds(channel.rate_limit_exempt_role_ids ?? [])
                         setUserLimit(channel.user_limit ?? 0)
+                        setVoiceNote(channel.voice_note ?? "")
+                        setLocked(Boolean(channel.locked))
+                        setPassword("")
+                        setPasswordConfirm("")
                         setDirty(false)
                       }}
                     >
@@ -785,18 +1027,25 @@ export function ChannelSettingsPanel() {
           {tab === "permissions" && canManageRoles && (
             <div className="flex min-h-[20rem] flex-col gap-3">
               {(channel.type === "TEXT" || channel.type === "VOICE") && (
-                <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
-                  <div>
-                    <p className="text-sm">私密频道</p>
-                    <p className="text-xs text-muted-foreground">
-                      对 @everyone 拒绝「查看频道」
+                <div className="flex flex-col gap-2 rounded-lg border px-3 py-2.5">
+                  <label className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm">仅特定角色可见</p>
+                      <p className="text-xs text-muted-foreground">
+                        开启后对 @everyone 拒绝「查看频道」；再在下方为目标角色允许「查看频道」
+                      </p>
+                    </div>
+                    <Switch
+                      checked={privateChannel}
+                      onCheckedChange={(c) => void togglePrivate(c)}
+                    />
+                  </label>
+                  {privateChannel && (
+                    <p className="text-[11px] text-muted-foreground">
+                      提示：在左侧选择角色，将「查看频道」设为允许（✓），即可让该角色看到本频道。
                     </p>
-                  </div>
-                  <Switch
-                    checked={privateChannel}
-                    onCheckedChange={(c) => void togglePrivate(c)}
-                  />
-                </label>
+                  )}
+                </div>
               )}
 
               {/* 与分类同步（docs 04 FR-14） */}
@@ -962,7 +1211,7 @@ export function ChannelSettingsPanel() {
                             <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
                               {group.label}
                             </p>
-                            <div className="flex flex-col divide-y rounded-lg border">
+                            <div className="flex flex-col rounded-lg border">
                               {items.map((meta) => {
                                 const state = triOf(
                                   draftAllow,

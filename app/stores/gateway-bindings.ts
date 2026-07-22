@@ -27,6 +27,7 @@ import {
 } from "~/lib/voice/stage-notify"
 import { handleVoicePackPlay } from "~/lib/voice/voice-pack"
 import { useAuthStore } from "./auth"
+import { useChannelUnlocksStore } from "./channel-unlocks"
 import { useChannelsStore } from "./channels"
 import { useGuildsStore } from "./guilds"
 import { useMembersStore } from "./members"
@@ -395,6 +396,15 @@ export function bindGatewayToStores() {
       return
     }
     useChannelsStore.getState().upsertChannel(payload)
+    // 改密/关锁时服务端会吊销解锁；本地缓存失效，下次访问再查
+    const ch = payload as { id?: string; locked?: boolean }
+    if (ch.id) {
+      if (ch.locked) {
+        useChannelUnlocksStore.getState().clearChannel(ch.id)
+      } else {
+        useChannelUnlocksStore.getState().setUnlocked(ch.id, true)
+      }
+    }
   })
   // 频道删除 / 禁看（定向 CHANNEL_DELETE）：移除频道 + 清其未读计数
   gateway.subscribe(GatewayEvents.ChannelDelete, (payload) => {

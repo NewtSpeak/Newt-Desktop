@@ -65,6 +65,34 @@ export function stickerAssetUrl(path: string | undefined | null): string {
   return resolveApiUrl(path)
 }
 
+/** 是否为短视频贴图资产（mp4/webm/mov） */
+export function isStickerVideoAsset(
+  urlOrPath: string | undefined | null,
+): boolean {
+  if (!urlOrPath) return false
+  const path = urlOrPath.split("?")[0]?.toLowerCase() ?? ""
+  return (
+    path.endsWith(".mp4") ||
+    path.endsWith(".webm") ||
+    path.endsWith(".mov") ||
+    path.endsWith(".m4v")
+  )
+}
+
+/** 文件选择器 accept：图片 + 短视频 */
+export const STICKER_UPLOAD_ACCEPT =
+  "image/png,image/jpeg,image/webp,image/gif,image/apng,video/mp4,video/webm,video/quicktime,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov"
+
+/**
+ * 贴图媒体 props 辅助：根据 URL 扩展名判断用 video 还是 img。
+ * 视频默认静音循环自动播放（表情/贴图预览语义）。
+ */
+export function stickerMediaKind(
+  urlOrPath: string | undefined | null,
+): "video" | "image" {
+  return isStickerVideoAsset(urlOrPath) ? "video" : "image"
+}
+
 export function itemToRef(item: StickerItem): MessageStickerRef {
   return {
     item_id: item.id,

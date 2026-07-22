@@ -21,11 +21,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover
 import { EMOJI_GROUPS } from "~/lib/emoji/data"
 import { emojiShortcode } from "~/lib/emoji/shortcodes"
 import type { StickerItem, StickerPack } from "~/lib/api/types"
+import { StickerMedia } from "~/components/messages/sticker-media"
 import {
   itemDisplayName,
   loadRecentExpressions,
   pushRecentExpression,
-  stickerAssetUrl,
   type RecentExpression,
 } from "~/lib/stickers/format"
 import { nameInitials, resolveProfileAssetUrl } from "~/lib/user-display"
@@ -547,7 +547,7 @@ export function ExpressionPickerPanel({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* 左侧导航 */}
         <nav
-          className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto overscroll-contain bg-muted/30 py-2"
+          className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto overscroll-contain bg-muted/30 py-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           aria-label="表情子分组"
         >
           {navItems.map((item) => {
@@ -579,8 +579,8 @@ export function ExpressionPickerPanel({
                 {(item.kind === "emote-pack" ||
                   item.kind === "sticker-pack") &&
                   (item.coverUrl ? (
-                    <img
-                      src={stickerAssetUrl(item.coverUrl)}
+                    <StickerMedia
+                      src={item.coverUrl}
                       alt=""
                       className="size-7 rounded-md object-contain"
                       draggable={false}
@@ -661,12 +661,12 @@ export function ExpressionPickerPanel({
                                 })
                               }
                             >
-                              <img
-                                src={stickerAssetUrl(item.asset_url)}
-                                alt=""
-                                className="size-9 object-contain"
-                                draggable={false}
-                              />
+                              <StickerMedia
+                      src={item.asset_url}
+                      alt=""
+                      className="size-9 object-contain"
+                      draggable={false}
+                    />
                             </NamedCell>
                           ))}
                         </div>
@@ -704,12 +704,12 @@ export function ExpressionPickerPanel({
                               "hover:bg-muted/70 active:scale-[0.96] cursor-pointer",
                             )}
                           >
-                            <img
-                              src={stickerAssetUrl(item.asset_url)}
-                              alt=""
-                              className="size-[4.5rem] object-contain"
-                              draggable={false}
-                            />
+                            <StickerMedia
+                      src={item.asset_url}
+                      alt=""
+                      className="size-[4.5rem] object-contain"
+                      draggable={false}
+                    />
                             <span className="max-w-full truncate text-[11px] text-muted-foreground">
                               {itemDisplayName(item)}
                             </span>
@@ -760,12 +760,12 @@ export function ExpressionPickerPanel({
                               "bg-muted/40 hover:bg-muted/70 active:scale-[0.96] cursor-pointer",
                             )}
                           >
-                            <img
-                              src={stickerAssetUrl(entry.assetUrl)}
-                              alt=""
-                              className="size-[4.5rem] object-contain"
-                              draggable={false}
-                            />
+                            <StickerMedia
+                      src={entry.assetUrl}
+                      alt=""
+                      className="size-[4.5rem] object-contain"
+                      draggable={false}
+                    />
                             <span className="max-w-full truncate text-[11px] text-muted-foreground">
                               {entry.name || entry.mark}
                             </span>
@@ -805,12 +805,12 @@ export function ExpressionPickerPanel({
                               })
                             }}
                           >
-                            <img
-                              src={stickerAssetUrl(entry.assetUrl)}
-                              alt=""
-                              className="size-9 object-contain"
-                              draggable={false}
-                            />
+                            <StickerMedia
+                      src={entry.assetUrl}
+                      alt=""
+                      className="size-9 object-contain"
+                      draggable={false}
+                    />
                           </NamedCell>
                         ),
                       )}
@@ -873,12 +873,12 @@ export function ExpressionPickerPanel({
                                     setHover({ kind: "item", item, pack })
                                   }
                                 >
-                                  <img
-                                    src={stickerAssetUrl(item.asset_url)}
-                                    alt=""
-                                    className="size-9 object-contain"
-                                    draggable={false}
-                                  />
+                                  <StickerMedia
+                      src={item.asset_url}
+                      alt=""
+                      className="size-9 object-contain"
+                      draggable={false}
+                    />
                                 </NamedCell>
                               ))}
                             </div>
@@ -945,12 +945,12 @@ export function ExpressionPickerPanel({
                                     "hover:bg-muted/70 active:scale-[0.96] cursor-pointer",
                                   )}
                                 >
-                                  <img
-                                    src={stickerAssetUrl(item.asset_url)}
-                                    alt=""
-                                    className="size-[4.5rem] object-contain"
-                                    draggable={false}
-                                  />
+                                  <StickerMedia
+                      src={item.asset_url}
+                      alt=""
+                      className="size-[4.5rem] object-contain"
+                      draggable={false}
+                    />
                                   <span className="max-w-full truncate text-[11px] text-muted-foreground">
                                     {itemDisplayName(item)}
                                   </span>
@@ -983,12 +983,12 @@ export function ExpressionPickerPanel({
                   {hover.emoji}
                 </span>
               ) : (
-                <img
-                  src={stickerAssetUrl(hover.item.asset_url)}
-                  alt=""
-                  className="size-10 object-contain"
-                  draggable={false}
-                />
+                <StickerMedia
+                      src={hover.item.asset_url}
+                      alt=""
+                      className="size-10 object-contain"
+                      draggable={false}
+                    />
               )}
             </div>
 

@@ -126,6 +126,8 @@ export function joinErrorMessage(error: unknown): string {
     switch (error.code) {
       case "CHANNEL_FULL":
         return "频道已满"
+      case "CHANNEL_LOCKED":
+        return "频道已上锁，请先输入访问密码"
       case "RESTRICTED":
         return "你已被限制加入该频道"
       case "MISSING_PERMISSIONS":

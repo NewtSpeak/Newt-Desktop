@@ -111,6 +111,8 @@ type ChannelMessagesState = {
   reachedStart: boolean
   /** 历史接口 404：频道不可用（无权限/被删，防扫频语义下不区分） */
   unavailable: boolean
+  /** 频道上锁且当前用户未解锁 */
+  locked: boolean
 }
 
 const EMPTY_CHANNEL: ChannelMessagesState = {
@@ -120,6 +122,7 @@ const EMPTY_CHANNEL: ChannelMessagesState = {
   loadingOlder: false,
   reachedStart: false,
   unavailable: false,
+  locked: false,
 }
 
 export type SendInput = {
@@ -417,7 +420,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       if (channel.loadedInitial && channel.messages.length === 0) {
         patchChannel(channelId, { loadedInitial: false })
       }
-      patchChannel(channelId, { loadingInitial: true })
+      patchChannel(channelId, { loadingInitial: true, locked: false })
       try {
         const page = await listMessages(channelId, { limit: PAGE_SIZE })
         // 未读判定需要频道最新消息 ID（服务端降序返回，page[0] 最新）
@@ -437,6 +440,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
                 messages: mergeSorted(current.messages, page),
                 loadedInitial: true,
                 loadingInitial: false,
+                locked: false,
                 reachedStart: page.length < PAGE_SIZE,
               },
             },
@@ -445,6 +449,14 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
         // 用本页+缓存精确回写未读条数（离线多条未读不再卡在保底 1）
         syncUnreadCountFromCache(channelId)
       } catch (error) {
+        if (error instanceof ApiError && error.code === "CHANNEL_LOCKED") {
+          patchChannel(channelId, {
+            loadingInitial: false,
+            locked: true,
+            loadedInitial: false,
+          })
+          return
+        }
         patchChannel(channelId, { loadingInitial: false })
         if (isNotFound(error)) {
           markUnavailable(channelId)

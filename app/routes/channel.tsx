@@ -4,7 +4,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router"
-import { HashIcon, MailIcon, UserPlusIcon, UsersIcon } from "lucide-react"
+import {
+  HashIcon,
+  KeyRoundIcon,
+  LockIcon,
+  MailIcon,
+  UserPlusIcon,
+  UsersIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
@@ -27,6 +34,7 @@ import {
 } from "~/components/messages/message-list"
 import { VoiceChannelView } from "~/components/voice/voice-channel-view"
 import { useAuthStore } from "~/stores/auth"
+import { useChannelUnlocksStore } from "~/stores/channel-unlocks"
 import { useChannelsStore } from "~/stores/channels"
 import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
@@ -93,6 +101,9 @@ export default function ChannelPage() {
   )
   const unavailable = useMessagesStore((state) =>
     channelId ? Boolean(state.byChannel[channelId]?.unavailable) : false
+  )
+  const channelLocked = useMessagesStore((state) =>
+    channelId ? Boolean(state.byChannel[channelId]?.locked) : false
   )
   const channelMessages = useMessagesStore((state) =>
     channelId ? state.byChannel[channelId]?.messages : undefined
@@ -402,6 +413,36 @@ export default function ChannelPage() {
         channelId={channelId}
         channelName={channel.name}
       />
+    )
+  }
+
+  // 上锁未解锁：引导输入密码
+  if (channelLocked && channelId) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-0 border-b-0 px-4 shadow-none">
+          <LockIcon className="size-4 text-amber-600 dark:text-amber-400" />
+          <span className="text-sm font-medium">{channelName}</span>
+          {!isDm ? <MemberPanelToggle /> : null}
+        </header>
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+          <LockIcon className="size-10 text-muted-foreground" />
+          <p className="text-base font-medium">频道已上锁</p>
+          <p className="max-w-sm text-sm text-muted-foreground">
+            输入访问密码后即可查看消息
+          </p>
+          <Button
+            onClick={() => {
+              useChannelUnlocksStore.getState().requestUnlock(channelId, () => {
+                void useMessagesStore.getState().loadInitial(channelId)
+              })
+            }}
+          >
+            <KeyRoundIcon className="size-4" />
+            输入密码解锁
+          </Button>
+        </div>
+      </div>
     )
   }
 

@@ -9,6 +9,7 @@ import {
   LogOutIcon,
   PlusIcon,
   SearchIcon,
+  StickerIcon,
   UserPlusIcon,
   UsersIcon,
   XIcon,
@@ -17,6 +18,7 @@ import { toast } from "sonner"
 
 import { presenceDotClass } from "~/components/nav-user"
 import { FRIENDS_PATH, isFriendsLocation } from "~/lib/friends-route"
+import { STICKERS_PATH, isStickersLocation } from "~/lib/stickers-route"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
@@ -306,6 +308,11 @@ export function DmSidebar() {
     navigate(FRIENDS_PATH)
   }
 
+  const openStickers = () => {
+    useUIStore.getState().selectGuild(null)
+    navigate(STICKERS_PATH)
+  }
+
   /** 关闭会话后回到私信落地页（非好友页） */
   const openDmHome = () => {
     useUIStore.getState().selectGuild(null)
@@ -354,6 +361,7 @@ export function DmSidebar() {
   }
 
   const friendsActive = isFriendsLocation(location)
+  const stickersActive = isStickersLocation(location)
 
   return (
     <aside
@@ -429,6 +437,31 @@ export function DmSidebar() {
                 {formatUnreadBadge(pendingCount)}
               </span>
             ) : null}
+          </button>
+
+          {/* 贴图库入口 */}
+          <button
+            type="button"
+            onClick={openStickers}
+            className={cn(
+              "mb-1 flex min-h-12 w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px]",
+              "transition-[background-color] duration-150 ease-out",
+              stickersActive
+                ? "bg-muted font-semibold text-foreground"
+                : "font-medium text-foreground hover:bg-muted/70",
+            )}
+          >
+            <span
+              className={cn(
+                "flex size-9 items-center justify-center rounded-full",
+                stickersActive
+                  ? "bg-primary/15 text-primary"
+                  : "bg-black/[0.06] text-muted-foreground dark:bg-white/10",
+              )}
+            >
+              <StickerIcon className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1">贴图库</span>
           </button>
 
           {/* 消息请求折叠 */}

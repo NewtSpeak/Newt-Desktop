@@ -120,7 +120,7 @@ export function ChannelList() {
         )}
         <div
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto px-2 pb-3",
+            "min-h-0 flex-1 overflow-y-auto px-2 pb-3 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
             !hasBanner && "pt-2",
           )}
         >

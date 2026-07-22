@@ -1393,7 +1393,7 @@ export function MemberPanel() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-3">
+      <div className="flex-1 overflow-y-auto px-2 pb-3 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {members === undefined ? (
           <p className="px-2 pt-3 text-xs text-muted-foreground">成员加载中…</p>
         ) : total === 0 ? (

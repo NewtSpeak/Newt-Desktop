@@ -13,6 +13,7 @@ import {
   HashIcon,
   HeadphoneOffIcon,
   HeadphonesIcon,
+  LockIcon,
   LogOutIcon,
   MicOffIcon,
   PencilIcon,
@@ -57,6 +58,7 @@ import {
 } from "~/components/ui/dropdown-menu"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
+import { Switch } from "~/components/ui/switch"
 import { NotifyOverrideMenuItems } from "~/components/notify-override-menu"
 import { presenceDotClass } from "~/components/nav-user"
 import {
@@ -77,6 +79,7 @@ import {
 import { voiceConnection } from "~/lib/voice/connection"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
+import { useChannelUnlocksStore } from "~/stores/channel-unlocks"
 import { useChannelsStore } from "~/stores/channels"
 import { useMembersStore } from "~/stores/members"
 import { usePresenceStore } from "~/stores/presence"
@@ -118,7 +121,7 @@ function channelErrorMessage(error: unknown, fallback: string): string {
 /**
  * 类别标题行（对标 Discord/KOOK）：
  * 左侧「名称 + 折叠箭头」，右侧「+」创建频道；点击名称区域折叠/展开子频道。
- * 有管理权时支持右键：重命名 / 编辑分类 / 删除。
+ * 有管理权时支持右键：重命名 / 管理分类 / 删除。
  */
 export function CategoryHeader({
   guildId,
@@ -138,12 +141,21 @@ export function CategoryHeader({
   const [createType, setCreateType] = useState<"TEXT" | "VOICE" | null>(null)
   const [channelName, setChannelName] = useState("")
   const [pending, setPending] = useState(false)
+  const [privateChannel, setPrivateChannel] = useState(false)
+  const [lockChannel, setLockChannel] = useState(false)
+  const [channelPassword, setChannelPassword] = useState("")
+  const [visibleRoleIds, setVisibleRoleIds] = useState<string[]>([])
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState(name)
   const [renamePending, setRenamePending] = useState(false)
+  const roles = useRolesStore((s) => s.byGuild[guildId])
 
   const openCreate = (type: "TEXT" | "VOICE") => {
     setChannelName("")
+    setPrivateChannel(false)
+    setLockChannel(false)
+    setChannelPassword("")
+    setVisibleRoleIds([])
     setCreateType(type)
   }
 
@@ -152,6 +164,10 @@ export function CategoryHeader({
     const trimmed = channelName.trim()
     if (!trimmed) {
       toast.error("请输入名称")
+      return
+    }
+    if (lockChannel && !channelPassword) {
+      toast.error("上锁时请设置访问密码")
       return
     }
     setPending(true)
@@ -165,6 +181,10 @@ export function CategoryHeader({
         name: finalName,
         type,
         parent_id: categoryId,
+        ...(lockChannel ? { password: channelPassword } : {}),
+        ...(privateChannel
+          ? { private: true, visible_role_ids: visibleRoleIds }
+          : {}),
       })
       useChannelsStore.getState().upsertChannel(channel)
       toast.success(
@@ -255,7 +275,7 @@ export function CategoryHeader({
                 }
               >
                 <SettingsIcon />
-                编辑分类
+                管理分类
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem onClick={() => openCreate("TEXT")}>
@@ -304,7 +324,7 @@ export function CategoryHeader({
                 }
               >
                 <FolderIcon />
-                编辑分类
+                管理分类
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -315,7 +335,7 @@ export function CategoryHeader({
         open={createType !== null}
         onOpenChange={(open) => !open && setCreateType(null)}
       >
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
               {createType === "VOICE" ? "创建语音频道" : "创建文字频道"}
@@ -324,24 +344,103 @@ export function CategoryHeader({
               将创建在类别「{name}」下。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor={`cat-channel-name-${categoryId}`}>名称</Label>
-            <Input
-              id={`cat-channel-name-${categoryId}`}
-              value={channelName}
-              onChange={(e) => setChannelName(e.target.value)}
-              placeholder={
-                createType === "VOICE" ? "例如：大厅" : "例如：general"
-              }
-              maxLength={100}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  void submitCreate()
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor={`cat-channel-name-${categoryId}`}>名称</Label>
+              <Input
+                id={`cat-channel-name-${categoryId}`}
+                value={channelName}
+                onChange={(e) => setChannelName(e.target.value)}
+                placeholder={
+                  createType === "VOICE" ? "例如：大厅" : "例如：general"
                 }
-              }}
-            />
+                maxLength={100}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    void submitCreate()
+                  }
+                }}
+              />
+            </div>
+            <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+              <div>
+                <p className="text-sm">仅特定角色可见</p>
+                <p className="text-xs text-muted-foreground">
+                  开启后仅勾选的角色能看到此频道
+                </p>
+              </div>
+              <Switch
+                checked={privateChannel}
+                onCheckedChange={setPrivateChannel}
+              />
+            </label>
+            {privateChannel && (
+              <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border p-2">
+                {(roles ?? [])
+                  .filter((r) => !r.is_everyone)
+                  .sort((a, b) => b.position - a.position)
+                  .map((role) => {
+                    const checked = visibleRoleIds.includes(role.id)
+                    return (
+                      <label
+                        key={role.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+                      >
+                        <input
+                          type="checkbox"
+                          className="size-3.5 accent-primary"
+                          checked={checked}
+                          onChange={() => {
+                            setVisibleRoleIds((prev) =>
+                              checked
+                                ? prev.filter((id) => id !== role.id)
+                                : [...prev, role.id],
+                            )
+                          }}
+                        />
+                        <span
+                          className="truncate"
+                          style={
+                            role.color ? { color: role.color } : undefined
+                          }
+                        >
+                          {role.name}
+                        </span>
+                      </label>
+                    )
+                  })}
+              </div>
+            )}
+            <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+              <div>
+                <p className="text-sm">频道上锁</p>
+                <p className="text-xs text-muted-foreground">
+                  需要密码才能访问
+                </p>
+              </div>
+              <Switch
+                checked={lockChannel}
+                onCheckedChange={(on) => {
+                  setLockChannel(on)
+                  if (!on) setChannelPassword("")
+                }}
+              />
+            </label>
+            {lockChannel && (
+              <div className="space-y-2">
+                <Label htmlFor={`cat-channel-pw-${categoryId}`}>访问密码</Label>
+                <Input
+                  id={`cat-channel-pw-${categoryId}`}
+                  type="password"
+                  value={channelPassword}
+                  maxLength={64}
+                  placeholder="1–64 个字符"
+                  onChange={(e) => setChannelPassword(e.target.value)}
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button
@@ -434,6 +533,29 @@ export function TextChannelItem({
         ? mentionCount
         : 0
   const href = `/channels/${guildId}/${channel.id}`
+  const isLocked = Boolean(channel.locked)
+  const knownUnlocked = useChannelUnlocksStore(
+    (s) => s.unlocked[channel.id] === true,
+  )
+
+  const openTextChannel = () => {
+    void import("~/lib/ensure-guild-account").then(async (m) => {
+      const ok = await m.ensureGuildAccount(guildId)
+      if (!ok) return
+      if (isLocked) {
+        const unlocked = await useChannelUnlocksStore
+          .getState()
+          .ensureUnlocked(channel.id, true)
+        if (!unlocked) {
+          useChannelUnlocksStore.getState().requestUnlock(channel.id, () => {
+            void navigate(href)
+          })
+          return
+        }
+      }
+      void navigate(href)
+    })
+  }
 
   return (
     <ContextMenu>
@@ -444,10 +566,7 @@ export function TextChannelItem({
           onClick={(event) => {
             // 多账号：先切换到频道归属账号再导航（异步，需拦截默认跳转）
             event.preventDefault()
-            void import("~/lib/ensure-guild-account").then(async (m) => {
-              const ok = await m.ensureGuildAccount(guildId)
-              if (ok) void navigate(href)
-            })
+            openTextChannel()
           }}
           className={({ isActive }) =>
             cn(
@@ -467,6 +586,18 @@ export function TextChannelItem({
           )}
           <HashIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+          {isLocked && (
+            <span title={knownUnlocked ? "已解锁" : "频道已上锁"}>
+              <LockIcon
+                className={cn(
+                  "size-3.5 shrink-0",
+                  knownUnlocked
+                    ? "text-muted-foreground/50"
+                    : "text-amber-600 dark:text-amber-400",
+                )}
+              />
+            </span>
+          )}
           {/* 静音角标 */}
           {channelMuted && (
             <BellOffIcon className="size-3.5 shrink-0 text-muted-foreground/60" />
@@ -487,7 +618,7 @@ export function TextChannelItem({
         </NavLink>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-48">
-        <ContextMenuItem onClick={() => void navigate(href)}>
+        <ContextMenuItem onClick={() => openTextChannel()}>
           <HashIcon />
           打开频道
         </ContextMenuItem>
@@ -498,7 +629,7 @@ export function TextChannelItem({
             }
           >
             <SettingsIcon />
-            编辑频道
+            管理频道
           </ContextMenuItem>
         )}
         <ContextMenuItem
@@ -831,13 +962,31 @@ export function VoiceChannelItem({
   const count = participants?.length ?? 0
   const stageChannel = isStage ?? inferChannelMode(participants) === "STAGE"
   const href = `/channels/${guildId}/${channel.id}`
+  const isLocked = Boolean(channel.locked)
+  const knownUnlocked = useChannelUnlocksStore(
+    (s) => s.unlocked[channel.id] === true,
+  )
+  const voiceNote = channel.voice_note?.trim() ?? ""
+
+  const doJoin = () => {
+    void voiceConnection.join(guildId, channel.id)
+    void navigate(href)
+  }
 
   const join = () => {
     void import("~/lib/ensure-guild-account").then(async (m) => {
       const ok = await m.ensureGuildAccount(guildId)
       if (!ok) return
-      void voiceConnection.join(guildId, channel.id)
-      void navigate(href)
+      if (isLocked && !isCurrent) {
+        const unlocked = await useChannelUnlocksStore
+          .getState()
+          .ensureUnlocked(channel.id, true)
+        if (!unlocked) {
+          useChannelUnlocksStore.getState().requestUnlock(channel.id, doJoin)
+          return
+        }
+      }
+      doJoin()
     })
   }
 
@@ -848,7 +997,13 @@ export function VoiceChannelItem({
         <ContextMenuTrigger className="block w-full">
           <button
             type="button"
-            title={isAudited ? "加入语音（本频道正在被审计）" : "加入语音"}
+            title={
+              isLocked && !knownUnlocked
+                ? "频道已上锁，点击输入密码加入"
+                : isAudited
+                  ? "加入语音（本频道正在被审计）"
+                  : "加入语音"
+            }
             onClick={join}
             className={cn(
               "relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground/80 hover:bg-muted/70 hover:text-foreground",
@@ -862,6 +1017,16 @@ export function VoiceChannelItem({
               <Volume2Icon className="size-4 shrink-0 text-muted-foreground" />
             )}
             <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+            {isLocked && (
+              <LockIcon
+                className={cn(
+                  "size-3.5 shrink-0",
+                  knownUnlocked
+                    ? "text-muted-foreground/50"
+                    : "text-amber-600 dark:text-amber-400",
+                )}
+              />
+            )}
             {isAudited && (
               <span
                 title="本频道正在被音频审计"
@@ -890,7 +1055,7 @@ export function VoiceChannelItem({
               }
             >
               <SettingsIcon />
-              编辑频道
+              管理频道
             </ContextMenuItem>
           )}
           {isCurrent && (
@@ -923,8 +1088,17 @@ export function VoiceChannelItem({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {count > 0 && (
+      {/* 活动注释 + 在线成员：注释始终在成员列表最上方 */}
+      {(voiceNote || count > 0) && (
         <div className="flex flex-col">
+          {voiceNote ? (
+            <div
+              title={voiceNote}
+              className="truncate py-0.5 pr-1 pl-7 text-[11px] leading-tight text-sky-600/90 dark:text-sky-400/90"
+            >
+              {voiceNote}
+            </div>
+          ) : null}
           {participants?.map((state) => (
             <VoiceParticipantRow
               key={state.user_id}

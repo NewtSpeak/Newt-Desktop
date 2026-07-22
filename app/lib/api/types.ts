@@ -109,10 +109,16 @@ export type Channel = {
   user_limit?: number
   /** 文本慢速模式秒数 */
   rate_limit_per_user?: number
+  /** 慢速模式豁免角色；为空表示对所有成员生效 */
+  rate_limit_exempt_role_ids?: string[]
   /** 服务端当前模型未含 position 字段，预留：缺失时按 0 处理 */
   position?: number
   /** 所属分类（CATEGORY 的 id）；仅 TEXT/VOICE */
   parent_id?: string | null
+  /** 是否设置了访问密码（服务端不下发哈希） */
+  locked?: boolean
+  /** 语音频道活动注释（列表在线成员区顶部展示） */
+  voice_note?: string
   /** 频道最新消息雪花 ID（字符串，无消息为 "0"）；未读白点恢复用 */
   last_message_id?: string
   created_at?: string

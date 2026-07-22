@@ -136,6 +136,15 @@ export type CreateChannelInput = {
   parent_id?: string | null
   user_limit?: number
   rate_limit_per_user?: number
+  rate_limit_exempt_role_ids?: string[]
+  /** 访问密码（TEXT/VOICE 上锁） */
+  password?: string
+  /** 语音频道活动注释 */
+  voice_note?: string
+  /** 私密频道：@everyone 不可见 */
+  private?: boolean
+  /** 私密频道可见角色 id */
+  visible_role_ids?: string[]
 }
 
 /** 创建频道 / 分类（需 MANAGE_CHANNELS）；type=CATEGORY 时为创建类别 */
@@ -165,8 +174,15 @@ export type UpdateChannelInput = {
   topic?: string
   user_limit?: number
   rate_limit_per_user?: number
+  rate_limit_exempt_role_ids?: string[]
   /** null = 移出分类 */
   parent_id?: string | null
+  /** 设置/更换访问密码 */
+  password?: string
+  /** false = 关锁并清空密码 */
+  locked?: boolean
+  /** 语音频道活动注释；空串清空 */
+  voice_note?: string
 }
 
 export const updateChannel = (channelId: string, input: UpdateChannelInput) =>
@@ -178,6 +194,22 @@ export const updateChannel = (channelId: string, input: UpdateChannelInput) =>
 /** 删除频道 / 分类（需 MANAGE_CHANNELS） */
 export const deleteChannel = (channelId: string) =>
   api<void>(`/channels/${channelId}`, { method: "DELETE" })
+
+/** 输入密码解锁上锁频道 */
+export const unlockChannel = (channelId: string, password: string) =>
+  api<{ channel_id: string; unlocked: boolean; already?: boolean }>(
+    `/channels/${channelId}/unlock`,
+    {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    },
+  )
+
+/** 查询当前用户对该频道的解锁状态 */
+export const getChannelUnlockStatus = (channelId: string) =>
+  api<{ channel_id: string; locked: boolean; unlocked: boolean }>(
+    `/channels/${channelId}/unlock-status`,
+  )
 
 // ---------------------------------------------------------------------------
 // 频道权限覆盖（docs 04 FR-09–15；需 MANAGE_ROLES）

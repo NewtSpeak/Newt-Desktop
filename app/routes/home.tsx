@@ -1,11 +1,14 @@
-// Home：私信落地页 / 好友页（?tab=friends）。
+// Home：私信落地页 / 好友页（?tab=friends）/ 贴图库（?tab=stickers）。
 // 左侧私信侧栏由 ChannelList → DmSidebar 提供。
-// 好友主内容挂在 index 路由上，不依赖后加的 /friends 子路由，避免热更新未注册时 404。
+// 主内容挂在 index 路由上，不依赖后加子路由，避免热更新未注册时 404。
 
 import { MessageCircleIcon } from "lucide-react"
 import { useSearchParams } from "react-router"
 
+import { CreateStickerPackView } from "~/components/create-sticker-pack-view"
 import { FriendsView } from "~/components/friends-view"
+import { ManageStickerPacksView } from "~/components/manage-sticker-packs-view"
+import { StickerLibraryView } from "~/components/sticker-library-view"
 import { useGuildsStore } from "~/stores/guilds"
 import { useUIStore } from "~/stores/ui"
 
@@ -13,11 +16,27 @@ export default function HomePage() {
   const [searchParams] = useSearchParams()
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
   const hasGuilds = useGuildsStore((state) => state.guilds.length > 0)
-  const showFriends = searchParams.get("tab") === "friends"
+  const tab = searchParams.get("tab")
+  const showFriends = tab === "friends"
+  const showStickers = tab === "stickers"
+  const stickersView = searchParams.get("view")
+  const showCreatePack = showStickers && stickersView === "create"
+  const showManagePacks = showStickers && stickersView === "manage"
 
   // 好友页：复用 index 路由，URL 为 /?tab=friends
   if (showFriends) {
     return <FriendsView />
+  }
+
+  // 贴图库 / 创建向导 / 管理页
+  if (showCreatePack) {
+    return <CreateStickerPackView />
+  }
+  if (showManagePacks) {
+    return <ManageStickerPacksView />
+  }
+  if (showStickers) {
+    return <StickerLibraryView />
   }
 
   // 已选中真实服务器但尚未选频道时，提示从左侧选频道

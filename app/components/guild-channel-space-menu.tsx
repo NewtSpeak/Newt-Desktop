@@ -32,6 +32,7 @@ import {
 } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
+import { Switch } from "~/components/ui/switch"
 import {
   createChannel,
   createGuildInvite,
@@ -101,6 +102,10 @@ export function GuildChannelSpaceMenu({
   const [createDialog, setCreateDialog] = useState<CreateDialog>(null)
   const [name, setName] = useState("")
   const [pending, setPending] = useState(false)
+  const [privateChannel, setPrivateChannel] = useState(false)
+  const [lockChannel, setLockChannel] = useState(false)
+  const [channelPassword, setChannelPassword] = useState("")
+  const [visibleRoleIds, setVisibleRoleIds] = useState<string[]>([])
 
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteUrl, setInviteUrl] = useState("")
@@ -109,6 +114,10 @@ export function GuildChannelSpaceMenu({
 
   const openCreate = (dialog: Exclude<CreateDialog, null>) => {
     setName("")
+    setPrivateChannel(false)
+    setLockChannel(false)
+    setChannelPassword("")
+    setVisibleRoleIds([])
     setCreateDialog(dialog)
   }
 
@@ -117,6 +126,10 @@ export function GuildChannelSpaceMenu({
     const trimmed = name.trim()
     if (!trimmed) {
       toast.error("请输入名称")
+      return
+    }
+    if (lockChannel && createDialog.kind === "channel" && !channelPassword) {
+      toast.error("上锁时请设置访问密码")
       return
     }
     setPending(true)
@@ -133,6 +146,12 @@ export function GuildChannelSpaceMenu({
       const channel = await createChannel(guildId, {
         name: channelName,
         type,
+        ...(type !== "CATEGORY" && lockChannel
+          ? { password: channelPassword }
+          : {}),
+        ...(type !== "CATEGORY" && privateChannel
+          ? { private: true, visible_role_ids: visibleRoleIds }
+          : {}),
       })
       useChannelsStore.getState().upsertChannel(channel)
       toast.success(
@@ -243,7 +262,7 @@ export function GuildChannelSpaceMenu({
         open={createDialog !== null}
         onOpenChange={(open) => !open && setCreateDialog(null)}
       >
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{dialogTitle}</DialogTitle>
             <DialogDescription>
@@ -254,28 +273,119 @@ export function GuildChannelSpaceMenu({
                   : "文字频道用于消息讨论。"}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="new-channel-name">名称</Label>
-            <Input
-              id="new-channel-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={
-                createDialog?.kind === "category"
-                  ? "例如：综合"
-                  : createDialog?.channelType === "VOICE"
-                    ? "例如：大厅"
-                    : "例如：general"
-              }
-              maxLength={100}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  void submitCreate()
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="new-channel-name">名称</Label>
+              <Input
+                id="new-channel-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={
+                  createDialog?.kind === "category"
+                    ? "例如：综合"
+                    : createDialog?.channelType === "VOICE"
+                      ? "例如：大厅"
+                      : "例如：general"
                 }
-              }}
-            />
+                maxLength={100}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    void submitCreate()
+                  }
+                }}
+              />
+            </div>
+            {createDialog?.kind === "channel" && (
+              <>
+                <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                  <div>
+                    <p className="text-sm">仅特定角色可见</p>
+                    <p className="text-xs text-muted-foreground">
+                      开启后仅勾选的角色能看到此频道
+                    </p>
+                  </div>
+                  <Switch
+                    checked={privateChannel}
+                    onCheckedChange={setPrivateChannel}
+                  />
+                </label>
+                {privateChannel && (
+                  <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border p-2">
+                    {(roles ?? [])
+                      .filter((r) => !r.is_everyone)
+                      .sort((a, b) => b.position - a.position)
+                      .map((role) => {
+                        const checked = visibleRoleIds.includes(role.id)
+                        return (
+                          <label
+                            key={role.id}
+                            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+                          >
+                            <input
+                              type="checkbox"
+                              className="size-3.5 accent-primary"
+                              checked={checked}
+                              onChange={() => {
+                                setVisibleRoleIds((prev) =>
+                                  checked
+                                    ? prev.filter((id) => id !== role.id)
+                                    : [...prev, role.id],
+                                )
+                              }}
+                            />
+                            <span
+                              className="truncate"
+                              style={
+                                role.color
+                                  ? { color: role.color }
+                                  : undefined
+                              }
+                            >
+                              {role.name}
+                            </span>
+                          </label>
+                        )
+                      })}
+                    {(roles ?? []).filter((r) => !r.is_everyone).length ===
+                      0 && (
+                      <p className="px-2 py-1 text-xs text-muted-foreground">
+                        暂无其它角色，可稍后在「管理频道 → 权限」中配置
+                      </p>
+                    )}
+                  </div>
+                )}
+                <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                  <div>
+                    <p className="text-sm">频道上锁</p>
+                    <p className="text-xs text-muted-foreground">
+                      需要密码才能访问（文字与语音均生效）
+                    </p>
+                  </div>
+                  <Switch
+                    checked={lockChannel}
+                    onCheckedChange={(on) => {
+                      setLockChannel(on)
+                      if (!on) setChannelPassword("")
+                    }}
+                  />
+                </label>
+                {lockChannel && (
+                  <div className="space-y-2">
+                    <Label htmlFor="new-channel-password">访问密码</Label>
+                    <Input
+                      id="new-channel-password"
+                      type="password"
+                      value={channelPassword}
+                      maxLength={64}
+                      placeholder="1–64 个字符"
+                      onChange={(e) => setChannelPassword(e.target.value)}
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button
