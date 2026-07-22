@@ -12,11 +12,14 @@ import {
   DoorOpenIcon,
   HashIcon,
   LogOutIcon,
+  SettingsIcon,
+  SlidersHorizontalIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { GuildAvatar } from "~/components/guild-avatar"
 import { NotifyOverrideMenuItems } from "~/components/notify-override-menu"
+import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import {
   Dialog,
   DialogContent,
@@ -34,8 +37,16 @@ import {
   ContextMenuTrigger,
 } from "~/components/ui/context-menu"
 import { SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar"
+import { canOpenGuildAdmin } from "~/components/guild-settings/guild-settings-panel"
 import { leaveGuild } from "~/lib/api/guilds"
 import { ApiError } from "~/lib/api/http"
+import {
+  nameInitials,
+  resolveProfileAssetUrl,
+  userDisplayName,
+} from "~/lib/user-display"
+import { useAuthStore } from "~/stores/auth"
+import { memberGuildPermissions } from "~/stores/roles"
 import { copyText } from "~/lib/clipboard"
 import { cn } from "~/lib/utils"
 import { useChannelsStore } from "~/stores/channels"
@@ -50,6 +61,43 @@ import { useRolesStore } from "~/stores/roles"
 import { isOverrideMuted, useSettingsStore } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
 
+/** 多账号时服务器图标左下角显示归属账号头像，避免用错身份 */
+function ServerAccountBadge({
+  accountId,
+}: {
+  accountId: string | undefined
+}) {
+  const accounts = useAuthStore((s) => s.accounts)
+  if (accounts.length < 2 || !accountId) return null
+  const account = accounts.find((a) => a.id === accountId)
+  if (!account) return null
+  const display = userDisplayName(account.user)
+  const avatarSrc = resolveProfileAssetUrl(
+    account.user.avatar_url,
+    account.serverBaseUrl,
+  )
+  return (
+    <span
+      title={`以 ${display}（@${account.user.username}）身份访问`}
+      aria-label={`账号 ${display}`}
+      className="pointer-events-none absolute -bottom-0.5 -left-0.5 z-20"
+    >
+      <Avatar className="size-3.5 rounded-full shadow-sm ring-2 ring-sidebar after:border-0">
+        {avatarSrc ? (
+          <AvatarImage
+            src={avatarSrc}
+            alt={display}
+            className="rounded-full object-cover"
+          />
+        ) : null}
+        <AvatarFallback className="rounded-full text-[7px] font-semibold leading-none">
+          {nameInitials(display)}
+        </AvatarFallback>
+      </Avatar>
+    </span>
+  )
+}
+
 export function guildInitials(name: string): string {
   return name.trim().slice(0, 2) || "?"
 }
@@ -57,11 +105,21 @@ export function guildInitials(name: string): string {
 // formatUnreadBadge 已统一到 read-states（频道列表与服务器栏共用 9999+ 规则）
 export { formatUnreadBadge } from "~/stores/read-states"
 
-export function ServerRailItem({ guildId }: { guildId: string }) {
+export function ServerRailItem({
+  guildId,
+  accountId,
+}: {
+  guildId: string
+  /** 多账号并存时用于精确定位服务器条目 */
+  accountId?: string
+}) {
   const navigate = useNavigate()
   // 直接订阅 store 中的该服，确保 GUILD_UPDATE 改 icon_url 后即时重渲染
   const guild = useGuildsStore((state) =>
-    state.guilds.find((item) => item.id === guildId)
+    state.guilds.find((item) =>
+      item.id === guildId &&
+      (accountId ? item.account_id === accountId : true),
+    ),
   )
   const selected = useUIStore((state) => state.selectedGuildId === guildId)
   const override = useSettingsStore((state) => state.notifications.perGuild[guildId])
@@ -98,12 +156,27 @@ export function ServerRailItem({ guildId }: { guildId: string }) {
   const [leaveOpen, setLeaveOpen] = useState(false)
   const [leavePending, setLeavePending] = useState(false)
 
+  // 服管入口可见性（docs 18 FR-02：任一管理向权限；无权限完全隐藏不灰置）
+  const selfId = useAuthStore((state) => state.user?.id)
+  const selfMember = useMembersStore((state) =>
+    state.byGuild[guildId]?.find((m) => m.user_id === selfId),
+  )
+  const roles = useRolesStore((state) => state.byGuild[guildId])
+  const canOpenAdmin = canOpenGuildAdmin(
+    memberGuildPermissions(selfMember, roles),
+    selfMember?.is_owner === true,
+  )
+
   if (!guild) return null
 
   const handleSelect = () => {
     if (selected) return
-    useUIStore.getState().selectGuild(guild.id)
-    navigate("/")
+    void import("~/lib/ensure-guild-account").then(async (m) => {
+      const ok = await m.ensureGuildAccount(guild.id)
+      if (!ok) return
+      useUIStore.getState().selectGuild(guild.id)
+      navigate("/")
+    })
   }
 
   const hasIcon = Boolean(guild.icon_url?.trim())
@@ -111,11 +184,20 @@ export function ServerRailItem({ guildId }: { guildId: string }) {
   const doLeave = async () => {
     setLeavePending(true)
     try {
+      const ok = await import("~/lib/ensure-guild-account").then((m) =>
+        m.ensureGuildAccount(guild.id),
+      )
+      if (!ok) {
+        setLeavePending(false)
+        return
+      }
       await leaveGuild(guild.id)
-      useGuildsStore.getState().removeGuild(guild.id)
+      useGuildsStore.getState().removeGuild(guild.id, guild.account_id)
       useChannelsStore.getState().removeGuild(guild.id)
       useMembersStore.getState().removeGuild(guild.id)
       useRolesStore.getState().removeGuild(guild.id)
+      // GPS / 通知覆盖 / 排序清理（docs 17 FR-30）
+      useSettingsStore.getState().clearGuildPersonal(guild.id)
       if (useUIStore.getState().selectedGuildId === guild.id) {
         useUIStore.getState().selectGuild(null)
         navigate("/", { replace: true })
@@ -209,6 +291,22 @@ export function ServerRailItem({ guildId }: { guildId: string }) {
             }
           />
           <ContextMenuSeparator />
+          {/* 个人 vs 管理入口严格分离（docs 17 FR-04 / docs 18 FR-03） */}
+          <ContextMenuItem
+            onClick={() => useUIStore.getState().openGuildPersonal(guild.id)}
+          >
+            <SlidersHorizontalIcon />
+            服务器个人设置
+          </ContextMenuItem>
+          {canOpenAdmin && (
+            <ContextMenuItem
+              onClick={() => useUIStore.getState().openGuildAdmin(guild.id)}
+            >
+              <SettingsIcon />
+              服务器设置
+            </ContextMenuItem>
+          )}
+          <ContextMenuSeparator />
           <ContextMenuItem
             variant="destructive"
             onClick={() => setLeaveOpen(true)}
@@ -218,7 +316,9 @@ export function ServerRailItem({ guildId }: { guildId: string }) {
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {/* 头像右下红色未读圆形角标（数字封顶 9999+） */}
+      {/* 多账号：归属账号头像（左下角） */}
+      <ServerAccountBadge accountId={guild.account_id ?? accountId} />
+      {/* 未读圆形角标（右下；数字封顶 9999+） */}
       {showBadge && (
         <span
           aria-hidden

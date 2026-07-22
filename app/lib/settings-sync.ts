@@ -12,9 +12,20 @@ import { useSettingsStore } from "~/stores/settings"
 
 const PUT_DEBOUNCE_MS = 1_500
 
-/** 参与服务端同步的设置域 */
-const SYNC_DOMAINS = ["voice", "appearance", "notifications", "presence"] as const
+/** 参与服务端同步的设置域（docs 17 §4.1：新增 guildPreferences / guildOrder） */
+const SYNC_DOMAINS = [
+  "voice",
+  "appearance",
+  "notifications",
+  "presence",
+  "privacy",
+  "guildPreferences",
+  "guildOrder",
+] as const
 type SyncDomain = (typeof SYNC_DOMAINS)[number]
+
+/** 数组型域：远端整体替换而非对象浅合并 */
+const ARRAY_DOMAINS: ReadonlySet<SyncDomain> = new Set(["guildOrder"])
 
 function syncablePayload(): Record<string, unknown> {
   const state = useSettingsStore.getState()
@@ -35,7 +46,12 @@ export function applyRemoteSettings(doc: Record<string, unknown>) {
   const patch: Partial<Record<SyncDomain, unknown>> = {}
   for (const domain of SYNC_DOMAINS) {
     const incoming = doc[domain]
-    if (incoming && typeof incoming === "object" && !Array.isArray(incoming)) {
+    if (incoming == null || typeof incoming !== "object") continue
+    if (ARRAY_DOMAINS.has(domain)) {
+      if (Array.isArray(incoming)) patch[domain] = incoming
+      continue
+    }
+    if (!Array.isArray(incoming)) {
       patch[domain] = { ...state[domain], ...(incoming as Record<string, unknown>) }
     }
   }

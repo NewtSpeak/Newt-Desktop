@@ -45,7 +45,14 @@ import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
 import { useMembersStore } from "~/stores/members"
+import { useReadStatesStore } from "~/stores/read-states"
 import { memberGuildPermissions, useRolesStore } from "~/stores/roles"
+import { isOverrideMuted, useSettingsStore } from "~/stores/settings"
+import { useUIStore } from "~/stores/ui"
+import {
+  filterChannelsForViewAs,
+  useViewAsStore,
+} from "~/stores/view-as"
 
 const EMPTY_CHANNELS: Channel[] = []
 const EMPTY_IDS: string[] = []
@@ -122,7 +129,7 @@ function buildDisplayTree(
 }
 
 export function SortableChannelTree({ guildId }: { guildId: string }) {
-  const channels = useChannelsStore(
+  const rawChannels = useChannelsStore(
     (s) => s.byGuild[guildId] ?? EMPTY_CHANNELS,
   )
   const selfId = useAuthStore((s) => s.user?.id)
@@ -131,14 +138,28 @@ export function SortableChannelTree({ guildId }: { guildId: string }) {
     s.byGuild[guildId]?.find((m) => m.user_id === selfId),
   )
   const roles = useRolesStore((s) => s.byGuild[guildId])
+  const viewAsSession = useViewAsStore((s) => s.session)
+  const viewAsCanView = useViewAsStore((s) => s.canViewChannel)
+
+  // 「以身份查看」：按目标角色/成员过滤可见频道（docs 04 US-07）
+  const channels = useMemo(() => {
+    if (!viewAsSession || viewAsSession.guildId !== guildId) {
+      return rawChannels
+    }
+    return filterChannelsForViewAs(rawChannels, roles, (id) =>
+      viewAsCanView(id, roles),
+    )
+  }, [rawChannels, viewAsSession, guildId, roles, viewAsCanView])
 
   const canReorder = useMemo(() => {
+    // 以身份查看时禁止拖拽（避免在预览态改结构）
+    if (viewAsSession?.guildId === guildId) return false
     if (systemAdmin || self?.is_owner) return true
     return hasPermission(
       memberGuildPermissions(self, roles),
       Permissions.MANAGE_CHANNELS,
     )
-  }, [systemAdmin, self, roles])
+  }, [systemAdmin, self, roles, viewAsSession, guildId])
 
   const tree = useMemo(() => buildChannelTree(channels), [channels])
   const baseContainers = useMemo(() => treeToContainers(tree), [tree])
@@ -153,8 +174,30 @@ export function SortableChannelTree({ guildId }: { guildId: string }) {
   const [dragOverride, setDragOverride] = useState<Containers | null>(null)
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null)
   const [saving, setSaving] = useState(false)
-  /** 折叠的类别 id 集合（本地 UI 状态，不落库） */
-  const [collapsedIds, setCollapsedIds] = useState<Record<string, boolean>>({})
+  // 折叠状态持久化到 GPS（docs 17 FR-20：按服记忆、跨端同步）
+  const collapsedList = useSettingsStore(
+    (s) => s.guildPreferences[guildId]?.collapsedCategoryIds,
+  )
+  const collapsedIds = useMemo(
+    () => new Set(collapsedList ?? []),
+    [collapsedList],
+  )
+  // 隐藏已静音频道（docs 17 FR-21）：当前选中与有 @ 的仍显示
+  const hideMuted = useSettingsStore(
+    (s) => s.guildPreferences[guildId]?.hideMutedChannels === true,
+  )
+  const perChannelOverride = useSettingsStore((s) => s.notifications.perChannel)
+  const selectedChannelId = useUIStore((s) => s.selectedChannelId)
+  const mentionsByChannel = useReadStatesStore((s) => s.mentionsByChannel)
+  const shouldHideChannel = useCallback(
+    (channelId: string) => {
+      if (!hideMuted) return false
+      if (channelId === selectedChannelId) return false
+      if ((mentionsByChannel[channelId] ?? 0) > 0) return false
+      return isOverrideMuted(perChannelOverride[channelId])
+    },
+    [hideMuted, selectedChannelId, mentionsByChannel, perChannelOverride],
+  )
 
   const containers: Containers = dragOverride ?? baseContainers
   const containersRef = useRef(containers)
@@ -355,7 +398,7 @@ export function SortableChannelTree({ guildId }: { guildId: string }) {
             if (node.kind === "category") {
               const childIds =
                 containers.childrenByCategory[node.channel.id] ?? EMPTY_IDS
-              const collapsed = Boolean(collapsedIds[node.channel.id])
+              const collapsed = collapsedIds.has(node.channel.id)
               return (
                 <div
                   key={node.channel.id}
@@ -369,10 +412,9 @@ export function SortableChannelTree({ guildId }: { guildId: string }) {
                       collapsed={collapsed}
                       canManageChannels={canReorder}
                       onToggleCollapse={() =>
-                        setCollapsedIds((prev) => ({
-                          ...prev,
-                          [node.channel.id]: !prev[node.channel.id],
-                        }))
+                        useSettingsStore
+                          .getState()
+                          .toggleCategoryCollapsed(guildId, node.channel.id)
                       }
                     />
                   </SortableShell>
@@ -382,7 +424,9 @@ export function SortableChannelTree({ guildId }: { guildId: string }) {
                       strategy={verticalListSortingStrategy}
                     >
                       <div className="flex w-full flex-col gap-0.5">
-                        {node.children.map((channel) => (
+                        {node.children
+                          .filter((channel) => !shouldHideChannel(channel.id))
+                          .map((channel) => (
                           <SortableShell
                             key={channel.id}
                             id={channel.id}
@@ -407,6 +451,7 @@ export function SortableChannelTree({ guildId }: { guildId: string }) {
                 </div>
               )
             }
+            if (shouldHideChannel(node.channel.id)) return null
             return (
               <SortableShell
                 key={node.channel.id}

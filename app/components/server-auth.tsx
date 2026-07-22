@@ -8,6 +8,10 @@
 import * as React from "react"
 import { toast } from "sonner"
 
+import {
+  notifySavedCredentialsChanged,
+  SavedCredentialsPanel,
+} from "~/components/saved-credentials-panel"
 import { Button } from "~/components/ui/button"
 import {
   Card,
@@ -16,11 +20,14 @@ import {
   CardHeader,
   CardTitle,
 } from "~/components/ui/card"
+import { Checkbox } from "~/components/ui/checkbox"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import { joinInvite } from "~/lib/api/guilds"
 import { ApiError } from "~/lib/api/http"
+import { upsertSavedCredential } from "~/lib/saved-credentials"
 import { persistServerConnection } from "~/lib/server-connection"
+import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
 import {
@@ -39,7 +46,7 @@ function validateSignup(
   username: string,
   email: string,
   password: string,
-  confirm: string
+  confirm: string,
 ): string | null {
   if (username.length < 2 || username.length > 32)
     return "用户名长度需为 2-32 个字符"
@@ -95,6 +102,12 @@ function joinGuildErrorMessage(error: unknown): string {
   return "未能自动加入社区，可稍后在主界面凭邀请码加入"
 }
 
+/** 登录/注册卡片：灰色底、无阴影、无描边 */
+const authCardClassName = cn(
+  "w-full max-w-sm border-0 shadow-none ring-0",
+  "bg-zinc-100 text-foreground dark:bg-zinc-800/90 dark:text-zinc-50",
+)
+
 // ---------------------------------------------------------------------------
 // 视图
 // ---------------------------------------------------------------------------
@@ -102,7 +115,7 @@ function joinGuildErrorMessage(error: unknown): string {
 export function ServerAuthView({ pending }: { pending: PendingServerAuth }) {
   // 带邀请进来默认走注册；重登（无邀请）只提供登录
   const [mode, setMode] = React.useState<"signup" | "login">(
-    pending.invite ? "signup" : "login"
+    pending.invite ? "signup" : "login",
   )
 
   const guildInvite =
@@ -117,6 +130,30 @@ export function ServerAuthView({ pending }: { pending: PendingServerAuth }) {
   }, [pending.serverBaseUrl])
 
   const finish = async () => {
+    // 先持久化服务器名，再补全账号记录里的 serverName
+    persistServerConnection(pending.serverName)
+    const accountId = useAuthStore.getState().activeAccountId
+    const user = useAuthStore.getState().user
+    if (accountId && user) {
+      const { registerAccountSession } = await import("~/lib/api/http")
+      registerAccountSession({
+        accountId,
+        user,
+        serverBaseUrl: pending.serverBaseUrl,
+        serverName: pending.serverName,
+      })
+      useAuthStore.setState({
+        accounts: useAuthStore.getState().accounts.map((a) =>
+          a.id === accountId
+            ? {
+                ...a,
+                serverName: pending.serverName,
+                serverBaseUrl: pending.serverBaseUrl,
+              }
+            : a,
+        ),
+      })
+    }
     // 社区邀请：拿到凭据后自动加入该社区（已是成员时接口幂等返回 200）；
     // 加入失败不阻塞进入主界面，仅 toast 提示
     if (guildInvite) {
@@ -129,18 +166,19 @@ export function ServerAuthView({ pending }: { pending: PendingServerAuth }) {
         toast.error(joinGuildErrorMessage(caught))
       }
     }
-    persistServerConnection(pending.serverName)
     useConnectStore.getState().reset()
   }
 
   return (
     <div className="flex flex-1 items-center justify-center p-6">
-      <Card className="w-full max-w-sm">
+      <Card className={authCardClassName}>
         <CardHeader>
           <CardTitle>
-            {guildInvite ? `加入「${guildInvite.guildName}」` : pending.serverName}
+            {guildInvite
+              ? `加入「${guildInvite.guildName}」`
+              : pending.serverName}
           </CardTitle>
-          <CardDescription>
+          <CardDescription className="text-muted-foreground dark:text-zinc-400">
             {guildInvite
               ? `${pending.serverName} · ${serverHost} · ${
                   mode === "signup"
@@ -158,11 +196,15 @@ export function ServerAuthView({ pending }: { pending: PendingServerAuth }) {
           {mode === "signup" ? (
             <SignupForm
               invite={pending.invite}
+              serverBaseUrl={pending.serverBaseUrl}
+              serverName={pending.serverName}
               onSuccess={finish}
               onSwitchToLogin={() => setMode("login")}
             />
           ) : (
             <LoginForm
+              serverBaseUrl={pending.serverBaseUrl}
+              serverName={pending.serverName}
               onSuccess={finish}
               onSwitchToSignup={
                 pending.invite ? () => setMode("signup") : undefined
@@ -185,10 +227,14 @@ export function ServerAuthView({ pending }: { pending: PendingServerAuth }) {
 
 function SignupForm({
   invite,
+  serverBaseUrl,
+  serverName,
   onSuccess,
   onSwitchToLogin,
 }: {
   invite: PendingInvite | null
+  serverBaseUrl: string
+  serverName: string
   onSuccess: () => void
   onSwitchToLogin: () => void
 }) {
@@ -197,6 +243,7 @@ function SignupForm({
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
   const [confirm, setConfirm] = React.useState("")
+  const [remember, setRemember] = React.useState(true)
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -209,7 +256,7 @@ function SignupForm({
       trimmedUsername,
       trimmedEmail,
       password,
-      confirm
+      confirm,
     )
     if (invalid) {
       setError(invalid)
@@ -225,6 +272,15 @@ function SignupForm({
         invite_code: invite?.kind === "registration" ? invite.code : undefined,
         guild_invite_code: invite?.kind === "guild" ? invite.code : undefined,
       })
+      if (remember) {
+        await upsertSavedCredential({
+          serverBaseUrl,
+          serverName,
+          identifier: trimmedUsername,
+          password,
+        }).catch(() => undefined)
+        notifySavedCredentialsChanged()
+      }
       onSuccess()
     } catch (caught) {
       setError(signupErrorMessage(caught))
@@ -244,6 +300,7 @@ function SignupForm({
           value={username}
           onChange={(event) => setUsername(event.target.value)}
           disabled={submitting}
+          className="border-0 bg-background/70 shadow-none dark:bg-zinc-900/50"
         />
       </div>
       <div className="flex flex-col gap-2">
@@ -255,6 +312,7 @@ function SignupForm({
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           disabled={submitting}
+          className="border-0 bg-background/70 shadow-none dark:bg-zinc-900/50"
         />
       </div>
       <div className="flex flex-col gap-2">
@@ -267,6 +325,7 @@ function SignupForm({
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           disabled={submitting}
+          className="border-0 bg-background/70 shadow-none dark:bg-zinc-900/50"
         />
       </div>
       <div className="flex flex-col gap-2">
@@ -278,8 +337,17 @@ function SignupForm({
           value={confirm}
           onChange={(event) => setConfirm(event.target.value)}
           disabled={submitting}
+          className="border-0 bg-background/70 shadow-none dark:bg-zinc-900/50"
         />
       </div>
+      <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox
+          checked={remember}
+          onCheckedChange={(checked) => setRemember(checked)}
+          disabled={submitting}
+        />
+        记住账号密码（含服务器）
+      </label>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Button type="submit" disabled={submitting}>
         {submitting ? "注册中…" : "注册"}
@@ -299,15 +367,20 @@ function SignupForm({
 }
 
 function LoginForm({
+  serverBaseUrl,
+  serverName,
   onSuccess,
   onSwitchToSignup,
 }: {
+  serverBaseUrl: string
+  serverName: string
   onSuccess: () => void
   onSwitchToSignup?: () => void
 }) {
   const login = useAuthStore((state) => state.login)
   const [identifier, setIdentifier] = React.useState("")
   const [password, setPassword] = React.useState("")
+  const [remember, setRemember] = React.useState(true)
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [cooldown, setCooldown] = React.useState(0)
@@ -317,10 +390,14 @@ function LoginForm({
     if (cooldown <= 0) return
     const timer = setInterval(
       () => setCooldown((value) => Math.max(0, value - 1)),
-      1_000
+      1_000,
     )
     return () => clearInterval(timer)
   }, [cooldown > 0])
+
+  const handleQuickLoginSuccess = React.useCallback(async () => {
+    await onSuccess()
+  }, [onSuccess])
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -333,6 +410,15 @@ function LoginForm({
     setError(null)
     try {
       await login(identifier.trim(), password)
+      if (remember) {
+        await upsertSavedCredential({
+          serverBaseUrl,
+          serverName,
+          identifier: identifier.trim(),
+          password,
+        }).catch(() => undefined)
+        notifySavedCredentialsChanged()
+      }
       onSuccess()
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "LOGIN_RATE_LIMITED") {
@@ -347,6 +433,18 @@ function LoginForm({
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+      {/* 本服务器已记住账号：点击即登录（含服务器信息） */}
+      <SavedCredentialsPanel
+        serverBaseUrl={serverBaseUrl}
+        action="login"
+        disabled={submitting || cooldown > 0}
+        onLoginSuccess={handleQuickLoginSuccess}
+      />
+      <div className="relative py-1 text-center text-xs text-muted-foreground">
+        <span className="relative z-10 bg-zinc-100 px-2 dark:bg-zinc-800/90">
+          或手动登录
+        </span>
+      </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="auth-identifier">用户名或邮箱</Label>
         <Input
@@ -356,6 +454,7 @@ function LoginForm({
           value={identifier}
           onChange={(event) => setIdentifier(event.target.value)}
           disabled={submitting}
+          className="border-0 bg-background/70 shadow-none dark:bg-zinc-900/50"
         />
       </div>
       <div className="flex flex-col gap-2">
@@ -367,8 +466,17 @@ function LoginForm({
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           disabled={submitting}
+          className="border-0 bg-background/70 shadow-none dark:bg-zinc-900/50"
         />
       </div>
+      <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox
+          checked={remember}
+          onCheckedChange={(checked) => setRemember(checked)}
+          disabled={submitting}
+        />
+        记住账号密码（含服务器）
+      </label>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {cooldown > 0 && (
         <p className="text-sm text-destructive">

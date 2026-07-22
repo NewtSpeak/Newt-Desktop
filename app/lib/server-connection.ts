@@ -42,11 +42,23 @@ export function restoreSavedServerBaseUrl() {
   runtimeBaseUrl = readSaved()?.baseUrl ?? null
 }
 
-/** 登录/注册成功后：持久化当前运行时基址与服务器名 */
+/** 登录/注册成功后：持久化当前运行时基址与服务器名（默认服务器，供欢迎页重登） */
 export function persistServerConnection(name: string | null) {
   if (typeof window === "undefined") return
   const baseUrl = getServerBaseUrl()
   if (!baseUrl) return
+  localStorage.setItem(SERVER_BASE_URL_KEY, baseUrl)
+  if (name) localStorage.setItem(SERVER_NAME_KEY, name)
+  else localStorage.removeItem(SERVER_NAME_KEY)
+}
+
+/**
+ * 切换激活账号时同步运行时基址（并更新「默认服务器」以便欢迎页重登）。
+ * 不改动已保存账号列表。
+ */
+export function applyAccountServer(baseUrl: string, name: string | null) {
+  runtimeBaseUrl = baseUrl
+  if (typeof window === "undefined") return
   localStorage.setItem(SERVER_BASE_URL_KEY, baseUrl)
   if (name) localStorage.setItem(SERVER_NAME_KEY, name)
   else localStorage.removeItem(SERVER_NAME_KEY)

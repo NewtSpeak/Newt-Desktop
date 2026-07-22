@@ -101,3 +101,50 @@ export const patchMySettings = (patch: UserSettingsDoc) =>
     method: "PATCH",
     body: JSON.stringify(patch),
   })
+
+// ---------------------------------------------------------------------------
+// 账号安全（docs 01 FR-27/28、docs 16 FR-04）
+// ---------------------------------------------------------------------------
+
+/** 修改密码；成功后吊销其他会话，当前会话保留 */
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  api<void>("/users/@me/password", {
+    method: "PATCH",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  })
+
+export type LoginSession = {
+  id: string
+  audience: string
+  created_at: string
+  last_used_at: string
+  expires_at: string
+  current: boolean
+  device_name?: string
+  platform?: string
+  ip_address?: string
+}
+
+/** 活跃登录会话列表 */
+export const listSessions = () =>
+  api<{ sessions?: LoginSession[] }>("/users/@me/sessions").then(
+    (raw) => raw.sessions ?? [],
+  )
+
+/** 吊销除当前外的全部会话 */
+export const revokeOtherSessions = () =>
+  api<{ revoked: number }>("/users/@me/sessions", { method: "DELETE" })
+
+/** 吊销指定会话（可含当前会话 = 登出） */
+export const revokeSession = (sessionId: string) =>
+  api<void>(`/users/@me/sessions/${sessionId}`, { method: "DELETE" })
+
+/** 删除账号（密码确认；仍拥有服务器时 409 OWNS_GUILDS） */
+export const deleteAccount = (password: string) =>
+  api<void>("/users/@me", {
+    method: "DELETE",
+    body: JSON.stringify({ password }),
+  })

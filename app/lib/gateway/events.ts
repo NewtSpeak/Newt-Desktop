@@ -49,6 +49,12 @@ export const GatewayEvents = {
 
   PermissionsUpdate: "PERMISSIONS_UPDATE",
 
+  RelationshipAdd: "RELATIONSHIP_ADD",
+  RelationshipUpdate: "RELATIONSHIP_UPDATE",
+  RelationshipRemove: "RELATIONSHIP_REMOVE",
+  NotificationCreate: "NOTIFICATION_CREATE",
+  NotificationDelete: "NOTIFICATION_DELETE",
+
   // 结构事件（服务器 / 频道 / 成员 / 角色，docs 14 §3.2）
   GuildCreate: "GUILD_CREATE",
   GuildUpdate: "GUILD_UPDATE",
@@ -68,6 +74,18 @@ export const GatewayEvents = {
   PresenceUpdate: "PRESENCE_UPDATE",
   UserSettingsUpdate: "USER_SETTINGS_UPDATE",
   UserUpdate: "USER_UPDATE",
+
+  // 贴图与表情包（docs 17）
+  StickerPackCreate: "STICKER_PACK_CREATE",
+  StickerPackUpdate: "STICKER_PACK_UPDATE",
+  StickerPackDelete: "STICKER_PACK_DELETE",
+  StickerPackRestore: "STICKER_PACK_RESTORE",
+  StickerItemCreate: "STICKER_ITEM_CREATE",
+  StickerItemUpdate: "STICKER_ITEM_UPDATE",
+  StickerItemDelete: "STICKER_ITEM_DELETE",
+  StickerLibraryUpdate: "STICKER_LIBRARY_UPDATE",
+  GuildStickerPackBanAdd: "GUILD_STICKER_PACK_BAN_ADD",
+  GuildStickerPackBanRemove: "GUILD_STICKER_PACK_BAN_REMOVE",
 } as const
 
 export type GatewayEventName =
@@ -233,6 +251,8 @@ export type MemberSnapshot = {
   guild_id: string
   user_id: string
   nickname?: string
+  /** 用户名样式来源角色偏好 */
+  name_style_role_id?: string | null
   created_at?: string
   role_ids?: string[]
 }
@@ -399,6 +419,34 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.PresenceUpdate]: PresenceUpdatePayload
   [GatewayEvents.UserSettingsUpdate]: UserSettingsUpdatePayload
   [GatewayEvents.UserUpdate]: UserUpdatePayload
+  [GatewayEvents.RelationshipAdd]: RelationshipEventPayload
+  [GatewayEvents.RelationshipUpdate]: RelationshipEventPayload
+  [GatewayEvents.RelationshipRemove]: RelationshipEventPayload
+  [GatewayEvents.NotificationCreate]: NotificationEventPayload
+  [GatewayEvents.NotificationDelete]: NotificationEventPayload
+}
+
+export type RelationshipEventPayload = {
+  id: string
+  user_id: string
+  target_user_id: string
+  type: string
+  nickname?: string
+  user?: {
+    id: string
+    username: string
+    display_name?: string
+    avatar_url?: string
+  }
+  event_at?: string
+}
+
+export type NotificationEventPayload = {
+  id: string
+  user_id: string
+  type: string
+  payload?: Record<string, unknown>
+  event_at?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -434,13 +482,15 @@ export type PresenceEntry = {
   custom_text?: string
 }
 
-/** READY read_states 条目（没有记录的频道省略） */
+/** READY read_states 条目（服务端为每个可见频道下发精确未读数） */
 export type ReadyReadState = {
   channel_id: string
   last_read_message_id: string
   mention_count: number
   /** 该频道当前最新消息 ID（字符串雪花，无消息为 "0"） */
   last_message_id?: string
+  /** 服务端按 last_read_message_id 聚合出的普通未读消息数 */
+  unread_count?: number
 }
 
 /** READY guilds 数组元素（snapshot.Guild：按可见性过滤的全量快照） */
@@ -462,6 +512,11 @@ export type ReadyData = {
   guilds?: ReadyGuild[]
   presences?: PresenceEntry[]
   read_states?: ReadyReadState[]
+  /** Server-16 社交扩展 */
+  relationships?: import("~/lib/api/social").Relationship[]
+  privacy?: import("~/lib/api/social").PrivacySettings
+  private_channels?: import("~/lib/api/social").PrivateChannel[]
+  notification_unread_count?: number
 }
 
 /** 应用层关闭码 */

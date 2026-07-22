@@ -6,6 +6,8 @@ import {
   FolderPlusIcon,
   HashIcon,
   LinkIcon,
+  SettingsIcon,
+  SlidersHorizontalIcon,
   Volume2Icon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -39,6 +41,7 @@ import type { ChannelType } from "~/lib/api/types"
 import { copyText } from "~/lib/clipboard"
 import { hasPermission, Permissions } from "~/lib/permissions"
 import { getServerBaseUrl } from "~/lib/server-connection"
+import { canOpenGuildAdmin } from "~/components/guild-settings/guild-settings-panel"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
@@ -47,6 +50,7 @@ import {
   memberGuildPermissions,
   useRolesStore,
 } from "~/stores/roles"
+import { useUIStore } from "~/stores/ui"
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.message) return error.message
@@ -87,10 +91,12 @@ export function GuildChannelSpaceMenu({
         owner || hasPermission(perms, Permissions.MANAGE_CHANNELS),
       createInvite:
         owner || hasPermission(perms, Permissions.CREATE_INSTANT_INVITE),
+      canOpenAdmin: canOpenGuildAdmin(perms, Boolean(self?.is_owner)) || Boolean(systemAdmin),
     }
   }, [self, roles, systemAdmin])
 
-  const canOpenMenu = caps.manageChannels || caps.createInvite
+  // 个人设置入口任意成员可见（docs 17 FR-05），菜单恒可打开
+  const canOpenMenu = true
 
   const [createDialog, setCreateDialog] = useState<CreateDialog>(null)
   const [name, setName] = useState("")
@@ -211,6 +217,22 @@ export function GuildChannelSpaceMenu({
             >
               <LinkIcon />
               邀请至服务器
+            </ContextMenuItem>
+          )}
+          <ContextMenuSeparator />
+          {/* 个人 vs 管理入口分离（docs 17 FR-05 / docs 18 FR-01/FR-03） */}
+          <ContextMenuItem
+            onClick={() => useUIStore.getState().openGuildPersonal(guildId)}
+          >
+            <SlidersHorizontalIcon />
+            服务器个人设置
+          </ContextMenuItem>
+          {caps.canOpenAdmin && (
+            <ContextMenuItem
+              onClick={() => useUIStore.getState().openGuildAdmin(guildId)}
+            >
+              <SettingsIcon />
+              服务器设置
             </ContextMenuItem>
           )}
           </ContextMenuGroup>

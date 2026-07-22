@@ -9,6 +9,7 @@ import {
   ArrowUpIcon,
   AudioLinesIcon,
   CameraOffIcon,
+  CheckIcon,
   ChevronDownIcon,
   HeadphoneOffIcon,
   HeadphonesIcon,
@@ -21,10 +22,27 @@ import {
   SignalLowIcon,
   SignalMediumIcon,
   SignalZeroIcon,
+  SlidersHorizontalIcon,
+  SparklesIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "~/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "~/components/ui/context-menu"
 import {
   Dialog,
   DialogContent,
@@ -53,6 +71,18 @@ import {
   TooltipTrigger,
 } from "~/components/ui/tooltip"
 import type { ScreenQuality } from "~/lib/api/types"
+import {
+  DFN_PRESETS,
+  DTLN_PRESETS,
+  isNsModelImplemented,
+  NOISE_MODELS,
+  resolveDfnPreset,
+  resolveDtlnPreset,
+  uplinkWasmModel,
+  type DfnPresetId,
+  type DtlnPresetId,
+  type NoiseModelId,
+} from "~/lib/noise-suppression"
 import { voiceConnection } from "~/lib/voice/connection"
 import { screenShare, SCREEN_QUALITIES } from "~/lib/voice/screen-share"
 import type { VoiceMediaDiagnostics, VoiceStreamStat } from "~/lib/voice/webrtc"
@@ -67,6 +97,12 @@ import {
 } from "~/stores/stage"
 import { useSettingsStore, type VoiceInputMode } from "~/stores/settings"
 import { useVoiceStore, type VoicePhase } from "~/stores/voice"
+
+/** 右键菜单快捷强度档位（0–100 干/湿混合） */
+const NS_STRENGTH_PRESETS = [0, 25, 50, 75, 90, 100] as const
+
+/** DeepFilterNet 首次选用算力确认（与设置页共用 key） */
+const DFN_CONFIRM_KEY = "owl.nsDfnConfirmed"
 
 /** 重连超过该时长后升级文案并给出重试按钮（UX-05） */
 const RECOVERING_ESCALATE_MS = 30_000
@@ -83,7 +119,7 @@ const INPUT_MODE_LABELS: Record<VoiceInputMode, string> = {
 function deviceLabel(
   deviceId: string | null | undefined,
   devices: DeviceOption[],
-  fallback = "系统默认",
+  fallback = "系统默认"
 ): string {
   if (!deviceId) return fallback
   return devices.find((d) => d.deviceId === deviceId)?.label ?? fallback
@@ -172,9 +208,7 @@ function Sparkline({
       : values
           .map((v, i) => {
             const x =
-              values.length === 1
-                ? w / 2
-                : (i / (values.length - 1)) * w
+              values.length === 1 ? w / 2 : (i / (values.length - 1)) * w
             const y = h - (v / max) * (h - 2) - 1
             return `${x.toFixed(1)},${y.toFixed(1)}`
           })
@@ -204,10 +238,10 @@ function useVoiceDiagnostics(active: boolean) {
   const [inputLevel, setInputLevel] = useState(0)
   const [diag, setDiag] = useState<VoiceMediaDiagnostics | null>(null)
   const [upHistory, setUpHistory] = useState<number[]>(() =>
-    Array.from({ length: STATS_HISTORY }, () => 0),
+    Array.from({ length: STATS_HISTORY }, () => 0)
   )
   const [downHistory, setDownHistory] = useState<number[]>(() =>
-    Array.from({ length: STATS_HISTORY }, () => 0),
+    Array.from({ length: STATS_HISTORY }, () => 0)
   )
   const streamHistRef = useRef<Record<string, number[]>>({})
 
@@ -228,18 +262,15 @@ function useVoiceDiagnostics(active: boolean) {
       setInputLevel(stats.inputLevel)
       setRttMs(stats.rttMs)
       setDiag(stats)
-      setUpHistory((prev) =>
-        [...prev.slice(1), stats.bitrateUpBps],
-      )
-      setDownHistory((prev) =>
-        [...prev.slice(1), stats.bitrateDownBps],
-      )
+      setUpHistory((prev) => [...prev.slice(1), stats.bitrateUpBps])
+      setDownHistory((prev) => [...prev.slice(1), stats.bitrateDownBps])
       // 分流历史
       const nextHist = { ...streamHistRef.current }
       const seen = new Set<string>()
       for (const stream of stats.streams) {
         seen.add(stream.id)
-        const series = nextHist[stream.id] ?? Array.from({ length: STATS_HISTORY }, () => 0)
+        const series =
+          nextHist[stream.id] ?? Array.from({ length: STATS_HISTORY }, () => 0)
         nextHist[stream.id] = [...series.slice(1), stream.bitrateBps]
       }
       for (const id of Object.keys(nextHist)) {
@@ -271,11 +302,13 @@ function useAudioDevices() {
 
   const refresh = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return
-    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+    const devices = await navigator.mediaDevices
+      .enumerateDevices()
+      .catch(() => [])
     const toOption = (
       device: MediaDeviceInfo,
       index: number,
-      fallback: string,
+      fallback: string
     ): DeviceOption => ({
       deviceId: device.deviceId,
       label: device.label || `${fallback} ${index + 1}`,
@@ -283,12 +316,12 @@ function useAudioDevices() {
     setInputs(
       devices
         .filter((d) => d.kind === "audioinput" && d.deviceId)
-        .map((d, i) => toOption(d, i, "麦克风")),
+        .map((d, i) => toOption(d, i, "麦克风"))
     )
     setOutputs(
       devices
         .filter((d) => d.kind === "audiooutput" && d.deviceId)
-        .map((d, i) => toOption(d, i, "扬声器")),
+        .map((d, i) => toOption(d, i, "扬声器"))
     )
   }, [])
 
@@ -392,10 +425,11 @@ function ActionCard({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex h-9 flex-1 items-center justify-center rounded-xl bg-muted/70 text-foreground/80 transition-[background-color,color,transform,opacity] active:scale-[0.96] hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-45",
+        "flex h-9 flex-1 items-center justify-center rounded-xl bg-muted/70 text-foreground/80 transition-[background-color,color,transform,opacity] hover:bg-muted hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-45",
         active && "bg-primary/15 text-primary hover:bg-primary/20",
-        danger && "text-destructive hover:bg-destructive/10 hover:text-destructive",
-        className,
+        danger &&
+          "text-destructive hover:bg-destructive/10 hover:text-destructive",
+        className
       )}
     >
       {children}
@@ -435,7 +469,7 @@ function SplitActionCard({
         "flex h-9 min-w-0 flex-1 overflow-hidden rounded-xl bg-muted/70 text-foreground/80",
         active && "bg-primary/15 text-primary",
         danger && "bg-destructive/10 text-destructive",
-        disabled && "pointer-events-none opacity-45",
+        disabled && "pointer-events-none opacity-45"
       )}
     >
       <button
@@ -445,9 +479,9 @@ function SplitActionCard({
         disabled={disabled}
         onClick={onAction}
         className={cn(
-          "flex min-w-0 flex-1 items-center justify-center transition-colors active:scale-[0.98] hover:bg-black/5 dark:hover:bg-white/5",
+          "flex min-w-0 flex-1 items-center justify-center transition-colors hover:bg-black/5 active:scale-[0.98] dark:hover:bg-white/5",
           danger && "hover:bg-destructive/15",
-          active && !danger && "hover:bg-primary/20",
+          active && !danger && "hover:bg-primary/20"
         )}
       >
         {icon}
@@ -463,7 +497,7 @@ function SplitActionCard({
               className={cn(
                 "flex w-6 shrink-0 items-center justify-center transition-colors hover:bg-black/5 dark:hover:bg-white/5",
                 danger && "hover:bg-destructive/15",
-                active && !danger && "hover:bg-primary/20",
+                active && !danger && "hover:bg-primary/20"
               )}
             />
           }
@@ -499,7 +533,7 @@ function MuteInputSplit({
 
   const levelPct = Math.min(
     100,
-    Math.round(Math.sqrt(Math.max(0, inputLevel)) * 280),
+    Math.round(Math.sqrt(Math.max(0, inputLevel)) * 280)
   )
 
   return (
@@ -525,12 +559,13 @@ function MuteInputSplit({
           </p>
           <Select
             value={voice.inputDeviceId ?? DEFAULT_DEVICE}
-            onValueChange={(value) =>
+            onValueChange={(value) => {
               setVoice({
                 inputDeviceId:
                   !value || value === DEFAULT_DEVICE ? null : value,
               })
-            }
+              voiceConnection.applyVoiceSettings({ reinitMic: true })
+            }}
           >
             <SelectTrigger size="sm" className="w-full min-w-0">
               <SelectValue placeholder="系统默认">
@@ -570,7 +605,7 @@ function MuteInputSplit({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium">输入音量</span>
-              <span className="tabular-nums text-muted-foreground">
+              <span className="text-muted-foreground tabular-nums">
                 {voice.inputVolume}%
               </span>
             </div>
@@ -592,9 +627,8 @@ function MuteInputSplit({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium">输入电平</span>
-              <span className="tabular-nums text-muted-foreground">
-                {levelPct}%
-                {muted ? " · 已静音" : ""}
+              <span className="text-muted-foreground tabular-nums">
+                {levelPct}%{muted ? " · 已静音" : ""}
               </span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -605,7 +639,7 @@ function MuteInputSplit({
                     ? "bg-destructive"
                     : levelPct > 40
                       ? "bg-emerald-500"
-                      : "bg-emerald-500/80",
+                      : "bg-emerald-500/80"
                 )}
                 style={{ width: `${levelPct}%` }}
               />
@@ -691,7 +725,7 @@ function DeafOutputSplit({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium">输出音量</span>
-              <span className="tabular-nums text-muted-foreground">
+              <span className="text-muted-foreground tabular-nums">
                 {voice.outputVolume}%
               </span>
             </div>
@@ -757,8 +791,8 @@ function ConnectionStatsPopover({
           <button
             type="button"
             className={cn(
-              "flex min-w-0 items-start gap-2 rounded-lg text-left outline-none transition-opacity hover:opacity-90",
-              statusColor,
+              "flex min-w-0 items-start gap-2 rounded-lg text-left transition-opacity outline-none hover:opacity-90",
+              statusColor
             )}
           />
         }
@@ -766,9 +800,7 @@ function ConnectionStatsPopover({
         <span
           className={cn(
             "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg",
-            connected
-              ? "bg-emerald-500/15"
-              : "bg-amber-500/15",
+            connected ? "bg-emerald-500/15" : "bg-amber-500/15"
           )}
         >
           <SignalIcon rttMs={connected ? rttMs : null} />
@@ -782,11 +814,7 @@ function ConnectionStatsPopover({
           </span>
         </span>
       </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        className="w-80 gap-3 p-3"
-      >
+      <PopoverContent side="top" align="start" className="w-80 gap-3 p-3">
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="text-sm font-semibold">连接与流量</p>
@@ -850,7 +878,7 @@ function ConnectionStatsPopover({
                     <span className="min-w-0 truncate font-medium">
                       {stream.label}
                     </span>
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-muted-foreground tabular-nums">
                       {formatBitrate(stream.bitrateBps)}
                     </span>
                   </div>
@@ -901,34 +929,117 @@ export function VoicePanel() {
   })
   const guildName = useGuildsStore((state) => {
     if (!session) return null
-    return state.guilds.find((guild) => guild.id === session.guildId)?.name ?? null
+    return (
+      state.guilds.find((guild) => guild.id === session.guildId)?.name ?? null
+    )
   })
   const escalated = useRecoveryEscalated(session?.recoveringSince ?? null)
   const nsEnabled = useSettingsStore((s) => s.voice.ns)
+  const nsModel = useSettingsStore((s) => s.voice.nsModel)
+  const nsStrength =
+    useSettingsStore((s) => s.voice.nsStrengthByModel?.[s.voice.nsModel]) ?? 100
+  const dfnPreset = useSettingsStore((s) => s.voice.dfnPreset ?? "env-keyboard")
+  const dtlnPreset = useSettingsStore(
+    (s) => s.voice.dtlnPreset ?? "env-keyboard",
+  )
   const setVoice = useSettingsStore((s) => s.setVoice)
+  const setNsStrength = useSettingsStore((s) => s.setNsStrength)
+  const applyDfnPreset = useSettingsStore((s) => s.applyDfnPreset)
+  const applyDtlnPreset = useSettingsStore((s) => s.applyDtlnPreset)
 
   const selfId = useAuthStore((state) => state.user?.id)
   const stage = useStageStore((state) =>
-    session ? state.byChannel[session.channelId] : undefined,
+    session ? state.byChannel[session.channelId] : undefined
   )
   const channelStates = useVoiceStore((state) =>
-    session ? state.byChannel[session.channelId] : undefined,
+    session ? state.byChannel[session.channelId] : undefined
   )
   const quota = useStageStore((state) =>
-    session ? state.quotaByGuild[session.guildId] : undefined,
+    session ? state.quotaByGuild[session.guildId] : undefined
   )
   const selfScreen = useStageStore((state) => state.selfScreen)
   const [qualityOpen, setQualityOpen] = useState(false)
+  /** Tauri 下 window.confirm 易被挡/误关，导致 DeepFilterNet「点了没反应」 */
+  const [dfnConfirmOpen, setDfnConfirmOpen] = useState(false)
+  const dfnConfirmAcceptedRef = useRef(false)
+
+  const commitNoiseModel = useCallback(
+    (model: NoiseModelId) => {
+      const meta = NOISE_MODELS.find((item) => item.id === model)
+      if (!meta) return
+      console.info("[noise-suppression] 语音面板切换降噪模型 →", model, {
+        available: isNsModelImplemented(model),
+        nsEnabled,
+      })
+      setVoice({ nsModel: model })
+      toast.message(
+        nsEnabled
+          ? `降噪模型已切换为 ${meta.label}`
+          : `已选择 ${meta.label}，开启降噪后生效`,
+      )
+    },
+    [nsEnabled, setVoice],
+  )
+
+  const selectNoiseModel = useCallback(
+    (value: string | null) => {
+      if (value == null) return
+      const model = value as NoiseModelId
+      const meta = NOISE_MODELS.find((item) => item.id === model)
+      if (!meta?.implemented) {
+        toast.message("该模型即将推出")
+        return
+      }
+      // 不在此处用能力检测拦截：允许选定，运行时 createNsNodeWithFallback 会加载/回退并打日志
+      if (model === "deepfilternet" && !window.localStorage.getItem(DFN_CONFIRM_KEY)) {
+        console.info(
+          "[noise-suppression] 语音面板弹出 DeepFilterNet 算力确认对话框",
+        )
+        dfnConfirmAcceptedRef.current = false
+        setDfnConfirmOpen(true)
+        return
+      }
+      commitNoiseModel(model)
+    },
+    [commitNoiseModel],
+  )
+
+  const confirmDeepFilterNet = useCallback(() => {
+    dfnConfirmAcceptedRef.current = true
+    window.localStorage.setItem(DFN_CONFIRM_KEY, "1")
+    setDfnConfirmOpen(false)
+    console.info("[noise-suppression] 用户确认启用 DeepFilterNet（语音面板）")
+    commitNoiseModel("deepfilternet")
+  }, [commitNoiseModel])
+
+  const applyNsStrength = useCallback(
+    (percent: number) => {
+      setNsStrength(nsModel, percent)
+      toast.message(`降噪强度 ${percent}%`)
+    },
+    [nsModel, setNsStrength],
+  )
+
+  const applyNsPreset = useCallback(
+    (presetId: string) => {
+      if (nsModel === "deepfilternet") {
+        applyDfnPreset(presetId as DfnPresetId)
+        const meta = resolveDfnPreset(presetId as DfnPresetId)
+        toast.message(`降噪预设：${meta.label}`)
+        return
+      }
+      if (nsModel === "dtln") {
+        applyDtlnPreset(presetId as DtlnPresetId)
+        const meta = resolveDtlnPreset(presetId as DtlnPresetId)
+        toast.message(`降噪预设：${meta.label}`)
+      }
+    },
+    [applyDfnPreset, applyDtlnPreset, nsModel],
+  )
 
   const connected = session?.phase === "connected"
-  const {
-    rttMs,
-    inputLevel,
-    diag,
-    upHistory,
-    downHistory,
-    streamHistories,
-  } = useVoiceDiagnostics(Boolean(session))
+  const { rttMs, inputLevel, diag, upHistory, downHistory, streamHistories } =
+    useVoiceDiagnostics(Boolean(session))
 
   if (!session) return null
 
@@ -936,7 +1047,7 @@ export function VoicePanel() {
     ? stage.mode === "STAGE"
     : inferChannelMode(channelStates) === "STAGE"
   const selfRole = normalizeStageRole(
-    channelStates?.find((item) => item.user_id === selfId)?.stage_role,
+    channelStates?.find((item) => item.user_id === selfId)?.stage_role
   )
 
   const inRecovery =
@@ -1030,9 +1141,7 @@ export function VoicePanel() {
         <div className="flex items-start justify-between gap-2">
           <ConnectionStatsPopover
             connected={connected}
-            statusColor={
-              session.error ? "text-destructive" : statusColor
-            }
+            statusColor={session.error ? "text-destructive" : statusColor}
             statusLabel={statusLabel}
             locationLabel={locationLabel}
             rttMs={rttMs}
@@ -1053,38 +1162,236 @@ export function VoicePanel() {
                 重试
               </button>
             )}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label={nsEnabled ? "关闭噪声抑制" : "开启噪声抑制"}
-                    aria-pressed={nsEnabled}
-                    onClick={() => {
-                      const next = !nsEnabled
+            <ContextMenu>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <ContextMenuTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={
+                            nsEnabled ? "关闭噪声抑制" : "开启噪声抑制"
+                          }
+                          aria-pressed={nsEnabled}
+                          onClick={() => {
+                            const next = !nsEnabled
+                            setVoice({ ns: next })
+                            toast.message(
+                              next ? "噪声抑制已开启" : "噪声抑制已关闭"
+                            )
+                          }}
+                          className={cn(
+                            "flex size-8 items-center justify-center rounded-lg transition-[color,background-color,transform] hover:bg-muted active:scale-[0.96]",
+                            nsEnabled
+                              ? "text-emerald-500 dark:text-emerald-400"
+                              : "text-muted-foreground"
+                          )}
+                        />
+                      }
+                    />
+                  }
+                >
+                  <AudioLinesIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {nsEnabled ? "噪声抑制：开" : "噪声抑制：关"} · 右键模型/预设/强度
+                </TooltipContent>
+              </Tooltip>
+
+              <ContextMenuContent className="w-72" side="top" align="end">
+                <ContextMenuGroup>
+                  <ContextMenuCheckboxItem
+                    checked={nsEnabled}
+                    onCheckedChange={(checked) => {
+                      const next = Boolean(checked)
                       setVoice({ ns: next })
-                      // ns 在下次采集时生效；提示用户
                       toast.message(
-                        next
-                          ? "噪声抑制已开启（重进语音后完全生效）"
-                          : "噪声抑制已关闭（重进语音后完全生效）",
+                        next ? "噪声抑制已开启" : "噪声抑制已关闭",
                       )
                     }}
-                    className={cn(
-                      "flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-muted",
-                      nsEnabled
-                        ? "text-primary"
-                        : "text-muted-foreground",
-                    )}
-                  />
-                }
-              >
-                <AudioLinesIcon className="size-4" />
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                {nsEnabled ? "噪声抑制：开" : "噪声抑制：关"}
-              </TooltipContent>
-            </Tooltip>
+                  >
+                    噪声抑制总开关
+                  </ContextMenuCheckboxItem>
+                </ContextMenuGroup>
+
+                <ContextMenuSeparator />
+
+                <ContextMenuGroup>
+                  <ContextMenuLabel className="pb-1">
+                    选择降噪模型
+                  </ContextMenuLabel>
+                  <ContextMenuRadioGroup
+                    value={nsModel}
+                    onValueChange={selectNoiseModel}
+                  >
+                    {NOISE_MODELS.map((model) => {
+                      const available = isNsModelImplemented(model.id)
+                      return (
+                        <ContextMenuRadioItem
+                          key={model.id}
+                          value={model.id}
+                          disabled={!model.implemented}
+                          className="items-start"
+                        >
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span className="truncate">
+                              {model.label}
+                              {!model.implemented
+                                ? "（即将推出）"
+                                : !available
+                                  ? "（运行时可能回退）"
+                                  : ""}
+                            </span>
+                            <span className="text-xs font-normal text-muted-foreground">
+                              {model.scope} · 算力{model.cpu}
+                            </span>
+                          </span>
+                        </ContextMenuRadioItem>
+                      )
+                    })}
+                  </ContextMenuRadioGroup>
+                </ContextMenuGroup>
+
+                {/* WASM 模型：快捷预设 / 强度子菜单 */}
+                {uplinkWasmModel(nsModel) && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuGroup>
+                      <ContextMenuLabel className="pb-1">
+                        快捷调整
+                        {!nsEnabled ? " · 总开关已关" : ""}
+                      </ContextMenuLabel>
+
+                      {(nsModel === "deepfilternet" ||
+                        nsModel === "dtln") && (
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger
+                            disabled={!nsEnabled}
+                            className={!nsEnabled ? "opacity-50" : undefined}
+                          >
+                            <SparklesIcon />
+                            <span className="min-w-0 flex-1 truncate">
+                              降噪预设
+                            </span>
+                            <span className="ml-1 max-w-24 truncate text-xs font-normal text-muted-foreground">
+                              {nsModel === "deepfilternet"
+                                ? resolveDfnPreset(dfnPreset).label
+                                : resolveDtlnPreset(dtlnPreset).label}
+                            </span>
+                          </ContextMenuSubTrigger>
+                          <ContextMenuSubContent className="min-w-52" side="left">
+                            {(nsModel === "deepfilternet"
+                              ? DFN_PRESETS
+                              : DTLN_PRESETS
+                            )
+                              .filter((p) => p.id !== "custom")
+                              .map((preset) => {
+                                const active =
+                                  nsModel === "deepfilternet"
+                                    ? dfnPreset === preset.id
+                                    : dtlnPreset === preset.id
+                                return (
+                                  <ContextMenuItem
+                                    key={preset.id}
+                                    disabled={!nsEnabled}
+                                    onClick={() => applyNsPreset(preset.id)}
+                                    className="items-start"
+                                  >
+                                    {active ? (
+                                      <CheckIcon className="mt-0.5 size-4 shrink-0" />
+                                    ) : (
+                                      <span className="mt-0.5 size-4 shrink-0" />
+                                    )}
+                                    <span className="flex min-w-0 flex-col gap-0.5">
+                                      <span>
+                                        {preset.label}
+                                        {preset.id === "env-keyboard"
+                                          ? "（默认）"
+                                          : ""}
+                                      </span>
+                                      <span className="text-xs font-normal leading-snug text-muted-foreground">
+                                        {preset.description}
+                                      </span>
+                                    </span>
+                                  </ContextMenuItem>
+                                )
+                              })}
+                            {(nsModel === "deepfilternet"
+                              ? dfnPreset === "custom"
+                              : dtlnPreset === "custom") && (
+                              <ContextMenuItem disabled>
+                                <CheckIcon className="size-4" />
+                                <span className="flex min-w-0 flex-col gap-0.5">
+                                  <span>自定义</span>
+                                  <span className="text-xs font-normal text-muted-foreground">
+                                    已在设置中手动调参
+                                  </span>
+                                </span>
+                              </ContextMenuItem>
+                            )}
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
+                      )}
+
+                      <ContextMenuSub>
+                        <ContextMenuSubTrigger
+                          disabled={!nsEnabled}
+                          className={!nsEnabled ? "opacity-50" : undefined}
+                        >
+                          <SlidersHorizontalIcon />
+                          <span className="min-w-0 flex-1 truncate">
+                            降噪强度
+                          </span>
+                          <span className="ml-1 text-xs font-normal text-muted-foreground">
+                            {nsStrength}%
+                          </span>
+                        </ContextMenuSubTrigger>
+                        <ContextMenuSubContent className="min-w-36" side="left">
+                          {NS_STRENGTH_PRESETS.map((percent) => (
+                            <ContextMenuItem
+                              key={percent}
+                              disabled={!nsEnabled}
+                              onClick={() => applyNsStrength(percent)}
+                            >
+                              {nsStrength === percent ? (
+                                <CheckIcon className="size-4" />
+                              ) : (
+                                <span className="size-4" />
+                              )}
+                              {percent}%
+                              {percent === 0
+                                ? "（原声）"
+                                : percent === 100
+                                  ? "（全湿）"
+                                  : ""}
+                            </ContextMenuItem>
+                          ))}
+                          {!NS_STRENGTH_PRESETS.includes(
+                            nsStrength as (typeof NS_STRENGTH_PRESETS)[number],
+                          ) && (
+                            <ContextMenuItem disabled>
+                              <CheckIcon className="size-4" />
+                              {nsStrength}%（当前）
+                            </ContextMenuItem>
+                          )}
+                        </ContextMenuSubContent>
+                      </ContextMenuSub>
+                    </ContextMenuGroup>
+                  </>
+                )}
+
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onClick={() =>
+                    useSettingsStore.getState().openPanel("voice")
+                  }
+                >
+                  <Settings2Icon />
+                  打开语音设置…
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
 
             <Tooltip>
               <TooltipTrigger
@@ -1150,6 +1457,42 @@ export function VoicePanel() {
           void screenShare.start(session.channelId, quality)
         }
       />
+
+      <Dialog
+        open={dfnConfirmOpen}
+        onOpenChange={(open) => {
+          setDfnConfirmOpen(open)
+          if (!open && !dfnConfirmAcceptedRef.current) {
+            console.info(
+              "[noise-suppression] 用户关闭 DeepFilterNet 算力确认（语音面板，未启用）",
+            )
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md" showCloseButton>
+          <DialogHeader>
+            <DialogTitle>启用 DeepFilterNet 3？</DialogTitle>
+            <DialogDescription>
+              降噪质量更高，但可能显著增加 CPU 与内存占用（内置模型约
+              18MB）。低配设备建议继续使用 RNNoise 或 Speex。确认后仅本机提示一次。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                console.info(
+                  "[noise-suppression] 用户取消 DeepFilterNet 算力确认（语音面板）",
+                )
+                setDfnConfirmOpen(false)
+              }}
+            >
+              取消
+            </Button>
+            <Button onClick={confirmDeepFilterNet}>仍要启用</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

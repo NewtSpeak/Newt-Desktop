@@ -49,7 +49,8 @@ function sameMember(a: GuildMember, b: GuildMember): boolean {
     a.banner_url === b.banner_url &&
     a.bio === b.bio &&
     a.is_owner === b.is_owner &&
-    sameRoleIds(a.role_ids, b.role_ids)
+    sameRoleIds(a.role_ids, b.role_ids) &&
+    (a.name_style_role_id ?? null) === (b.name_style_role_id ?? null)
   )
 }
 

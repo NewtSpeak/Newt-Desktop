@@ -210,7 +210,7 @@ export function ProfileSection() {
         </div>
       </div>
 
-      <GroupLabel>文字资料</GroupLabel>
+      <GroupLabel id="profile-text">文字资料</GroupLabel>
       <div className="space-y-4">
         <div>
           <label htmlFor="profile-display-name" className="mb-1.5 block text-sm font-medium">
@@ -259,7 +259,7 @@ export function ProfileSection() {
         </div>
       </div>
 
-      <GroupLabel>头像</GroupLabel>
+      <GroupLabel id="profile-avatar">头像</GroupLabel>
       <SettingRow
         label="个人头像"
         description="PNG / JPEG / WebP / GIF，最大 8MB"
@@ -301,7 +301,7 @@ export function ProfileSection() {
         </div>
       </SettingRow>
 
-      <GroupLabel>横幅</GroupLabel>
+      <GroupLabel id="profile-banner">横幅</GroupLabel>
       <SettingRow
         label="个人横幅"
         description="展示在资料卡顶部；PNG / JPEG / WebP / GIF，最大 12MB"

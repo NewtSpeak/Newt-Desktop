@@ -1,5 +1,3 @@
-import { useNavigate } from "react-router"
-
 import {
   Avatar,
   AvatarFallback,
@@ -20,7 +18,12 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "~/components/ui/sidebar"
-import { CircleUserRoundIcon, LogOutIcon, SettingsIcon } from "lucide-react"
+import {
+  CircleUserRoundIcon,
+  SettingsIcon,
+  UsersIcon,
+} from "lucide-react"
+import * as React from "react"
 import type { GatewayStatus } from "~/lib/gateway/client"
 import {
   nameInitials,
@@ -28,6 +31,7 @@ import {
   userDisplayName,
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
+import { SwitchAccountDialog } from "~/components/switch-account-dialog"
 import { useAuthStore } from "~/stores/auth"
 import { setManualPresence, usePresenceStore } from "~/stores/presence"
 import { useSettingsStore, type ManualPresenceStatus } from "~/stores/settings"
@@ -46,7 +50,7 @@ function statusLabel(status: GatewayStatus): string {
   }
 }
 
-/** Presence 状态点配色（docs 01：在线绿 / 闲置黄 / 勿扰红 / 隐身与离线灰） */
+/** Presence 状态点配色（docs 01：在线绿 / 闲置黄 / 勿扰红 / 隐身与离线灰；一律不透明） */
 export function presenceDotClass(status: string | undefined): string {
   switch (status) {
     case "online":
@@ -56,7 +60,8 @@ export function presenceDotClass(status: string | undefined): string {
     case "dnd":
       return "bg-red-500"
     default:
-      return "bg-muted-foreground/50"
+      // 离线 / 隐身：实心灰，不用半透明
+      return "bg-zinc-500"
   }
 }
 
@@ -73,11 +78,12 @@ const PRESENCE_OPTIONS: {
 
 export function NavUser() {
   const { isMobile } = useSidebar()
-  const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
+  const accounts = useAuthStore((state) => state.accounts)
   const gatewayStatus = useUIStore((state) => state.gatewayStatus)
   const manualStatus = useSettingsStore((state) => state.presence.manualStatus)
   const autoIdle = usePresenceStore((state) => state.autoIdle)
+  const [switchOpen, setSwitchOpen] = React.useState(false)
 
   if (!user) return null
 
@@ -91,12 +97,6 @@ export function NavUser() {
         ? "idle"
         : manualStatus
       : "offline"
-
-  const handleLogout = async () => {
-    await useAuthStore.getState().logout()
-    // /login 路由已移除：未登录态由应用壳渲染欢迎空态，回到根路由即可
-    navigate("/", { replace: true })
-  }
 
   return (
     <SidebarMenu>
@@ -202,9 +202,14 @@ export function NavUser() {
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout}>
-              <LogOutIcon />
-              退出登录
+            <DropdownMenuItem onClick={() => setSwitchOpen(true)}>
+              <UsersIcon />
+              切换账号
+              {accounts.length > 1 ? (
+                <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                  {accounts.length}
+                </span>
+              ) : null}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -216,6 +221,7 @@ export function NavUser() {
             presenceDotClass(selfStatus),
           )}
         />
+        <SwitchAccountDialog open={switchOpen} onOpenChange={setSwitchOpen} />
       </SidebarMenuItem>
     </SidebarMenu>
   )

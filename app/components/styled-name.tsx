@@ -1,10 +1,15 @@
-// 带角色色 / 渐变的显示名；animated 时做缓慢流动。
+// 带角色色 / 渐变的显示名、色点与角色徽章；支持流动速度与自定义徽章 icon。
+
+import type { CSSProperties } from "react"
 
 import { cn } from "~/lib/utils"
 import {
+  iconStyleToFillCSS,
   nameStyleToCSS,
+  type MemberRoleBadgeView,
   type ResolvedNameStyle,
 } from "~/lib/name-style"
+import { resolveApiUrl } from "~/lib/api/http"
 
 export function StyledDisplayName({
   name,
@@ -15,7 +20,6 @@ export function StyledDisplayName({
   name: string
   style?: ResolvedNameStyle | null
   className?: string
-  /** 可选前缀如 @ */
   prefix?: string
 }) {
   const resolved = style ?? {
@@ -24,6 +28,7 @@ export function StyledDisplayName({
     angle: 90,
     shape: "circle",
     animated: false,
+    speed: 4,
   }
   const css = nameStyleToCSS(resolved)
   const isGradient = resolved.kind === "linear" || resolved.kind === "radial"
@@ -31,8 +36,10 @@ export function StyledDisplayName({
   return (
     <span
       className={cn(
-        "inline font-medium",
-        isGradient && resolved.animated && "animate-[name-gradient_4s_ease_infinite]",
+        "inline",
+        // 未指定加粗时保持 medium；指定 bold 时由 style.fontWeight 覆盖
+        !resolved.bold && "font-medium",
+        isGradient && resolved.animated && "name-gradient-animated",
         className,
       )}
       style={css}
@@ -43,28 +50,169 @@ export function StyledDisplayName({
   )
 }
 
+/** 角色色点 / icon（纯色或线性/径向渐变 + 可选流动） */
+export function RoleStyleDot({
+  style,
+  className,
+  title,
+  fallbackColor,
+}: {
+  style?: ResolvedNameStyle | null
+  className?: string
+  title?: string
+  fallbackColor?: string
+}) {
+  const resolved = style ?? {
+    kind: "none" as const,
+    colors: [],
+    angle: 90,
+    shape: "circle",
+    animated: false,
+    speed: 4,
+  }
+  const fill = iconStyleToFillCSS(resolved)
+  const isGradient = resolved.kind === "linear" || resolved.kind === "radial"
+  const css: CSSProperties =
+    fill.backgroundImage || fill.backgroundColor
+      ? fill
+      : fallbackColor
+        ? { backgroundColor: fallbackColor }
+        : { backgroundColor: "transparent" }
+
+  return (
+    <span
+      title={title}
+      aria-hidden={!title}
+      className={cn(
+        "inline-block size-3 shrink-0 rounded-full border border-black/10 dark:border-white/15",
+        isGradient && resolved.animated && "name-gradient-animated",
+        className,
+      )}
+      style={css}
+    />
+  )
+}
+
+/** 单枚角色徽章（背景图/渐变 + 可选 icon 或回退纯色标签） */
+export function RoleBadgePill({
+  badge,
+  className,
+}: {
+  badge: MemberRoleBadgeView
+  className?: string
+}) {
+  const fill = badge.badgeBackground
+    ? iconStyleToFillCSS(badge.badgeBackground)
+    : {}
+  const hasGradient = Boolean(fill.backgroundImage || fill.backgroundColor)
+  const bgImageUrl = badge.badgeBackgroundImageUrl
+    ? resolveApiUrl(badge.badgeBackgroundImageUrl)
+    : undefined
+  const hasBgImage = Boolean(bgImageUrl)
+  const animated =
+    badge.badgeBackground &&
+    (badge.badgeBackground.kind === "linear" ||
+      badge.badgeBackground.kind === "radial") &&
+    badge.badgeBackground.animated
+  const showName = badge.badgeShowName !== false
+  const iconUrl = badge.badgeIconUrl
+    ? resolveApiUrl(badge.badgeIconUrl)
+    : undefined
+
+  const textClass = cn(
+    "truncate",
+    badge.bold && "font-bold",
+    badge.italic && "italic",
+    badge.underline && "underline",
+    badge.strikethrough && "line-through",
+  )
+
+  if (!badge.badgeCustom && !iconUrl && !hasGradient && !hasBgImage) {
+    return (
+      <span
+        title={badge.name}
+        className={cn(
+          "inline-flex h-3.5 max-w-16 items-center truncate rounded-full px-1.5 text-[9px] font-medium",
+          className,
+        )}
+        style={
+          badge.color
+            ? {
+                backgroundColor: `${badge.color}22`,
+                color: badge.color,
+                boxShadow: `inset 0 0 0 1px ${badge.color}55`,
+              }
+            : {
+                backgroundColor: "var(--color-muted)",
+                color: "var(--color-muted-foreground)",
+              }
+        }
+      >
+        <span className={textClass}>{badge.name}</span>
+      </span>
+    )
+  }
+
+  const layers: string[] = []
+  if (fill.backgroundImage) layers.push(String(fill.backgroundImage))
+  if (bgImageUrl) layers.push(`url(${JSON.stringify(bgImageUrl)})`)
+
+  const style: CSSProperties = layers.length
+    ? {
+        backgroundImage: layers.join(", "),
+        backgroundSize: layers.map(() => "cover").join(", "),
+        backgroundPosition: layers.map(() => "center").join(", "),
+        backgroundRepeat: "no-repeat",
+        color: badge.badgeTextColor || "#fff",
+        ...(fill.animationDuration
+          ? { animationDuration: fill.animationDuration }
+          : {}),
+      }
+    : fill.backgroundColor
+      ? { backgroundColor: fill.backgroundColor, color: badge.badgeTextColor || "#fff" }
+      : {
+          backgroundColor: badge.color || "var(--color-muted-foreground)",
+          color: badge.badgeTextColor || "#fff",
+        }
+
+  return (
+    <span
+      title={badge.name}
+      className={cn(
+        "inline-flex h-3.5 max-w-20 items-center gap-0.5 truncate rounded-full px-1.5 text-[9px] font-medium text-white",
+        animated && "name-gradient-animated",
+        className,
+      )}
+      style={style}
+    >
+      {iconUrl ? (
+        <img
+          src={iconUrl}
+          alt=""
+          className="size-2.5 shrink-0 rounded-sm object-contain"
+          draggable={false}
+        />
+      ) : null}
+      {showName || !iconUrl ? (
+        <span className={textClass}>{badge.name}</span>
+      ) : null}
+    </span>
+  )
+}
+
 /** 角色小徽章条 */
 export function RoleBadgePills({
   badges,
   className,
 }: {
-  badges: { id: string; name: string; color?: string }[]
+  badges: MemberRoleBadgeView[]
   className?: string
 }) {
   if (badges.length === 0) return null
   return (
     <span className={cn("inline-flex items-center gap-0.5", className)}>
       {badges.map((badge) => (
-        <span
-          key={badge.id}
-          title={badge.name}
-          className="inline-flex h-3.5 max-w-16 items-center truncate rounded-full px-1.5 text-[9px] font-medium text-white"
-          style={{
-            backgroundColor: badge.color || "var(--color-muted-foreground)",
-          }}
-        >
-          <span className="truncate">{badge.name}</span>
-        </span>
+        <RoleBadgePill key={badge.id} badge={badge} />
       ))}
     </span>
   )

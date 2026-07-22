@@ -1,11 +1,7 @@
-// 窗口右上角悬浮控制区（挂载于 root，覆盖全部路由与全屏面板）：
-//   - 主题切换按钮：在浅色/深色之间切换（写入 settings store 的 appearance.theme，
-//     与设置面板·外观联动；当前为「跟随系统」时按实际生效主题取反）。
-//   - 私信占位入口：主题按钮右侧邮件图标；服务端尚无 DM API，点击仅展示空态说明。
-//   - Windows/Linux（无边框窗口）：再右侧渲染最小化/最大化/关闭三键，
-//     对齐系统标题栏习惯；macOS 交通灯在左上角，此处仅渲染主题 + 私信。
+// 窗口右上角悬浮控制区：主题、通知铃铛、好友入口（含私信未读）、窗口三键。
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router"
 import {
   CopyIcon,
   MailIcon,
@@ -16,20 +12,20 @@ import {
   XIcon,
 } from "lucide-react"
 
-import { Button } from "~/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "~/components/ui/dialog"
+import { NotificationsInboxButton } from "~/components/notifications-inbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip"
 import { useIsMacDesktop, useIsTauri } from "~/lib/platform"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
 import { cn } from "~/lib/utils"
+import { usePrivateChannelsStore } from "~/stores/private-channels"
+import {
+  channelUnreadCount,
+  formatUnreadBadge,
+  useReadStatesStore,
+} from "~/stores/read-states"
+import { pendingIncomingOf, useRelationshipsStore } from "~/stores/relationships"
 import { useSettingsStore } from "~/stores/settings"
+import { useUIStore } from "~/stores/ui"
 
 /** 当前实际生效的主题是否为深色（theme=system 时跟随系统） */
 function useEffectiveDark() {
@@ -47,8 +43,9 @@ function useEffectiveDark() {
   return theme === "dark" || (theme === "system" && systemDark)
 }
 
+// 可见约 32px 触控热区；角标相对按钮定位，容器需给顶部留白避免裁切
 const titlebarIconBtnClass =
-  "flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+  "relative flex size-8 items-center justify-center rounded-lg text-muted-foreground outline-none transition-[background-color,color,transform] duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-ring/50"
 
 function ThemeToggleButton() {
   const isDark = useEffectiveDark()
@@ -70,50 +67,65 @@ function ThemeToggleButton() {
   )
 }
 
-/** 私信占位：后端尚无 DM API，仅预留入口与空态说明 */
-function DmPlaceholderButton() {
-  const [open, setOpen] = useState(false)
+/** 好友入口：打开好友页；角标 = 私信未读 + 待处理好友请求 */
+function FriendsButton() {
+  const navigate = useNavigate()
+  const privateChannels = usePrivateChannelsStore((s) => s.channels)
+  const unreadCountByChannel = useReadStatesStore((s) => s.unreadCountByChannel)
+  const lastReadByChannel = useReadStatesStore((s) => s.lastReadByChannel)
+  const latestByChannel = useReadStatesStore((s) => s.latestByChannel)
+  // selector 禁止返回新数组；在 useMemo 内汇总未读
+  const dmUnread = useMemo(() => {
+    let total = 0
+    const slice = { unreadCountByChannel, lastReadByChannel, latestByChannel }
+    for (const channel of privateChannels) {
+      total += channelUnreadCount(slice, channel.id)
+    }
+    return total
+  }, [
+    privateChannels,
+    unreadCountByChannel,
+    lastReadByChannel,
+    latestByChannel,
+  ])
+  const pendingFriends = useRelationshipsStore(
+    (s) => pendingIncomingOf(s.items).length,
+  )
+  const badgeCount = dmUnread + pendingFriends
+  const badge =
+    badgeCount > 0 ? formatUnreadBadge(badgeCount) : null
 
   return (
-    <>
-      <Tooltip>
-        <TooltipTrigger
-          aria-label="私信"
-          onClick={() => setOpen(true)}
-          className={titlebarIconBtnClass}
-        >
-          <MailIcon className="size-4" />
-        </TooltipTrigger>
-        <TooltipContent side="bottom">私信</TooltipContent>
-      </Tooltip>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader className="items-center text-center sm:items-center sm:text-center">
-            <div className="mb-1 flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-              <MailIcon className="size-6" />
-            </div>
-            <DialogTitle>私信</DialogTitle>
-            <DialogDescription className="text-center">
-              私信功能即将推出。服务端尚未提供一对一私聊接口，入口已预留，后续版本将支持私信列表与消息收发。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="sm:justify-center">
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              知道了
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+    <Tooltip>
+      <TooltipTrigger
+        aria-label={
+          badge
+            ? `好友与私信，${badge} 条未读或待处理`
+            : "好友"
+        }
+        onClick={() => {
+          useUIStore.getState().selectGuild(null)
+          navigate("/friends")
+        }}
+        className={titlebarIconBtnClass}
+      >
+        <MailIcon className="size-4" />
+        <span className="t-badge" data-open={badge ? "true" : "false"}>
+          {badge ? (
+            <span className="t-badge-dot tabular-nums">{badge}</span>
+          ) : null}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {badge ? `好友（${badge} 条未读）` : "好友"}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
-/** Windows/Linux 无边框窗口的最小化/最大化（还原）/关闭三键 */
 function WindowControls() {
   const [maximized, setMaximized] = useState(false)
 
-  // 跟踪最大化状态，切换最大化/还原图标
   useEffect(() => {
     let disposed = false
     let unlisten: (() => void) | undefined
@@ -141,7 +153,7 @@ function WindowControls() {
   }
 
   const baseClass =
-    "flex h-8 w-11 items-center justify-center text-foreground/70 transition-colors outline-none"
+    "flex h-8 w-11 items-center justify-center text-foreground/70 outline-none transition-colors"
 
   return (
     <div className="flex">
@@ -180,21 +192,25 @@ function WindowControls() {
 export function TitlebarControls() {
   const isTauri = useIsTauri()
   const isMacDesktop = useIsMacDesktop()
-  // 无系统标题栏的桌面端（Windows/Linux）需要自绘窗口三键
   const showWindowControls = isTauri && !isMacDesktop
 
   return (
     <div
-      // 与 --app-top-inset（32px）等高；空白处仍可拖拽窗口
       className={cn(
-        "fixed top-0 right-0 z-60 flex h-8 items-center gap-0.5",
+        // 顶部 4px 内边距把铃铛/信封下移，角标（略超出按钮顶边）完整落在窗口内，避免被裁切
+        "fixed top-0 right-0 z-60 flex items-start gap-0.5 overflow-visible pt-1",
         showWindowControls ? "pr-0" : "pr-2",
       )}
       onMouseDown={dragWindowOnMouseDown}
     >
       <ThemeToggleButton />
-      <DmPlaceholderButton />
-      {showWindowControls && <WindowControls />}
+      <NotificationsInboxButton />
+      <FriendsButton />
+      {showWindowControls && (
+        <div className="flex h-8 items-center self-start">
+          <WindowControls />
+        </div>
+      )}
     </div>
   )
 }

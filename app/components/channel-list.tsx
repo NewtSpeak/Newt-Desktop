@@ -1,12 +1,16 @@
 // 频道列表栏：banner + 可排序频道树 / 空态右键创建 + 底部语音面板。
+// Home / 好友 / @me：Discord 风格私信侧栏（dm-sidebar）。
 
 import { useEffect } from "react"
-import { HashIcon } from "lucide-react"
+import { EyeIcon, HashIcon, XIcon } from "lucide-react"
 
+import { DmSidebar } from "~/components/dm-sidebar"
 import { GuildChannelSpaceMenu } from "~/components/guild-channel-space-menu"
 import { SortableChannelTree } from "~/components/sortable-channel-tree"
 import { GuildBannerCarousel } from "~/components/guild-banner"
+import { PanelResizeHandle } from "~/components/panel-resize-handle"
 import { VoicePanel } from "~/components/voice-panel"
+import { Button } from "~/components/ui/button"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
 import { cn } from "~/lib/utils"
 import { useChannelsStore } from "~/stores/channels"
@@ -14,22 +18,29 @@ import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { useRolesStore } from "~/stores/roles"
 import { useUIStore } from "~/stores/ui"
+import { useViewAsStore, viewAsLabel } from "~/stores/view-as"
 
 export function ChannelList() {
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
+  const channelListWidth = useUIStore((state) => state.channelListWidth)
+  const setChannelListWidth = useUIStore((state) => state.setChannelListWidth)
+  const isHomeOrDm = !selectedGuildId || selectedGuildId === "@me"
   const guild = useGuildsStore((state) =>
-    state.guilds.find((item) => item.id === selectedGuildId)
+    state.guilds.find((item) => item.id === selectedGuildId),
   )
   const channels = useChannelsStore((state) =>
-    selectedGuildId ? state.byGuild[selectedGuildId] : undefined
+    selectedGuildId && !isHomeOrDm ? state.byGuild[selectedGuildId] : undefined,
   )
   const loading = useChannelsStore((state) =>
-    selectedGuildId ? Boolean(state.loadingGuilds[selectedGuildId]) : false
+    selectedGuildId && !isHomeOrDm
+      ? Boolean(state.loadingGuilds[selectedGuildId])
+      : false,
   )
+  const viewAs = useViewAsStore((s) => s.session)
+  const viewAsLoading = viewAs?.loading === true
 
-  // 切换服务器时拉取频道、成员与角色（空列表右键菜单权限依赖 roles）
   useEffect(() => {
-    if (!selectedGuildId) return
+    if (!selectedGuildId || isHomeOrDm) return
     void useChannelsStore.getState().fetchChannels(selectedGuildId)
     void useMembersStore
       .getState()
@@ -39,13 +50,23 @@ export function ChannelList() {
       .getState()
       .fetchRoles(selectedGuildId)
       .catch(() => undefined)
-  }, [selectedGuildId])
+  }, [selectedGuildId, isHomeOrDm])
 
-  if (!selectedGuildId) return null
+  useEffect(() => {
+    const session = useViewAsStore.getState().session
+    if (session && selectedGuildId && session.guildId !== selectedGuildId) {
+      useViewAsStore.getState().stop()
+    }
+    if (isHomeOrDm && session) {
+      useViewAsStore.getState().stop()
+    }
+  }, [selectedGuildId, isHomeOrDm])
+
+  // Discord：主页 / 私信时左侧常驻私信侧栏
+  if (isHomeOrDm) return <DmSidebar />
 
   const hasChannels = (channels?.length ?? 0) > 0
   const isEmpty = channels !== undefined && !loading && !hasChannels
-  // 无 banner 时列表紧贴卡片顶边，补上与 banner 外框相当的顶部留白
   const hasBanner = Boolean(
     (guild?.banners && guild.banners.length > 0) ||
       guild?.banner_url?.trim(),
@@ -72,19 +93,37 @@ export function ChannelList() {
 
   return (
     <aside
-      className="flex w-60 shrink-0 flex-col gap-2 overflow-hidden bg-transparent"
+      className="relative flex shrink-0 flex-col gap-2 overflow-visible bg-transparent"
+      style={{ width: channelListWidth }}
       onMouseDown={dragWindowOnMouseDown}
     >
-      {/* 上卡片：服务器 banner + 频道列表 */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
         {guild && <GuildBannerCarousel guild={guild} />}
+        {viewAs && viewAs.guildId === selectedGuildId && (
+          <div className="flex items-center gap-2 border-b border-amber-600/30 bg-amber-500/15 px-2 py-1.5 text-amber-900 dark:text-amber-200">
+            <EyeIcon className="size-3.5 shrink-0" />
+            <p className="min-w-0 flex-1 truncate text-[11px] font-medium">
+              {viewAsLoading
+                ? "正在加载视角…"
+                : `正在以「${viewAsLabel(viewAs)}」视角查看`}
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 shrink-0 px-1.5 text-amber-900 hover:bg-amber-500/20 dark:text-amber-200"
+              onClick={() => useViewAsStore.getState().stop()}
+            >
+              <XIcon className="size-3.5" />
+              退出
+            </Button>
+          </div>
+        )}
         <div
           className={cn(
             "min-h-0 flex-1 overflow-y-auto px-2 pb-3",
             !hasBanner && "pt-2",
           )}
         >
-          {/* 任意时刻整块频道区域可右键（空白处：创建/邀请；频道卡片自身菜单优先） */}
           <GuildChannelSpaceMenu
             guildId={selectedGuildId}
             className="min-h-full w-full"
@@ -93,8 +132,13 @@ export function ChannelList() {
           </GuildChannelSpaceMenu>
         </div>
       </div>
-      {/* 下卡片：语音连接面板（独立占据底部） */}
       <VoicePanel />
+      <PanelResizeHandle
+        edge="end"
+        width={channelListWidth}
+        onWidthChange={setChannelListWidth}
+        label="调整频道列表宽度"
+      />
     </aside>
   )
 }

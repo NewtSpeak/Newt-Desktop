@@ -9,14 +9,18 @@ import {
   ChevronDownIcon,
   CopyIcon,
   EyeIcon,
+  FolderIcon,
   HashIcon,
   HeadphoneOffIcon,
   HeadphonesIcon,
   LogOutIcon,
   MicOffIcon,
+  PencilIcon,
   PhoneIcon,
   PlusIcon,
   RadioIcon,
+  SettingsIcon,
+  Trash2Icon,
   Volume2Icon,
   VolumeXIcon,
 } from "lucide-react"
@@ -55,11 +59,16 @@ import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import { NotifyOverrideMenuItems } from "~/components/notify-override-menu"
 import { presenceDotClass } from "~/components/nav-user"
-import { createChannel } from "~/lib/api/guilds"
+import {
+  createChannel,
+  deleteChannel,
+  updateChannel,
+} from "~/lib/api/guilds"
 import { ApiError } from "~/lib/api/http"
 import type { Channel, ChannelType, VoiceState } from "~/lib/api/types"
 import { copyText } from "~/lib/clipboard"
 import { VOLUME_PRESETS } from "~/lib/moderation"
+import { hasPermission, Permissions } from "~/lib/permissions"
 import {
   nameInitials,
   voiceParticipantAvatarUrl,
@@ -77,10 +86,29 @@ import {
   isChannelUnread,
   useReadStatesStore,
 } from "~/stores/read-states"
+import {
+  memberGuildPermissions,
+  useRolesStore,
+} from "~/stores/roles"
 import { isOverrideMuted, useSettingsStore } from "~/stores/settings"
 import { inferChannelMode, useStageStore } from "~/stores/stage"
 import { useUIStore } from "~/stores/ui"
 import { useVoiceStore } from "~/stores/voice"
+
+function useCanEditChannel(guildId: string): boolean {
+  const selfId = useAuthStore((s) => s.user?.id)
+  const systemAdmin = useAuthStore((s) => s.user?.system_admin)
+  const self = useMembersStore((s) =>
+    s.byGuild[guildId]?.find((m) => m.user_id === selfId),
+  )
+  const roles = useRolesStore((s) => s.byGuild[guildId])
+  if (systemAdmin || self?.is_owner) return true
+  const perms = memberGuildPermissions(self, roles)
+  return (
+    hasPermission(perms, Permissions.MANAGE_CHANNELS) ||
+    hasPermission(perms, Permissions.MANAGE_ROLES)
+  )
+}
 
 function channelErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.message) return error.message
@@ -90,6 +118,7 @@ function channelErrorMessage(error: unknown, fallback: string): string {
 /**
  * 类别标题行（对标 Discord/KOOK）：
  * 左侧「名称 + 折叠箭头」，右侧「+」创建频道；点击名称区域折叠/展开子频道。
+ * 有管理权时支持右键：重命名 / 编辑分类 / 删除。
  */
 export function CategoryHeader({
   guildId,
@@ -109,6 +138,9 @@ export function CategoryHeader({
   const [createType, setCreateType] = useState<"TEXT" | "VOICE" | null>(null)
   const [channelName, setChannelName] = useState("")
   const [pending, setPending] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameValue, setRenameValue] = useState(name)
+  const [renamePending, setRenamePending] = useState(false)
 
   const openCreate = (type: "TEXT" | "VOICE") => {
     setChannelName("")
@@ -148,24 +180,105 @@ export function CategoryHeader({
     }
   }
 
+  const submitRename = async () => {
+    const trimmed = renameValue.trim()
+    if (!trimmed) {
+      toast.error("名称不能为空")
+      return
+    }
+    setRenamePending(true)
+    try {
+      const updated = await updateChannel(categoryId, { name: trimmed })
+      useChannelsStore.getState().upsertChannel(updated)
+      toast.success("分类已重命名")
+      setRenameOpen(false)
+    } catch (error) {
+      toast.error(channelErrorMessage(error, "重命名失败"))
+    } finally {
+      setRenamePending(false)
+    }
+  }
+
+  const onDeleteCategory = async () => {
+    const ok = window.confirm(
+      `确定删除分类「${name}」？子频道将上浮到根级，不会被删除。`,
+    )
+    if (!ok) return
+    try {
+      await deleteChannel(categoryId)
+      useChannelsStore.getState().removeChannel(guildId, categoryId)
+      toast.success("分类已删除")
+    } catch (error) {
+      toast.error(channelErrorMessage(error, "删除失败"))
+    }
+  }
+
+  const headerButton = (
+    <button
+      type="button"
+      onClick={onToggleCollapse}
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? `展开类别 ${name}` : `折叠类别 ${name}`}
+      className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-0.5 text-left text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground/80"
+    >
+      <span className="min-w-0 truncate">{name}</span>
+      <ChevronDownIcon
+        className={cn(
+          "size-3.5 shrink-0 opacity-80 transition-transform duration-150",
+          collapsed && "-rotate-90",
+        )}
+      />
+    </button>
+  )
+
   return (
     <>
       <div className="group/category flex h-7 w-full items-center gap-0.5 pr-0.5">
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? `展开类别 ${name}` : `折叠类别 ${name}`}
-          className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-0.5 text-left text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground/80"
-        >
-          <span className="min-w-0 truncate">{name}</span>
-          <ChevronDownIcon
-            className={cn(
-              "size-3.5 shrink-0 opacity-80 transition-transform duration-150",
-              collapsed && "-rotate-90",
-            )}
-          />
-        </button>
+        {canManageChannels ? (
+          <ContextMenu>
+            <ContextMenuTrigger className="flex min-w-0 flex-1">
+              {headerButton}
+            </ContextMenuTrigger>
+            <ContextMenuContent className="min-w-44">
+              <ContextMenuItem
+                onClick={() => {
+                  setRenameValue(name)
+                  setRenameOpen(true)
+                }}
+              >
+                <PencilIcon />
+                重命名
+              </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() =>
+                  useUIStore.getState().openChannelSettings(categoryId)
+                }
+              >
+                <SettingsIcon />
+                编辑分类
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => openCreate("TEXT")}>
+                <HashIcon />
+                创建文字频道
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => openCreate("VOICE")}>
+                <Volume2Icon />
+                创建语音频道
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                variant="destructive"
+                onClick={() => void onDeleteCategory()}
+              >
+                <Trash2Icon />
+                删除分类
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : (
+          headerButton
+        )}
 
         {canManageChannels && (
           <DropdownMenu>
@@ -184,6 +297,14 @@ export function CategoryHeader({
               <DropdownMenuItem onClick={() => openCreate("VOICE")}>
                 <Volume2Icon />
                 创建语音频道
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  useUIStore.getState().openChannelSettings(categoryId)
+                }
+              >
+                <FolderIcon />
+                编辑分类
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -236,6 +357,46 @@ export function CategoryHeader({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>重命名分类</DialogTitle>
+            <DialogDescription>修改分类「{name}」的显示名称。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor={`cat-rename-${categoryId}`}>名称</Label>
+            <Input
+              id={`cat-rename-${categoryId}`}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              maxLength={100}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void submitRename()
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRenameOpen(false)}
+              disabled={renamePending}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={() => void submitRename()}
+              disabled={renamePending}
+            >
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
@@ -250,6 +411,7 @@ export function TextChannelItem({
   guildId: string
 }) {
   const navigate = useNavigate()
+  const canEdit = useCanEditChannel(guildId)
   const unread = useReadStatesStore((state) => isChannelUnread(state, channel.id))
   const unreadCount = useReadStatesStore((state) => channelUnreadCount(state, channel.id))
   const mentionCount = useReadStatesStore(
@@ -279,6 +441,14 @@ export function TextChannelItem({
       <ContextMenuTrigger className="block w-full">
         <NavLink
           to={href}
+          onClick={(event) => {
+            // 多账号：先切换到频道归属账号再导航（异步，需拦截默认跳转）
+            event.preventDefault()
+            void import("~/lib/ensure-guild-account").then(async (m) => {
+              const ok = await m.ensureGuildAccount(guildId)
+              if (ok) void navigate(href)
+            })
+          }}
           className={({ isActive }) =>
             cn(
               "relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground/80 hover:bg-muted/70 hover:text-foreground",
@@ -321,6 +491,16 @@ export function TextChannelItem({
           <HashIcon />
           打开频道
         </ContextMenuItem>
+        {canEdit && (
+          <ContextMenuItem
+            onClick={() =>
+              useUIStore.getState().openChannelSettings(channel.id)
+            }
+          >
+            <SettingsIcon />
+            编辑频道
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           onClick={() => useReadStatesStore.getState().ack(channel.id)}
         >
@@ -370,6 +550,15 @@ function VoiceParticipantRow({
     Boolean(s.speakingUserIds[state.user_id])
   )
   const selfSpeaking = useVoiceStore((s) => s.selfSpeaking)
+  // docs 20 FR-R01：本地为其降噪（仅本机下行处理，名单跨端同步）
+  const localNsOn = useSettingsStore((s) =>
+    Boolean(s.voice.localNs?.[state.user_id]),
+  )
+  const nsMasterOn = useSettingsStore((s) => s.voice.ns)
+  // docs 20 FR-R04 P1：每用户模型覆盖（null = 跟随全局）
+  const localNsModel = useSettingsStore(
+    (s) => s.voice.localNsModels?.[state.user_id] ?? null,
+  )
   const locallyMuted = useVoiceStore((s) =>
     Boolean(s.localMuted[state.user_id])
   )
@@ -550,6 +739,56 @@ function VoiceParticipantRow({
               <HeadphonesIcon />
               {userVolume === 0 ? "取消耳机静音" : "耳机静音"}
             </ContextMenuItem>
+            {/* 本地下行降噪（docs 20 FR-R01/R02）：仅本机处理，不改变对方设置 */}
+            <ContextMenuItem
+              onClick={() =>
+                voiceConnection.setLocalNs(state.user_id, !localNsOn)
+              }
+            >
+              {localNsOn ? (
+                <CheckIcon className="size-4" />
+              ) : (
+                <span className="size-4" />
+              )}
+              本地为其降噪
+              {localNsOn && !nsMasterOn ? "（总开关已关）" : ""}
+            </ContextMenuItem>
+            {/* 每用户降噪模型覆盖（docs 20 FR-R04 P1；缺省跟随全局） */}
+            {localNsOn && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Volume2Icon />
+                  降噪模型
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="min-w-40">
+                  {(
+                    [
+                      [null, "跟随全局"],
+                      ["rnnoise", "RNNoise"],
+                      ["speex", "Speex 轻量"],
+                      ["dtln", "DTLN"],
+                      ["deepfilternet", "DeepFilterNet 3"],
+                    ] as const
+                  ).map(([model, label]) => (
+                    <ContextMenuItem
+                      key={label}
+                      onClick={() =>
+                        useSettingsStore
+                          .getState()
+                          .setLocalNsModel(state.user_id, model)
+                      }
+                    >
+                      {localNsModel === model ? (
+                        <CheckIcon className="size-4" />
+                      ) : (
+                        <span className="size-4" />
+                      )}
+                      {label}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
             </ContextMenuGroup>
           </>
         )}
@@ -573,6 +812,7 @@ export function VoiceChannelItem({
   guildId: string
 }) {
   const navigate = useNavigate()
+  const canEdit = useCanEditChannel(guildId)
   const participants = useVoiceStore((s) => s.byChannel[channel.id])
   const isCurrent = useVoiceStore((s) => s.session?.channelId === channel.id)
   const isAudited = useVoiceStore(
@@ -593,8 +833,12 @@ export function VoiceChannelItem({
   const href = `/channels/${guildId}/${channel.id}`
 
   const join = () => {
-    void voiceConnection.join(guildId, channel.id)
-    void navigate(href)
+    void import("~/lib/ensure-guild-account").then(async (m) => {
+      const ok = await m.ensureGuildAccount(guildId)
+      if (!ok) return
+      void voiceConnection.join(guildId, channel.id)
+      void navigate(href)
+    })
   }
 
   return (
@@ -607,7 +851,7 @@ export function VoiceChannelItem({
             title={isAudited ? "加入语音（本频道正在被审计）" : "加入语音"}
             onClick={join}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground/80 hover:bg-muted/70 hover:text-foreground",
+              "relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground/80 hover:bg-muted/70 hover:text-foreground",
               (isCurrent || isSelected) &&
                 "bg-muted font-medium text-foreground"
             )}
@@ -639,6 +883,16 @@ export function VoiceChannelItem({
             <PhoneIcon />
             {isCurrent ? "打开语音视图" : "加入语音频道"}
           </ContextMenuItem>
+          {canEdit && (
+            <ContextMenuItem
+              onClick={() =>
+                useUIStore.getState().openChannelSettings(channel.id)
+              }
+            >
+              <SettingsIcon />
+              编辑频道
+            </ContextMenuItem>
+          )}
           {isCurrent && (
             <ContextMenuItem
               variant="destructive"

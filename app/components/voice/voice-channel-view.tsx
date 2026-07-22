@@ -370,6 +370,11 @@ function FreeVoiceCard({
     s.voice.voicePackMutedUsers.includes(state.user_id),
   )
   const setVoicePackMuted = useSettingsStore((s) => s.setVoicePackMuted)
+  // docs 20 FR-R01：本地为其降噪（仅本机下行处理，名单跨端同步）
+  const localNsOn = useSettingsStore((s) =>
+    Boolean(s.voice.localNs?.[state.user_id]),
+  )
+  const nsMasterOn = useSettingsStore((s) => s.voice.ns)
 
   const isSelf = state.user_id === selfId
   const speaking = isSelf ? selfSpeaking || remoteSpeaking : remoteSpeaking
@@ -472,6 +477,29 @@ function FreeVoiceCard({
                 }}
               />
             </div>
+            {/* 本地下行降噪（docs 20 FR-R01/R02；决议 R1 关总开关保留勾选） */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className="text-xs text-muted-foreground"
+                  title="仅你听起来更干净，不会改变对方设置；将在多端同步"
+                >
+                  本地为其降噪
+                </span>
+                <Switch
+                  size="sm"
+                  checked={localNsOn}
+                  onCheckedChange={(checked) =>
+                    voiceConnection.setLocalNs(state.user_id, Boolean(checked))
+                  }
+                />
+              </div>
+              {localNsOn && !nsMasterOn && (
+                <p className="text-[11px] text-muted-foreground">
+                  降噪总开关已关闭，开启后将恢复
+                </p>
+              )}
+            </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
                 不再播放 TA 的入场音效
@@ -564,13 +592,26 @@ function FreeVoiceCard({
       }
     : tint
 
+  // 外层用 div：卡片内含 PopoverTrigger（button），不可再套 button（hydration 非法嵌套）
   return (
-    <button
-      type="button"
+    <div
+      role={onActivate ? "button" : undefined}
+      tabIndex={onActivate ? 0 : undefined}
       onClick={onActivate}
+      onKeyDown={
+        onActivate
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault()
+                onActivate()
+              }
+            }
+          : undefined
+      }
       style={cardStyle}
       className={cn(
         "group relative flex overflow-hidden rounded-xl border-0 text-left outline-none transition-[box-shadow,transform] focus-visible:ring-2 focus-visible:ring-ring/50",
+        onActivate && "cursor-pointer",
         // 放大主卡不显示说话外框；网格/横滑小卡保留绿环（无 ring-offset，避免未说话时出现黑边感）
         speaking &&
           layout !== "stage" &&
@@ -635,7 +676,7 @@ function FreeVoiceCard({
           仅收听
         </span>
       )}
-    </button>
+    </div>
   )
 }
 
@@ -688,6 +729,11 @@ function ParticipantTile({
     s.voice.voicePackMutedUsers.includes(state.user_id)
   )
   const setVoicePackMuted = useSettingsStore((s) => s.setVoicePackMuted)
+  // docs 20 FR-R01：本地为其降噪（仅本机下行处理，名单跨端同步）
+  const localNsOn = useSettingsStore((s) =>
+    Boolean(s.voice.localNs?.[state.user_id]),
+  )
+  const nsMasterOn = useSettingsStore((s) => s.voice.ns)
 
   const isSelf = state.user_id === selfId
   const speaking = isSelf ? selfSpeaking || remoteSpeaking : remoteSpeaking
@@ -845,6 +891,29 @@ function ParticipantTile({
                     voiceConnection.setUserVolume(state.user_id, next)
                 }}
               />
+            </div>
+            {/* 本地下行降噪（docs 20 FR-R01/R02；决议 R1 关总开关保留勾选） */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className="text-xs text-muted-foreground"
+                  title="仅你听起来更干净，不会改变对方设置；将在多端同步"
+                >
+                  本地为其降噪
+                </span>
+                <Switch
+                  size="sm"
+                  checked={localNsOn}
+                  onCheckedChange={(checked) =>
+                    voiceConnection.setLocalNs(state.user_id, Boolean(checked))
+                  }
+                />
+              </div>
+              {localNsOn && !nsMasterOn && (
+                <p className="text-[11px] text-muted-foreground">
+                  降噪总开关已关闭，开启后将恢复
+                </p>
+              )}
             </div>
             {/* 入场音效单人屏蔽（docs 12 FR-19，本地名单持久化） */}
             <div className="flex items-center justify-between gap-2">

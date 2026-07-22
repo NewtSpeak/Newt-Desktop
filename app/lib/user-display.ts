@@ -64,11 +64,17 @@ export function voiceParticipantAvatarUrl(
   )
 }
 
-/** 头像/横幅等公开资产路径 → 当前服务器绝对 URL */
-export function resolveProfileAssetUrl(path: string | undefined | null): string | undefined {
+/**
+ * 头像/横幅等公开资产路径 → 绝对 URL。
+ * @param serverBaseUrl 多账号场景下指定归属服务器，避免用错当前激活账号的基址
+ */
+export function resolveProfileAssetUrl(
+  path: string | undefined | null,
+  serverBaseUrl?: string | null,
+): string | undefined {
   const value = path?.trim()
   if (!value) return undefined
-  return resolveApiUrl(value)
+  return resolveApiUrl(value, serverBaseUrl)
 }
 
 /** 名字首字母（头像 fallback） */

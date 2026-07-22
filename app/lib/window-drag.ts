@@ -5,7 +5,7 @@ export async function dragWindowOnMouseDown(e: React.MouseEvent) {
   const target = e.target as HTMLElement
   if (
     target.closest(
-      "button, a, input, textarea, select, [role='button'], [role='menuitem'], [contenteditable]",
+      "button, a, input, textarea, select, [role='button'], [role='menuitem'], [role='separator'], [contenteditable], [data-panel-resize]",
     )
   ) {
     return

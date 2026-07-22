@@ -18,6 +18,7 @@ import { gateway } from "~/lib/gateway/client"
 import { GatewayEvents } from "~/lib/gateway/events"
 import { maybeNotifyMessage } from "~/lib/notifications"
 import { applyRemoteSettings } from "~/lib/settings-sync"
+import { useSettingsStore } from "~/stores/settings"
 import { voiceConnection } from "~/lib/voice/connection"
 import { screenShare } from "~/lib/voice/screen-share"
 import {
@@ -37,10 +38,18 @@ import {
   useReadStatesStore,
 } from "./read-states"
 import { compareSnowflake } from "~/lib/snowflake"
+import { useRelationshipsStore } from "./relationships"
+import {
+  isDmGuildId,
+  isPrivateChannelPayload,
+  usePrivateChannelsStore,
+} from "./private-channels"
 import { useRolesStore } from "./roles"
 import { useStageStore } from "./stage"
+import { useStickersStore } from "./stickers"
 import { useUIStore } from "./ui"
 import { useVoiceStore } from "./voice"
+import { useNotificationsStore } from "./notifications-inbox"
 
 let bound = false
 
@@ -77,6 +86,8 @@ function dropGuildLocally(guildId: string) {
   useChannelsStore.getState().removeGuild(guildId)
   useMembersStore.getState().removeGuild(guildId)
   useRolesStore.getState().removeGuild(guildId)
+  // GPS / 通知覆盖 / 排序清理（docs 17 FR-30）
+  useSettingsStore.getState().clearGuildPersonal(guildId)
   if (useUIStore.getState().selectedGuildId === guildId) {
     // 路由侧：channel 页监听 guilds store，服务器消失后自动导航回首页
     useUIStore.getState().selectGuild(null)
@@ -103,12 +114,16 @@ export function bindGatewayToStores() {
     const allVoiceStates: VoiceState[] = []
     let selfVoice: { guildId: string; channelId: string } | null = null
     const selfId = ready.user?.id ?? useAuthStore.getState().user?.id
+    const accountId = useAuthStore.getState().activeAccountId ?? undefined
 
     if (ready.guilds?.length) {
       for (const snapshot of ready.guilds) {
-        useGuildsStore
-          .getState()
-          .upsertGuild(snapshot.guild, { banners: snapshot.banners })
+        useGuildsStore.getState().upsertGuild(
+          accountId
+            ? { ...snapshot.guild, account_id: accountId }
+            : snapshot.guild,
+          { banners: snapshot.banners },
+        )
         useChannelsStore.getState().setChannels(snapshot.guild.id, snapshot.channels)
         for (const channel of snapshot.channels) {
           guildByChannel[channel.id] = snapshot.guild.id
@@ -132,9 +147,33 @@ export function bindGatewayToStores() {
     }
     useReadStatesStore.getState().applySnapshot(ready.read_states ?? [], guildByChannel)
 
+    // Server-16 社交快照
+    if (ready.relationships) {
+      useRelationshipsStore.getState().setFromReady(ready.relationships)
+    } else {
+      void useRelationshipsStore.getState().refresh().catch(() => undefined)
+    }
+    if (ready.privacy) {
+      useSettingsStore.getState().setPrivacy({
+        friendRequestFrom: ready.privacy.friend_request_from,
+        dmFrom: ready.privacy.dm_from,
+        messageRequestFilter: ready.privacy.message_request_filter,
+        showMutualGuilds: ready.privacy.show_mutual_guilds,
+        publicProfileToNonFriends: ready.privacy.public_profile_to_non_friends,
+      })
+    }
+    if (ready.private_channels) {
+      usePrivateChannelsStore.getState().setFromReady(ready.private_channels)
+    } else {
+      void usePrivateChannelsStore.getState().refresh().catch(() => undefined)
+    }
+    useNotificationsStore
+      .getState()
+      .setUnreadCount(ready.notification_unread_count ?? 0)
+
     void useGuildsStore.getState().fetchGuilds()
     const guildId = useUIStore.getState().selectedGuildId
-    if (guildId) {
+    if (guildId && guildId !== "@me") {
       void useChannelsStore.getState().fetchChannels(guildId)
       void useMembersStore.getState().fetchMembers(guildId)
       void useRolesStore.getState().fetchRoles(guildId).catch(() => undefined)
@@ -199,11 +238,24 @@ export function bindGatewayToStores() {
   gateway.subscribe(GatewayEvents.MessageCreate, (payload) => {
     useMessagesStore.getState().applyMessageCreate(payload)
     const selfId = useAuthStore.getState().user?.id
-    const selfRoleIds = selfId
-      ? useMembersStore
-          .getState()
-          .byGuild[payload.guild_id]?.find((member) => member.user_id === selfId)?.role_ids
-      : undefined
+    // 私信：本地更新预览 + 轻量 refresh 兜底（对方 unhide / 新会话）
+    if (isDmGuildId(payload.guild_id)) {
+      usePrivateChannelsStore.getState().noteMessage(payload.channel_id, {
+        id: String(payload.id),
+        author_id: payload.author_id,
+        content: payload.content ?? "",
+        type: payload.type,
+        created_at: payload.created_at,
+      })
+    }
+    const selfRoleIds =
+      selfId && payload.guild_id && !isDmGuildId(payload.guild_id)
+        ? useMembersStore
+            .getState()
+            .byGuild[payload.guild_id]?.find(
+              (member) => member.user_id === selfId,
+            )?.role_ids
+        : undefined
     const mentioned = messageMentionsSelf(payload, selfId, selfRoleIds)
     useReadStatesStore.getState().noteMessageCreate(payload, selfId, mentioned)
     // 以消息缓存精确回写未读条数：修正在线多条 MESSAGE_CREATE 后角标卡在 1 的问题
@@ -226,6 +278,24 @@ export function bindGatewayToStores() {
   gateway.subscribe(GatewayEvents.TypingStart, (payload) => {
     useMessagesStore.getState().applyTypingStart(payload)
   })
+
+  // 贴图与表情包（docs 17）：库/包/条目/服 ban 变更时失效可用集合缓存
+  const invalidateStickers = () => {
+    useStickersStore.getState().invalidateAvailable()
+  }
+  gateway.subscribe(GatewayEvents.StickerPackCreate, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerPackUpdate, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerPackDelete, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerPackRestore, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerItemCreate, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerItemUpdate, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerItemDelete, invalidateStickers)
+  gateway.subscribe(GatewayEvents.StickerLibraryUpdate, () => {
+    invalidateStickers()
+    void useStickersStore.getState().refreshLibrary(true).catch(() => undefined)
+  })
+  gateway.subscribe(GatewayEvents.GuildStickerPackBanAdd, invalidateStickers)
+  gateway.subscribe(GatewayEvents.GuildStickerPackBanRemove, invalidateStickers)
 
   // 未读跨端同步（docs 15 §7-1）：他端 ack / 提及计数增长
   gateway.subscribe(GatewayEvents.ReadStateUpdate, (payload) => {
@@ -271,16 +341,24 @@ export function bindGatewayToStores() {
 
   // GUILD_CREATE：建服/加入服务器（含他端操作）——定向全量快照直接落库
   gateway.subscribe(GatewayEvents.GuildCreate, (payload) => {
-    useGuildsStore
-      .getState()
-      .upsertGuild(payload.guild, { banners: payload.banners })
+    const accountId = useAuthStore.getState().activeAccountId
+    useGuildsStore.getState().upsertGuild(
+      accountId
+        ? { ...payload.guild, account_id: accountId }
+        : payload.guild,
+      { banners: payload.banners },
+    )
     useChannelsStore.getState().setChannels(payload.guild.id, payload.channels)
   })
   // GUILD_UPDATE：图标/名称等字段在 guild 上；banners 仅 banner 增删/排序时携带
   gateway.subscribe(GatewayEvents.GuildUpdate, (payload) => {
-    useGuildsStore.getState().upsertGuild(payload.guild, {
-      banners: payload.banners,
-    })
+    const accountId = useAuthStore.getState().activeAccountId
+    useGuildsStore.getState().upsertGuild(
+      accountId
+        ? { ...payload.guild, account_id: accountId }
+        : payload.guild,
+      { banners: payload.banners },
+    )
   })
   gateway.subscribe(GatewayEvents.GuildDelete, (payload) => {
     const selected = useUIStore.getState().selectedGuildId === payload.guild_id
@@ -289,14 +367,44 @@ export function bindGatewayToStores() {
   })
 
   gateway.subscribe(GatewayEvents.ChannelCreate, (payload) => {
+    // 私信 CHANNEL_CREATE 负载为 privateChannelView（含 recipients），与服频道不同
+    const raw: unknown = payload
+    if (isPrivateChannelPayload(raw)) {
+      usePrivateChannelsStore.getState().upsert(raw)
+      return
+    }
     useChannelsStore.getState().upsertChannel(payload)
   })
   gateway.subscribe(GatewayEvents.ChannelUpdate, (payload) => {
+    const raw: unknown = payload
+    if (isPrivateChannelPayload(raw)) {
+      // 合并：避免部分字段（如仅 message_request）覆盖掉 recipients
+      const existing = usePrivateChannelsStore
+        .getState()
+        .channels.find((c) => c.id === raw.id)
+      if (existing) {
+        usePrivateChannelsStore.getState().upsert({
+          ...existing,
+          ...raw,
+          recipients:
+            raw.recipients?.length > 0 ? raw.recipients : existing.recipients,
+        })
+      } else {
+        usePrivateChannelsStore.getState().upsert(raw)
+      }
+      return
+    }
     useChannelsStore.getState().upsertChannel(payload)
   })
   // 频道删除 / 禁看（定向 CHANNEL_DELETE）：移除频道 + 清其未读计数
   gateway.subscribe(GatewayEvents.ChannelDelete, (payload) => {
-    useChannelsStore.getState().removeChannel(payload.guild_id, payload.channel_id)
+    if (isDmGuildId(payload.guild_id) || !payload.guild_id) {
+      usePrivateChannelsStore.getState().remove(payload.channel_id)
+    } else {
+      useChannelsStore
+        .getState()
+        .removeChannel(payload.guild_id, payload.channel_id)
+    }
     useReadStatesStore.getState().removeChannel(payload.channel_id)
   })
 
@@ -319,6 +427,8 @@ export function bindGatewayToStores() {
       user_id: payload.member.user_id,
       nickname: payload.member.nickname ?? "",
       role_ids: payload.role_ids ?? payload.member.role_ids ?? [],
+      name_style_role_id:
+        payload.member.name_style_role_id ?? null,
     })
   })
   // 资料变更：更新本人 auth.user，并按 user_id 合并进已缓存的各服成员列表
@@ -413,4 +523,66 @@ export function bindGatewayToStores() {
       console.debug(`[gateway] ${eventName}（暂无 handler）`, payload)
     })
   }
+
+  // 社交层：关系与通知
+  const applyRelationship = (
+    payload: {
+      id: string
+      type: string
+      nickname?: string
+      target_user_id: string
+      user?: {
+        id: string
+        username: string
+        display_name?: string
+        avatar_url?: string
+      }
+    },
+    remove: boolean,
+  ) => {
+    // REMOVE：用对方 user id（payload.user 或 target_user_id）
+    // 对方 id 相对本端 = target_user_id（事件里 user_id 是接收方自己）
+    const peerId = payload.user?.id ?? payload.target_user_id
+    if (remove) {
+      if (!peerId) {
+        void useRelationshipsStore.getState().refresh().catch(() => undefined)
+        return
+      }
+      useRelationshipsStore.getState().remove(peerId, payload.type)
+      return
+    }
+    if (!payload.user?.id) {
+      // 无摘要时整表刷新，避免 blocked/friend 状态残缺
+      void useRelationshipsStore.getState().refresh().catch(() => undefined)
+      return
+    }
+    useRelationshipsStore.getState().upsert({
+      id: payload.id || payload.user.id,
+      type: payload.type as import("~/lib/api/social").RelationshipType,
+      nickname: payload.nickname,
+      user: payload.user,
+      created_at: new Date().toISOString(),
+    })
+  }
+  gateway.subscribe(GatewayEvents.RelationshipAdd, (payload) => {
+    applyRelationship(payload, false)
+  })
+  gateway.subscribe(GatewayEvents.RelationshipUpdate, (payload) => {
+    applyRelationship(payload, false)
+  })
+  gateway.subscribe(GatewayEvents.RelationshipRemove, (payload) => {
+    applyRelationship(payload, true)
+  })
+  gateway.subscribe(GatewayEvents.NotificationCreate, (payload) => {
+    useNotificationsStore.getState().prepend({
+      id: payload.id,
+      type: payload.type,
+      payload: (payload.payload as Record<string, unknown>) ?? {},
+      created_at: payload.event_at ?? new Date().toISOString(),
+      read: false,
+    })
+  })
+  gateway.subscribe(GatewayEvents.NotificationDelete, (payload) => {
+    useNotificationsStore.getState().removeLocal(payload.id)
+  })
 }

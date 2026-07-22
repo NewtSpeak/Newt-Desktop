@@ -31,6 +31,11 @@ import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
 import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
+import {
+  dmDisplayName,
+  isDmGuildId,
+  usePrivateChannelsStore,
+} from "~/stores/private-channels"
 import { useReadStatesStore } from "~/stores/read-states"
 import { isOverrideMuted, useSettingsStore } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
@@ -117,59 +122,131 @@ export function maybeNotifyMessage(message: Message, mentioned: boolean) {
     return // ②
   }
 
-  const channels = useChannelsStore.getState().byGuild[message.guild_id]
-  if (channels && !channels.some((channel) => channel.id === message.channel_id)) {
+  const isDm = isDmGuildId(message.guild_id)
+  const privateCh = isDm
+    ? usePrivateChannelsStore
+        .getState()
+        .channels.find((c) => c.id === message.channel_id)
+    : undefined
+
+  // 消息请求：默认不弹系统通知横幅（19 FR-D14），仅保留列表角标
+  if (isDm && privateCh?.message_request) {
+    return
+  }
+
+  const channels = !isDm
+    ? useChannelsStore.getState().byGuild[message.guild_id]
+    : undefined
+  if (
+    !isDm &&
+    channels &&
+    !channels.some((channel) => channel.id === message.channel_id)
+  ) {
     return // ③ 已加载该服频道列表且查无此频道 = 不可见
+  }
+  // 私信：列表已加载但会话不在（已关闭/非参与者）则不弹
+  if (
+    isDm &&
+    usePrivateChannelsStore.getState().loaded &&
+    !privateCh
+  ) {
+    return
   }
 
   if (effectiveSelfStatus() === "dnd") return // ④
 
   const notifySettings = useSettingsStore.getState().notifications
-  const guildOverride = notifySettings.perGuild[message.guild_id]
+  const guildOverride = !isDm
+    ? notifySettings.perGuild[message.guild_id]
+    : undefined
   const channelOverride = notifySettings.perChannel[message.channel_id]
+
+  // docs 17 FR-11：服级「抑制 @everyone/@here」——仅经由 @everyone/@here 被提及时
+  // 降级为普通消息（不弹不响）；直接 @ 或角色 @ 不受影响；@ 计数由 read-states 保留。
+  let effectiveMentioned = mentioned
+  if (
+    !isDm &&
+    mentioned &&
+    guildOverride?.suppressEveryone &&
+    message.mention_everyone
+  ) {
+    const selfRoleIds = useMembersStore
+      .getState()
+      .byGuild[message.guild_id]?.find((m) => m.user_id === selfId)?.role_ids
+    const direct =
+      message.mentions?.includes(selfId) === true ||
+      Boolean(
+        selfRoleIds?.length &&
+          message.mention_roles?.some((roleId) => selfRoleIds.includes(roleId)),
+      )
+    if (!direct) effectiveMentioned = false
+  }
+
   // ⑤ 静音（频道或服务器任一生效即静音；定时静音 mutedUntil 判定时惰性比较）
   if (
     (isOverrideMuted(channelOverride) || isOverrideMuted(guildOverride)) &&
-    !mentioned
+    !effectiveMentioned
   ) {
     return
   }
 
   // ⑥ 有效层级：频道覆盖 → 服务器覆盖 → 全局默认（docs 15 FR-08）
+  // 私信默认更灵敏：无频道覆盖时用 globalLevel（通常 all）
   const level =
     channelOverride?.level ?? guildOverride?.level ?? notifySettings.globalLevel
   if (level === "none") return
-  if (level === "mentions" && !mentioned) return
+  if (level === "mentions" && !effectiveMentioned) return
 
   // ⑦ 聚合限流：同频道 5s 内只弹一条
   const now = Date.now()
-  if (now - (lastNotifiedAt[message.channel_id] ?? 0) < CHANNEL_AGGREGATE_WINDOW_MS) return
+  if (now - (lastNotifiedAt[message.channel_id] ?? 0) < CHANNEL_AGGREGATE_WINDOW_MS)
+    return
   lastNotifiedAt[message.channel_id] = now
 
-  const guildName =
-    useGuildsStore.getState().guilds.find((guild) => guild.id === message.guild_id)?.name ??
-    "服务器"
-  const channelName =
-    channels?.find((channel) => channel.id === message.channel_id)?.name ?? "频道"
-  const member = useMembersStore
-    .getState()
-    .byGuild[message.guild_id]?.find((item) => item.user_id === message.author_id)
-  const author =
-    member?.nickname?.trim() ||
-    member?.display_name?.trim() ||
-    member?.username ||
-    message.author_username
+  let title: string
+  let author: string
+  if (isDm) {
+    const dmTitle = privateCh
+      ? dmDisplayName(privateCh, selfId)
+      : "私信"
+    title =
+      privateCh?.type === "GROUP_DM" ? `群组私信 · ${dmTitle}` : `私信 · ${dmTitle}`
+    const peer = privateCh?.recipients.find((r) => r.id === message.author_id)
+    author =
+      peer?.display_name?.trim() ||
+      peer?.username ||
+      message.author_username ||
+      "用户"
+  } else {
+    const guildName =
+      useGuildsStore.getState().guilds.find((guild) => guild.id === message.guild_id)
+        ?.name ?? "服务器"
+    const channelName =
+      channels?.find((channel) => channel.id === message.channel_id)?.name ?? "频道"
+    title = `${guildName} · #${channelName}`
+    const member = useMembersStore
+      .getState()
+      .byGuild[message.guild_id]?.find((item) => item.user_id === message.author_id)
+    author =
+      member?.nickname?.trim() ||
+      member?.display_name?.trim() ||
+      member?.username ||
+      message.author_username
+  }
 
-  void deliver(`${guildName} · #${channelName}`, `${author}: ${previewOf(message)}`)
+  void deliver(title, `${author}: ${previewOf(message)}`)
 
   // 提示音（FR-16/17）：管线通过后播放；勿扰在 ④ 已拦截；self_deaf 抑制
   const selfDeaf = useVoiceStore.getState().session?.selfDeaf
   if (!selfDeaf) {
-    const soundEnabled = mentioned
+    const soundEnabled = effectiveMentioned
       ? notifySettings.soundMentionEnabled
       : notifySettings.soundMessageEnabled
     if (soundEnabled) {
-      playNotifySound(mentioned ? "mention" : "message", notifySettings.soundVolume)
+      playNotifySound(
+        effectiveMentioned ? "mention" : "message",
+        notifySettings.soundVolume,
+      )
     }
   }
 }

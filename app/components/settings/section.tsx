@@ -2,13 +2,30 @@
 
 import { Badge } from "~/components/ui/badge"
 
+import { settingsAnchorDomId } from "./settings-toc"
+
 export function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="mb-5 text-lg font-semibold">{children}</h2>
+  return (
+    <h2 className="mb-5 text-lg font-semibold text-balance">{children}</h2>
+  )
 }
 
-export function GroupLabel({ children }: { children: React.ReactNode }) {
+/**
+ * 分组标题；传入 id 时作为子菜单跳转锚点（与 settings-toc 中 id 对齐）。
+ * scroll-mt 避免被顶栏挡住。
+ */
+export function GroupLabel({
+  id,
+  children,
+}: {
+  id?: string
+  children: React.ReactNode
+}) {
   return (
-    <p className="mt-8 mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase first:mt-0">
+    <p
+      id={id ? settingsAnchorDomId(id) : undefined}
+      className="mt-8 mb-2 scroll-mt-6 text-xs font-semibold tracking-wide text-muted-foreground uppercase first:mt-0"
+    >
       {children}
     </p>
   )
@@ -25,7 +42,7 @@ export function SettingRow({
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 border-b py-4 last:border-b-0">
+    <div className="flex items-center justify-between gap-6 py-3.5">
       <div className="min-w-0">
         <p className="text-sm font-medium">{label}</p>
         {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}

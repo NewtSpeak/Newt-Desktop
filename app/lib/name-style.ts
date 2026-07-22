@@ -1,8 +1,13 @@
-// 用户名颜色 / 渐变样式：取成员所绑角色中 position 最高且配置了 style/color 的角色。
+// 用户名颜色 / 渐变 / 文字装饰：取成员所绑角色中 position 最高且配置了 style/color 的角色。
 
 import type { CSSProperties } from "react"
 
-import type { GuildMember, Role, RoleNameStyle } from "~/lib/api/types"
+import type {
+  GuildMember,
+  Role,
+  RoleNameStyle,
+  RoleSurfaceStyle,
+} from "~/lib/api/types"
 
 export type ResolvedNameStyle = {
   kind: "solid" | "linear" | "radial" | "none"
@@ -10,9 +15,26 @@ export type ResolvedNameStyle = {
   angle: number
   shape: string
   animated: boolean
+  /** 流动周期秒数（默认 4） */
+  speed: number
   /** 用于徽章/点缀的主色 */
   primaryColor?: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
 }
+
+const DEFAULT_SPEED = 4
+
+const emptyResolved = (): ResolvedNameStyle => ({
+  kind: "none",
+  colors: [],
+  angle: 90,
+  shape: "circle",
+  animated: false,
+  speed: DEFAULT_SPEED,
+})
 
 function parseStyle(raw: Role["style"]): RoleNameStyle | null {
   if (!raw) return null
@@ -40,72 +62,156 @@ function normalizeHex(color: string | undefined): string | undefined {
     : undefined
 }
 
+function clampSpeed(speed: number | undefined): number {
+  if (typeof speed !== "number" || Number.isNaN(speed)) return DEFAULT_SPEED
+  return Math.min(20, Math.max(0.5, speed))
+}
+
+function pickDecor(
+  style: RoleNameStyle | RoleSurfaceStyle | null | undefined,
+): Pick<
+  ResolvedNameStyle,
+  "bold" | "italic" | "underline" | "strikethrough"
+> {
+  const s = style as RoleNameStyle | null | undefined
+  return {
+    bold: Boolean(s?.bold) || undefined,
+    italic: Boolean(s?.italic) || undefined,
+    underline: Boolean(s?.underline) || undefined,
+    strikethrough: Boolean(s?.strikethrough) || undefined,
+  }
+}
+
+function hasDecor(
+  d: Pick<ResolvedNameStyle, "bold" | "italic" | "underline" | "strikethrough">,
+): boolean {
+  return Boolean(d.bold || d.italic || d.underline || d.strikethrough)
+}
+
+function surfaceToResolved(
+  style: RoleSurfaceStyle | RoleNameStyle | null | undefined,
+): ResolvedNameStyle | null {
+  const decor = pickDecor(style)
+  if (!style?.type) {
+    if (!hasDecor(decor)) return null
+    return { ...emptyResolved(), ...decor }
+  }
+  if (style.type === "solid" && style.colors?.[0]) {
+    const color = normalizeHex(style.colors[0])
+    if (!color) {
+      return hasDecor(decor) ? { ...emptyResolved(), ...decor } : null
+    }
+    return {
+      kind: "solid",
+      colors: [color],
+      angle: 90,
+      shape: "circle",
+      animated: false,
+      speed: DEFAULT_SPEED,
+      primaryColor: color,
+      ...decor,
+    }
+  }
+  if (
+    (style.type === "linear" || style.type === "radial") &&
+    style.colors &&
+    style.colors.length >= 2
+  ) {
+    const colors = style.colors
+      .map((c) => normalizeHex(c))
+      .filter((c): c is string => Boolean(c))
+    if (colors.length < 2) {
+      return hasDecor(decor) ? { ...emptyResolved(), ...decor } : null
+    }
+    return {
+      kind: style.type,
+      colors,
+      angle: style.angle ?? 90,
+      shape: style.shape || "circle",
+      animated: Boolean(style.animated),
+      speed: clampSpeed(style.speed),
+      primaryColor: colors[0],
+      ...decor,
+    }
+  }
+  return hasDecor(decor) ? { ...emptyResolved(), ...decor } : null
+}
+
 /**
- * 解析成员展示名样式：优先最高 position 的 Role.Style；
- * 否则回退最高有 color 的角色纯色。
+ * 解析成员展示名样式：
+ * 1. 若设置了 name_style_role_id 且仍持有该角色 → 用该角色 style/color；
+ * 2. 否则取持有角色中 position 最高且有 style 的角色；
+ * 3. 再回退最高有 color 的角色纯色。
+ * （不可改变角色绑定，仅切换样式来源）
  */
 export function resolveMemberNameStyle(
-  member: Pick<GuildMember, "role_ids"> | undefined,
+  member:
+    | Pick<GuildMember, "role_ids" | "name_style_role_id">
+    | undefined,
   roles: Role[] | undefined,
 ): ResolvedNameStyle {
-  const empty: ResolvedNameStyle = {
-    kind: "none",
-    colors: [],
-    angle: 90,
-    shape: "circle",
-    animated: false,
-  }
+  const empty = emptyResolved()
   if (!member || !roles?.length) return empty
 
-  const bound = roles
-    .filter((role) => !role.is_everyone && member.role_ids.includes(role.id))
-    .sort((a, b) => b.position - a.position)
+  const heldIds = new Set(member.role_ids)
+  const everyone = roles.find((r) => r.is_everyone)
 
-  for (const role of bound) {
-    const style = parseStyle(role.style)
-    if (style?.type === "solid" && style.colors?.[0]) {
-      const color = normalizeHex(style.colors[0])
+  // 1. 本人偏好角色
+  const preferredId = member.name_style_role_id?.trim()
+  if (preferredId) {
+    const preferred = roles.find((r) => r.id === preferredId)
+    if (
+      preferred &&
+      (preferred.is_everyone || heldIds.has(preferred.id))
+    ) {
+      const fromStyle = surfaceToResolved(parseStyle(preferred.style))
+      if (fromStyle) return fromStyle
+      const color = normalizeHex(preferred.color)
       if (color) {
         return {
+          ...emptyResolved(),
           kind: "solid",
           colors: [color],
-          angle: 90,
-          shape: "circle",
-          animated: Boolean(style.animated),
           primaryColor: color,
         }
       }
     }
-    if (
-      (style?.type === "linear" || style?.type === "radial") &&
-      style.colors &&
-      style.colors.length >= 2
-    ) {
-      const colors = style.colors
-        .map((c) => normalizeHex(c))
-        .filter((c): c is string => Boolean(c))
-      if (colors.length >= 2) {
-        return {
-          kind: style.type,
-          colors,
-          angle: style.angle ?? 90,
-          shape: style.shape || "circle",
-          animated: Boolean(style.animated),
-          primaryColor: colors[0],
-        }
+  }
+
+  // 2. 自动：持有角色 + @everyone，按 position 降序
+  const bound = roles
+    .filter(
+      (role) =>
+        role.is_everyone || heldIds.has(role.id),
+    )
+    .sort((a, b) => b.position - a.position)
+
+  for (const role of bound) {
+    const resolved = surfaceToResolved(parseStyle(role.style))
+    if (resolved) return resolved
+  }
+
+  for (const role of bound) {
+    if (role.is_everyone) continue
+    const color = normalizeHex(role.color)
+    if (color) {
+      return {
+        ...emptyResolved(),
+        kind: "solid",
+        colors: [color],
+        primaryColor: color,
       }
     }
   }
 
-  for (const role of bound) {
-    const color = normalizeHex(role.color)
+  // @everyone color 最后
+  if (everyone) {
+    const color = normalizeHex(everyone.color)
     if (color) {
       return {
+        ...emptyResolved(),
         kind: "solid",
         colors: [color],
-        angle: 90,
-        shape: "circle",
-        animated: false,
         primaryColor: color,
       }
     }
@@ -114,41 +220,173 @@ export function resolveMemberNameStyle(
   return empty
 }
 
-/** 转为 CSS（渐变用 background-clip:text） */
-export function nameStyleToCSS(style: ResolvedNameStyle): CSSProperties {
-  if (style.kind === "none" || style.colors.length === 0) return {}
-  if (style.kind === "solid") {
-    return { color: style.colors[0] }
+/**
+ * 解析角色色点/icon 样式：
+ * icon_sync → 与文字同；独立 icon；否则主色纯色。
+ */
+export function resolveRoleIconResolved(
+  role: Pick<Role, "style" | "color"> | undefined,
+): ResolvedNameStyle {
+  const empty = emptyResolved()
+  if (!role) return empty
+  const raw = parseStyle(role.style)
+  if (raw?.type) {
+    if (raw.icon_sync) {
+      const text = surfaceToResolved(raw)
+      if (text && text.kind !== "none") return text
+    } else if (raw.icon?.type) {
+      const icon = surfaceToResolved(raw.icon)
+      if (icon && icon.kind !== "none") return icon
+    } else {
+      const text = surfaceToResolved(raw)
+      if (text?.primaryColor) {
+        return {
+          ...emptyResolved(),
+          kind: "solid",
+          colors: [text.primaryColor],
+          primaryColor: text.primaryColor,
+        }
+      }
+    }
   }
+  const color = normalizeHex(role.color)
+  if (color) {
+    return {
+      ...emptyResolved(),
+      kind: "solid",
+      colors: [color],
+      primaryColor: color,
+    }
+  }
+  return empty
+}
+
+/** 文字 CSS（渐变用 background-clip:text）+ 装饰 */
+export function nameStyleToCSS(style: ResolvedNameStyle): CSSProperties {
+  const decor: CSSProperties = {}
+  if (style.bold) decor.fontWeight = 700
+  if (style.italic) decor.fontStyle = "italic"
+  const lines: string[] = []
+  if (style.underline) lines.push("underline")
+  if (style.strikethrough) lines.push("line-through")
+  if (lines.length) {
+    decor.textDecorationLine = lines.join(" ")
+    decor.textDecorationThickness = "from-font"
+  }
+
+  if (style.kind === "none" || style.colors.length === 0) {
+    return decor
+  }
+  if (style.kind === "solid") {
+    return { ...decor, color: style.colors[0] }
+  }
+  const stops = style.animated
+    ? [...style.colors, style.colors[0]].join(", ")
+    : style.colors.join(", ")
   const gradient =
     style.kind === "linear"
-      ? `linear-gradient(${style.angle}deg, ${style.colors.join(", ")})`
-      : `radial-gradient(${style.shape}, ${style.colors.join(", ")})`
+      ? `linear-gradient(${style.angle}deg, ${stops})`
+      : `radial-gradient(${style.shape}, ${stops})`
   return {
+    ...decor,
     backgroundImage: gradient,
     backgroundSize: style.animated ? "200% 200%" : undefined,
     WebkitBackgroundClip: "text",
     backgroundClip: "text",
     color: "transparent",
     WebkitTextFillColor: "transparent",
+    ...(style.animated
+      ? { animationDuration: `${clampSpeed(style.speed)}s` }
+      : {}),
   }
 }
 
-/** 角色彩色小徽章（最高 3 个有颜色的角色） */
+/** 色点/icon 填充 CSS（背景渐变，非文字 clip） */
+export function iconStyleToFillCSS(style: ResolvedNameStyle): CSSProperties {
+  if (style.kind === "none" || style.colors.length === 0) return {}
+  if (style.kind === "solid") {
+    return { backgroundColor: style.colors[0] }
+  }
+  const stops = style.animated
+    ? [...style.colors, style.colors[0]].join(", ")
+    : style.colors.join(", ")
+  const gradient =
+    style.kind === "linear"
+      ? `linear-gradient(${style.angle}deg, ${stops})`
+      : `radial-gradient(${style.shape}, ${stops})`
+  return {
+    backgroundImage: gradient,
+    backgroundColor: "transparent",
+    backgroundSize: style.animated ? "200% 200%" : undefined,
+    ...(style.animated
+      ? { animationDuration: `${clampSpeed(style.speed)}s` }
+      : {}),
+  }
+}
+
+export type MemberRoleBadgeView = {
+  id: string
+  name: string
+  color?: string
+  iconStyle?: ResolvedNameStyle
+  badgeBackground?: ResolvedNameStyle
+  badgeBackgroundImageUrl?: string
+  badgeIconUrl?: string
+  badgeShowName?: boolean
+  badgeTextColor?: string
+  badgeCustom?: boolean
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
+}
+
+/** 角色徽章（最高 3 个；含自定义徽章背景/icon/文字装饰） */
 export function memberRoleBadges(
   member: Pick<GuildMember, "role_ids"> | undefined,
   roles: Role[] | undefined,
-): { id: string; name: string; color?: string }[] {
+): MemberRoleBadgeView[] {
   if (!member || !roles?.length) return []
   return roles
     .filter((role) => !role.is_everyone && member.role_ids.includes(role.id))
     .sort((a, b) => b.position - a.position)
     .slice(0, 3)
-    .map((role) => ({
-      id: role.id,
-      name: role.name,
-      color: normalizeHex(role.color),
-    }))
+    .map((role) => {
+      const iconStyle = resolveRoleIconResolved(role)
+      const raw = parseStyle(role.style)
+      const badge = raw?.badge
+      const badgeBg = badge?.background
+        ? surfaceToResolved(badge.background)
+        : null
+      const bgImage = badge?.background_image_url?.trim() || undefined
+      const badgeCustom = Boolean(
+        badge?.enabled ||
+          badge?.icon_url ||
+          bgImage ||
+          (badgeBg && badgeBg.kind !== "none") ||
+          badge?.bold ||
+          badge?.italic ||
+          badge?.underline ||
+          badge?.strikethrough,
+      )
+      return {
+        id: role.id,
+        name: role.name,
+        color: iconStyle.primaryColor || normalizeHex(role.color),
+        iconStyle: iconStyle.kind !== "none" ? iconStyle : undefined,
+        badgeBackground:
+          badgeBg && badgeBg.kind !== "none" ? badgeBg : undefined,
+        badgeBackgroundImageUrl: bgImage,
+        badgeIconUrl: badge?.icon_url?.trim() || undefined,
+        badgeShowName: badge?.show_name !== false,
+        badgeTextColor: normalizeHex(badge?.text_color),
+        badgeCustom,
+        bold: Boolean(badge?.bold) || undefined,
+        italic: Boolean(badge?.italic) || undefined,
+        underline: Boolean(badge?.underline) || undefined,
+        strikethrough: Boolean(badge?.strikethrough) || undefined,
+      }
+    })
 }
 
 /** 从消息正文提取 <@uuid> */

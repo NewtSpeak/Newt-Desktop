@@ -17,6 +17,33 @@
 
 import { vlog, vwarn } from "./log"
 import { useSettingsStore } from "~/stores/settings"
+import {
+  createNsAudioContext,
+  createNsNodeWithFallback,
+  downlinkWasmModel,
+  uplinkWasmModel,
+  type DfnTuningParams,
+  type DtlnTuningParams,
+  type NoiseModelId,
+  type NsHandle,
+  type WasmNsModelId,
+} from "~/lib/noise-suppression"
+
+function voiceDfnTuning(): DfnTuningParams {
+  const voice = useSettingsStore.getState().voice
+  return {
+    attenuationLimitDb: voice.dfnAttenuationLimitDb ?? 48,
+    presenceGainDb: voice.dfnPresenceGainDb ?? 2,
+  }
+}
+
+function voiceDtlnTuning(): DtlnTuningParams {
+  const voice = useSettingsStore.getState().voice
+  return {
+    presenceGainDb: voice.dtlnPresenceGainDb ?? 2,
+    makeupGainDb: voice.dtlnMakeupGainDb ?? 0.5,
+  }
+}
 
 const ICE_DISCONNECTED_GRACE_MS = 2_000
 const SPEAKING_POLL_MS = 100
@@ -51,6 +78,10 @@ export type VoiceMediaDiagnostics = {
   streams: VoiceStreamStat[]
   connectionState: string | null
   iceState: string | null
+  /** 上行降噪模型（docs 20 FR-D01；null = 关闭 / 浏览器内置约束 / 加载失败直通） */
+  nsUplinkModel: string | null
+  /** 下行「本地为其降噪」已挂载路数（docs 20 FR-D01） */
+  nsDownlinkCount: number
 }
 
 export type VoiceRtcCallbacks = {
@@ -79,11 +110,21 @@ function ensureAudioPool(): HTMLElement {
   return pool
 }
 
-/** >100% 音量的 WebAudio 放大链（元素静音、Gain 输出） */
-type GainPipe = {
+/**
+ * 下行 WebAudio 处理链（元素静音、经 WebAudio 输出）：
+ * source → [NS 降噪节点（本地为其降噪，docs 20 FR-R03）] → gain → destination。
+ * 「>100% 放大」与「每用户本地降噪」共用此链；顺序定稿先降噪后音量（docs 20 §5.2）。
+ */
+type PlaybackPipe = {
   source: MediaStreamAudioSourceNode
   gain: GainNode
   stream: MediaStream
+  /** 已挂载的降噪节点（null = 直通）；实际 model 可能是回退结果 */
+  ns: NsHandle | null
+  /** 最近一次期望的模型（与回退后的实际 model 区分，避免重试风暴） */
+  nsWanted: WasmNsModelId | null
+  /** 降噪节点异步挂载的竞态防护：期望变化即 +1，回调校验后生效 */
+  nsEpoch: number
 }
 
 export class VoiceRtc {
@@ -94,6 +135,8 @@ export class VoiceRtc {
   private rawMicStream: MediaStream | null = null
   private inputGainCtx: AudioContext | null = null
   private inputGainNode: GainNode | null = null
+  /** 上行降噪节点（docs 20 FR-S04；null = 关闭/浏览器内置/加载失败直通） */
+  private uplinkNs: NsHandle | null = null
   private audioEls = new Map<string, HTMLAudioElement>()
   private audioStreams = new Map<string, MediaStream>()
   private iceDisconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -125,9 +168,9 @@ export class VoiceRtc {
   /** CUTOVER 后旧链路上行永久停止 */
   private uplinkStopped = false
 
-  // 每用户音量（0–2；1 = 100%）与 >1 的放大链
+  // 每用户音量（0–2；1 = 100%）与下行处理链（放大 / 本地降噪）
   private volumes = new Map<string, number>()
-  private gainPipes = new Map<string, GainPipe>()
+  private gainPipes = new Map<string, PlaybackPipe>()
   private playbackContext: AudioContext | null = null
 
   // 本地说话检测 / 输入电平（独立 monitor 轨，不受 mute/上行闸门影响）
@@ -172,6 +215,8 @@ export class VoiceRtc {
       streams: [],
       connectionState: this.pc?.connectionState ?? null,
       iceState: this.pc?.iceConnectionState ?? null,
+      nsUplinkModel: this.uplinkNs?.model ?? null,
+      nsDownlinkCount: [...this.gainPipes.values()].filter((p) => p.ns).length,
     }
     const pc = this.pc
     if (!pc) return empty
@@ -364,11 +409,43 @@ export class VoiceRtc {
         streams,
         connectionState: pc.connectionState,
         iceState: pc.iceConnectionState,
+        nsUplinkModel: this.uplinkNs?.model ?? null,
+        nsDownlinkCount: [...this.gainPipes.values()].filter((p) => p.ns)
+          .length,
       }
     } catch (error) {
       vwarn("getStats 失败", error)
       return empty
     }
+  }
+
+  /**
+   * 根据语音设置构建麦克风约束。
+   * stereo=true 时请求双声道；部分浏览器在 AEC 开启时仍可能给单声道，属平台限制。
+   */
+  static buildMicConstraints(voice: {
+    aec?: boolean
+    ns?: boolean
+    nsModel?: NoiseModelId
+    agc?: boolean
+    stereo?: boolean
+    inputDeviceId?: string | null
+  }): MediaTrackConstraints {
+    const stereo = voice.stereo === true
+    // FR-S05：浏览器 NS 仅在模型 = browser 时开启；WASM 模型时关闭避免双重处理发闷
+    const browserNs =
+      voice.ns !== false && (voice.nsModel ?? "rnnoise") === "browser"
+    const audio: MediaTrackConstraints = {
+      echoCancellation: voice.aec !== false,
+      noiseSuppression: browserNs,
+      autoGainControl: voice.agc !== false,
+      // ideal：设备不支持 2ch 时回退，避免 OverconstrainedError
+      channelCount: stereo ? { ideal: 2 } : { ideal: 1 },
+      ...(voice.inputDeviceId
+        ? { deviceId: { ideal: voice.inputDeviceId } }
+        : {}),
+    }
+    return audio
   }
 
   /**
@@ -379,42 +456,154 @@ export class VoiceRtc {
   async initMic(): Promise<boolean> {
     try {
       const voice = useSettingsStore.getState().voice
-      const audio: MediaTrackConstraints = {
-        echoCancellation: voice.aec !== false,
-        noiseSuppression: voice.ns !== false,
-        autoGainControl: voice.agc !== false,
-        ...(voice.inputDeviceId
-          ? { deviceId: { ideal: voice.inputDeviceId } }
-          : {}),
+      const audio = VoiceRtc.buildMicConstraints(voice)
+      let raw: MediaStream
+      try {
+        raw = await navigator.mediaDevices.getUserMedia({ audio })
+      } catch (firstError) {
+        // 立体声约束失败时回退不带 channelCount，避免完全进不了麦
+        if (voice.stereo) {
+          vwarn("立体声 getUserMedia 失败，回退单声道约束", firstError)
+          const fallback = VoiceRtc.buildMicConstraints({
+            ...voice,
+            stereo: false,
+          })
+          raw = await navigator.mediaDevices.getUserMedia({ audio: fallback })
+        } else {
+          throw firstError
+        }
       }
-      const raw = await navigator.mediaDevices.getUserMedia({ audio })
       if (this.disposed) {
         raw.getTracks().forEach((track) => track.stop())
         return false
       }
+      this.stopMicCaptureOnly()
       this.rawMicStream = raw
-      // 关键路径：原始轨直连 SFU（避免 WebAudio Destination 挂起后 0 字节上行）
-      const uplink = this.buildUplinkFromRaw(raw, voice.inputVolume ?? 100)
+      // 无处理需求时原始轨直连 SFU（避免 WebAudio Destination 挂起后 0 字节上行）；
+      // NS（WASM 模型）/输入增益需求时走 WebAudio 上行链（docs 20 §5.1）
+      const uplink = await this.buildUplinkChain(raw, voice)
+      if (this.disposed) {
+        raw.getTracks().forEach((track) => track.stop())
+        this.destroyUplinkNs()
+        void this.inputGainCtx?.close().catch(() => undefined)
+        this.inputGainCtx = null
+        this.inputGainNode = null
+        return false
+      }
       this.micStream = uplink
       this.micTrack = uplink.getAudioTracks()[0] ?? null
       if (this.micTrack)
         this.micTrack.enabled = this.micEnabled && !this.uplinkStopped
       this.startSpeakingDetection(raw)
+      const settings = this.micTrack?.getSettings?.() ?? {}
+      const channels =
+        typeof settings.channelCount === "number" ? settings.channelCount : null
       vlog("麦克风采集就绪 → 已 addTrack 路径准备", this.micTrack?.label, {
         device: voice.inputDeviceId ?? "default",
         inputVolume: voice.inputVolume,
+        stereoRequested: voice.stereo === true,
+        channelCount: channels,
         uplinkVia:
-          uplink === raw ? "raw-getUserMedia" : "webaudio-gain",
+          uplink === raw
+            ? "raw-getUserMedia"
+            : this.uplinkNs
+              ? `webaudio-ns-${this.uplinkNs.model}`
+              : "webaudio-gain",
         trackReady: this.micTrack?.readyState,
         trackEnabled: this.micTrack?.enabled,
       })
       return this.micTrack !== null
     } catch (error) {
       vwarn("getUserMedia 失败，进入仅听模式", error)
+      this.stopMicCaptureOnly()
       this.micStream = null
       this.micTrack = null
       this.rawMicStream = null
       return false
+    }
+  }
+
+  /** 仅停止本地采集资源（不拆 PC / 远端播放） */
+  private stopMicCaptureOnly() {
+    this.stopSpeakingDetection()
+    const raw = this.rawMicStream
+    const mic = this.micStream
+    this.rawMicStream = null
+    this.micStream = null
+    this.micTrack = null
+    this.destroyUplinkNs()
+    void this.inputGainCtx?.close().catch(() => undefined)
+    this.inputGainCtx = null
+    this.inputGainNode = null
+    try {
+      raw?.getTracks().forEach((t) => t.stop())
+    } catch {
+      // ignore
+    }
+    if (mic && mic !== raw) {
+      try {
+        mic.getTracks().forEach((t) => {
+          try {
+            t.stop()
+          } catch {
+            // ignore
+          }
+        })
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * 通话中按最新设置重采麦克风并 replaceTrack（设备 / AEC·NS·AGC / 立体声）。
+   * 无 PC 时只更新本地采集；有 audio sender 时热替换上行轨。
+   */
+  async reinitMicFromSettings(): Promise<boolean> {
+    if (this.uplinkStopped) return false
+    const ok = await this.initMic()
+    if (!ok || !this.micTrack) return false
+    const pc = this.pc
+    if (!pc) return true
+    const audioSender =
+      pc.getSenders().find((s) => s.track?.kind === "audio") ??
+      pc.getSenders().find((s) => !s.track && this.micTrack?.kind === "audio") ??
+      null
+    if (!audioSender) return true
+    try {
+      await audioSender.replaceTrack(this.micTrack)
+      // 尽量提示编码器走立体声（浏览器可能忽略）
+      await this.applyAudioSenderPrefs(audioSender)
+      vlog("麦克风轨已按新设置 replaceTrack", {
+        trackId: this.micTrack.id,
+        channelCount: this.micTrack.getSettings?.().channelCount,
+      })
+      return true
+    } catch (error) {
+      vwarn("reinitMic replaceTrack 失败", error)
+      return false
+    }
+  }
+
+  /** 给音频 sender 打上可用的编码偏好（立体声由轨声道 + Opus 协商决定） */
+  private async applyAudioSenderPrefs(sender: RTCRtpSender) {
+    try {
+      const params = sender.getParameters()
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}]
+      }
+      // 不强制 maxBitrate；立体声时略抬一点上限，避免被压成单声道听感发糊
+      const stereo = useSettingsStore.getState().voice.stereo === true
+      if (stereo) {
+        const enc = params.encodings[0] ?? {}
+        if (enc.maxBitrate == null || enc.maxBitrate < 64_000) {
+          enc.maxBitrate = 96_000
+        }
+        params.encodings[0] = enc
+      }
+      await sender.setParameters(params)
+    } catch {
+      // 协商未完成时 setParameters 可能抛错，可忽略
     }
   }
 
@@ -426,8 +615,11 @@ export class VoiceRtc {
       }
       return
     }
-    // 已有增益链且仍需增益：只改 gain 值
-    if (this.inputGainNode && Math.abs(percent - 100) >= 0.5) {
+    // 上行降噪链在用（gain 节点恒在链内）或仍需增益：只改 gain 值，不拆链
+    if (
+      this.inputGainNode &&
+      (this.uplinkNs || Math.abs(percent - 100) >= 0.5)
+    ) {
       this.inputGainNode.gain.value = Math.min(2, Math.max(0, percent / 100))
       return
     }
@@ -463,6 +655,90 @@ export class VoiceRtc {
     await Promise.all(
       [...this.audioEls.values()].map((el) => this.applySinkId(el)),
     )
+  }
+
+  /** 销毁上行降噪节点 */
+  private destroyUplinkNs() {
+    this.uplinkNs?.destroy()
+    this.uplinkNs = null
+  }
+
+  /**
+   * 构建上行链（docs 20 §5.1）：
+   * 采集 → [立体声下混（WASM 模型时，决议 R2）] → [NS 模型节点] → [输入增益] → 编码轨。
+   * ns 关闭 / 模型 = browser 时回退 buildUplinkFromRaw（增益或直连）；
+   * 模型加载失败直通不降噪，语音不受影响（FR-L02）。
+   */
+  private async buildUplinkChain(
+    raw: MediaStream,
+    voice: {
+      ns?: boolean
+      nsModel?: NoiseModelId
+      inputVolume?: number
+    },
+  ): Promise<MediaStream> {
+    this.destroyUplinkNs()
+    const selected = voice.nsModel ?? "rnnoise"
+    const wantModel =
+      voice.ns !== false ? uplinkWasmModel(selected) : null
+    const inputVolume = voice.inputVolume ?? 100
+    if (!wantModel) return this.buildUplinkFromRaw(raw, inputVolume)
+    try {
+      vlog("上行降噪链构建开始", {
+        selected,
+        wantModel,
+        inputVolume,
+      })
+      // 48kHz 上下文：DFN 硬要求，RNNoise 亦按 48kHz 假设（引擎内自动回退默认率）
+      void this.inputGainCtx?.close().catch(() => undefined)
+      const ctx = createNsAudioContext()
+      if (!ctx) {
+        this.inputGainCtx = null
+        this.inputGainNode = null
+        return this.buildUplinkFromRaw(raw, inputVolume)
+      }
+      this.inputGainCtx = ctx
+      const source = ctx.createMediaStreamSource(raw)
+      const gain = ctx.createGain()
+      gain.gain.value = Math.min(2, Math.max(0, inputVolume / 100))
+      this.inputGainNode = gain
+      const dest = ctx.createMediaStreamDestination()
+      // 强度按「所选模型」记忆（FR-S06）；回退到其他模型时沿用用户意图强度
+      const strength =
+        useSettingsStore.getState().voice.nsStrengthByModel?.[selected] ?? 100
+      const handle = await createNsNodeWithFallback(
+        ctx,
+        wantModel,
+        strength,
+        wantModel === "deepfilternet" ? voiceDfnTuning() : null,
+        wantModel === "dtln" ? voiceDtlnTuning() : null,
+      )
+      if (this.disposed || this.inputGainCtx !== ctx) {
+        handle?.destroy()
+        void ctx.close().catch(() => undefined)
+        return raw
+      }
+      if (handle) {
+        this.uplinkNs = handle
+        source.connect(handle.input)
+        handle.output.connect(gain)
+        vlog("上行降噪链就绪", {
+          selected,
+          actual: handle.model,
+          sampleRate: ctx.sampleRate,
+        })
+      } else {
+        vwarn("上行降噪模型全部加载失败，直通不降噪（FR-L02）")
+        source.connect(gain)
+      }
+      gain.connect(dest)
+      void ctx.resume().catch(() => undefined)
+      return dest.stream
+    } catch (error) {
+      vwarn("上行降噪链创建失败，回退增益/原始链", error)
+      this.destroyUplinkNs()
+      return this.buildUplinkFromRaw(raw, inputVolume)
+    }
   }
 
   /**
@@ -537,12 +813,14 @@ export class VoiceRtc {
 
     if (this.micTrack && this.micStream) {
       const sender = pc.addTrack(this.micTrack, this.micStream)
+      void this.applyAudioSenderPrefs(sender)
       vlog("音频轨已 addTrack → SFU 上行", {
         trackId: this.micTrack.id,
         readyState: this.micTrack.readyState,
         enabled: this.micTrack.enabled,
         muted: this.micTrack.muted,
         label: this.micTrack.label,
+        channelCount: this.micTrack.getSettings?.().channelCount,
         senderTrack: sender.track?.id,
       })
     } else {
@@ -734,6 +1012,7 @@ export class VoiceRtc {
     this.stopSpeakingDetection()
     this.micStream?.getTracks().forEach((track) => track.stop())
     this.rawMicStream?.getTracks().forEach((track) => track.stop())
+    this.destroyUplinkNs()
     void this.inputGainCtx?.close().catch(() => undefined)
     this.inputGainCtx = null
     this.inputGainNode = null
@@ -816,6 +1095,7 @@ export class VoiceRtc {
     this.micTrack = null
     this.rawMicStream?.getTracks().forEach((track) => track.stop())
     this.rawMicStream = null
+    this.destroyUplinkNs()
     void this.inputGainCtx?.close().catch(() => undefined)
     this.inputGainCtx = null
     this.inputGainNode = null
@@ -919,7 +1199,10 @@ export class VoiceRtc {
     return this.videoStreams
   }
 
-  /** 单用户播放收口：静音条件 + 每用户音量 × 主输出音量 */
+  /**
+   * 单用户播放收口：静音条件 + 每用户音量 × 主输出音量 + 本地降噪。
+   * 处理顺序定稿（docs 20 §5.2）：先降噪、后音量。
+   */
   private applyPlayback(userId: string) {
     const el = this.audioEls.get(userId)
     if (!el) return
@@ -927,48 +1210,183 @@ export class VoiceRtc {
       this.playbackMuted || this.deafened || this.locallyMuted.has(userId)
     // 用户单独音量 × 全局输出音量（均 0–2）
     const volume = (this.volumes.get(userId) ?? 1) * this.masterOutputVolume
+    // 决议 R1：ns 总开关关闭时暂停下行降噪（直通），localNs 名单保留；
+    // FR-R04 P1：每用户模型覆盖优先于全局模型
+    const voice = useSettingsStore.getState().voice
+    const wantNsModel =
+      voice.ns !== false && voice.localNs?.[userId]
+        ? (voice.localNsModels?.[userId] ??
+          downlinkWasmModel(voice.nsModel ?? "rnnoise"))
+        : null
+    const nsStrength = wantNsModel
+      ? (voice.nsStrengthByModel?.[wantNsModel] ?? 100)
+      : 100
 
-    if (volume <= 1) {
+    if (volume <= 1 && !wantNsModel) {
       this.teardownGainPipe(userId)
       el.volume = Math.min(1, Math.max(0, volume))
       el.muted = muted
-    } else {
-      // 放大：元素静音、经 GainNode 输出（保持元素播放使 RTP 持续拉流）
-      el.volume = 1
-      el.muted = true
-      const pipe = this.ensureGainPipe(userId)
-      if (pipe) {
-        pipe.gain.gain.value = muted ? 0 : volume
-      } else {
-        // WebAudio 不可用时退化为原音量直出
-        el.muted = muted
-        el.volume = 1
-      }
+      return
     }
+    // WebAudio 链：元素静音、source → [ns] → gain 输出（保持元素播放使 RTP 持续拉流）
+    el.volume = 1
+    el.muted = true
+    const pipe = this.ensureGainPipe(userId)
+    if (!pipe) {
+      // WebAudio 不可用时退化为原音量直出（不降噪）
+      el.muted = muted
+      el.volume = 1
+      return
+    }
+    pipe.gain.gain.value = muted ? 0 : Math.min(2, volume)
+    this.syncPipeNs(userId, pipe, wantNsModel, nsStrength)
   }
 
   private applyPlaybackAll() {
     for (const userId of this.audioEls.keys()) this.applyPlayback(userId)
   }
 
-  private ensureGainPipe(userId: string): GainPipe | null {
+  /**
+   * ns / nsModel / localNs 变化（本端操作或他端设置同步）后重算全部下行链
+   * （docs 20 FR-R05：≤500ms 感知；FR-R06 跨端重放）。
+   */
+  refreshNoiseSuppression() {
+    this.applyPlaybackAll()
+  }
+
+  /**
+   * 挂载/拆除某用户的下行降噪节点（docs 20 FR-R03/R04）。
+   * WASM/worklet 加载为异步，用 nsEpoch 防竞态：仅最后一次期望生效。
+   * 强度（FR-S06）随每次收口即时更新，不重建节点。
+   */
+  private syncPipeNs(
+    userId: string,
+    pipe: PlaybackPipe,
+    model: WasmNsModelId | null,
+    strengthPercent: number,
+  ) {
+    if (model === null) {
+      if (!pipe.ns) return
+      pipe.nsEpoch += 1
+      pipe.nsWanted = null
+      const prev = pipe.ns
+      pipe.ns = null
+      try {
+        pipe.source.disconnect()
+      } catch {
+        // ignore
+      }
+      prev.destroy()
+      try {
+        pipe.source.connect(pipe.gain)
+      } catch {
+        // ignore
+      }
+      return
+    }
+    if (pipe.nsWanted === model && pipe.ns) {
+      pipe.ns.setStrength(strengthPercent)
+      return
+    }
+    if (pipe.nsWanted === model) return // 加载中，等回调
+    pipe.nsWanted = model
+    const epoch = ++pipe.nsEpoch
+    const ctx = this.playbackContext
+    if (!ctx) return
+    void createNsNodeWithFallback(
+      ctx,
+      model,
+      strengthPercent,
+      model === "deepfilternet" ? voiceDfnTuning() : null,
+      model === "dtln" ? voiceDtlnTuning() : null,
+    ).then((handle) => {
+      if (!handle) return
+      const current = this.gainPipes.get(userId)
+      if (this.disposed || current !== pipe || pipe.nsEpoch !== epoch) {
+        handle.destroy()
+        return
+      }
+      const prev = pipe.ns
+      pipe.ns = handle
+      try {
+        pipe.source.disconnect()
+      } catch {
+        // ignore
+      }
+      prev?.destroy()
+      try {
+        pipe.source.connect(handle.input)
+        handle.output.connect(pipe.gain)
+        vlog("下行本地降噪已挂载", { userId, model: handle.model })
+      } catch (error) {
+        vwarn("下行降噪节点接线失败，直通", error)
+        pipe.ns = null
+        handle.destroy()
+        try {
+          pipe.source.connect(pipe.gain)
+        } catch {
+          // ignore
+        }
+      }
+    })
+  }
+
+  /** FR-S06：上行强度变更即时应用（不重建链） */
+  applyUplinkNsStrength(percent: number) {
+    this.uplinkNs?.setStrength(percent)
+  }
+
+  /** DeepFilterNet 衰减/清晰度热更（不重建链） */
+  applyUplinkDfnTuning(params: Partial<DfnTuningParams>) {
+    this.uplinkNs?.setDfnTuning?.(params)
+  }
+
+  /** 下行所有 DFN 节点同步调参 */
+  applyDownlinkDfnTuning(params: Partial<DfnTuningParams>) {
+    for (const pipe of this.gainPipes.values()) {
+      pipe.ns?.setDfnTuning?.(params)
+    }
+  }
+
+  /** DTLN 清晰度/输出补偿热更（不重建链） */
+  applyUplinkDtlnTuning(params: Partial<DtlnTuningParams>) {
+    this.uplinkNs?.setDtlnTuning?.(params)
+  }
+
+  /** 下行所有 DTLN 节点同步调参 */
+  applyDownlinkDtlnTuning(params: Partial<DtlnTuningParams>) {
+    for (const pipe of this.gainPipes.values()) {
+      pipe.ns?.setDtlnTuning?.(params)
+    }
+  }
+
+  private ensureGainPipe(userId: string): PlaybackPipe | null {
     const existing = this.gainPipes.get(userId)
     const stream = this.audioStreams.get(userId)
     if (!stream) return null
     if (existing && existing.stream === stream) return existing
     if (existing) this.teardownGainPipe(userId)
     try {
-      this.playbackContext ??= new AudioContext()
+      // 48kHz：与降噪模型采样率假设一致（DFN 硬要求）
+      this.playbackContext ??= createNsAudioContext() ?? new AudioContext()
       void this.playbackContext.resume().catch(() => undefined)
       const source = this.playbackContext.createMediaStreamSource(stream)
       const gain = this.playbackContext.createGain()
+      // 初始直通接线；降噪节点由 syncPipeNs 异步插入 source 与 gain 之间
       source.connect(gain)
       gain.connect(this.playbackContext.destination)
-      const pipe: GainPipe = { source, gain, stream }
+      const pipe: PlaybackPipe = {
+        source,
+        gain,
+        stream,
+        ns: null,
+        nsWanted: null,
+        nsEpoch: 0,
+      }
       this.gainPipes.set(userId, pipe)
       return pipe
     } catch (error) {
-      vwarn("音量放大链创建失败，退化为 100%", error)
+      vwarn("下行处理链创建失败，退化为 100% 直出", error)
       return null
     }
   }
@@ -977,6 +1395,9 @@ export class VoiceRtc {
     const pipe = this.gainPipes.get(userId)
     if (!pipe) return
     this.gainPipes.delete(userId)
+    pipe.nsEpoch += 1
+    pipe.ns?.destroy()
+    pipe.ns = null
     try {
       pipe.source.disconnect()
       pipe.gain.disconnect()

@@ -46,15 +46,17 @@ const UNKNOWN_REACTOR_PREFIX = "__reactor:"
 
 /** 按频道消息缓存精确回写未读条数（拉历史 / 补缺口后调用） */
 function syncUnreadCountFromCache(channelId: string) {
-  const messages = useMessagesStore.getState().byChannel[channelId]?.messages ?? []
+  const messages =
+    useMessagesStore.getState().byChannel[channelId]?.messages ?? []
   if (messages.length === 0) return
   const lastRead = useReadStatesStore.getState().lastReadByChannel[channelId]
   const count = countIdsAfterLastRead(
     lastRead,
-    messages.map((message) => message.id),
+    messages.map((message) => message.id)
   )
   // 取 max：在线事件已累加的值若更大（缓存被 CACHE_LIMIT 截断）则保留
-  const tracked = useReadStatesStore.getState().unreadCountByChannel[channelId] ?? 0
+  const tracked =
+    useReadStatesStore.getState().unreadCountByChannel[channelId] ?? 0
   useReadStatesStore
     .getState()
     .setUnreadCountExact(channelId, Math.max(tracked, count))
@@ -67,7 +69,9 @@ export type ReactionEntry = {
 }
 
 /** 客户端消息 = 服务端 messageView，reactions 归一为本地 userIds 结构 */
-export type ChatMessage = Omit<Message, "reactions"> & { reactions: ReactionEntry[] }
+export type ChatMessage = Omit<Message, "reactions"> & {
+  reactions: ReactionEntry[]
+}
 
 export type PendingAttachmentMeta = {
   id: string
@@ -84,6 +88,14 @@ export type PendingMessage = {
   replyToId?: string
   attachmentIds: string[]
   attachments: PendingAttachmentMeta[]
+  stickerItems?: { item_id: string }[]
+  /** 乐观贴图预览（asset URL 等，发送确认后丢弃） */
+  stickerPreview?: {
+    item_id: string
+    pack_id?: string
+    mark?: string
+    asset_url?: string
+  }[]
   createdAt: string
   status: "sending" | "failed"
   errorMessage?: string
@@ -115,6 +127,9 @@ export type SendInput = {
   replyToId?: string
   attachmentIds?: string[]
   attachments?: PendingAttachmentMeta[]
+  /** 贴图消息：恰 1 张，与 content/attachments 互斥（docs 17） */
+  stickerItems?: { item_id: string }[]
+  stickerPreview?: PendingMessage["stickerPreview"]
   /** 不传则自动生成；调用方（composer）需要 nonce 用于失败后定向清理 */
   nonce?: string
 }
@@ -127,6 +142,8 @@ type MessagesState = {
 
   loadInitial: (channelId: string) => Promise<void>
   loadOlder: (channelId: string) => Promise<void>
+  /** 丢弃频道消息缓存（私信重开后强制重拉） */
+  invalidateChannel: (channelId: string) => void
   /**
    * 以目标消息为锚点加载其前后上下文（搜索结果跳转定位用）。
    * 返回 false 表示消息不可用（已删除/无权限），调用方 toast「无法定位该消息」。
@@ -142,7 +159,11 @@ type MessagesState = {
 
   edit: (channelId: string, messageId: string, content: string) => Promise<void>
   remove: (channelId: string, messageId: string) => Promise<void>
-  toggleReaction: (channelId: string, messageId: string, emoji: string) => Promise<void>
+  toggleReaction: (
+    channelId: string,
+    messageId: string,
+    emoji: string
+  ) => Promise<void>
 
   applyMessageCreate: (message: Message) => void
   applyMessageUpdate: (message: Message) => void
@@ -173,7 +194,7 @@ function isUnknownReactor(id: string): boolean {
 function userIdsFromSummary(
   summary: ReactionSummary,
   previous: ReactionEntry | undefined,
-  selfId: string | undefined,
+  selfId: string | undefined
 ): string[] {
   const count = Math.max(0, Number(summary.count) || 0)
   if (count === 0) return []
@@ -181,7 +202,9 @@ function userIdsFromSummary(
   const previousMe = Boolean(selfId && previous?.userIds.includes(selfId))
   const me = typeof summary.me === "boolean" ? summary.me : previousMe
 
-  const realIds = (previous?.userIds ?? []).filter((id) => !isUnknownReactor(id))
+  const realIds = (previous?.userIds ?? []).filter(
+    (id) => !isUnknownReactor(id)
+  )
   let userIds = [...realIds]
 
   if (selfId) {
@@ -202,14 +225,19 @@ function userIdsFromSummary(
   return userIds
 }
 
-function hydrateReactions(raw: Message, previous?: ChatMessage): ReactionEntry[] {
+function hydrateReactions(
+  raw: Message,
+  previous?: ChatMessage
+): ReactionEntry[] {
   // 服务端 messageView 始终附带 reactions（可为空数组）；缺字段时才回退本地
   if (raw.reactions === undefined) {
     return previous?.reactions ?? []
   }
   const selfId = useAuthStore.getState().user?.id
   return raw.reactions.map((summary) => {
-    const prev = previous?.reactions.find((entry) => entry.emoji === summary.emoji)
+    const prev = previous?.reactions.find(
+      (entry) => entry.emoji === summary.emoji
+    )
     return {
       emoji: summary.emoji,
       userIds: userIdsFromSummary(summary, prev, selfId),
@@ -218,7 +246,11 @@ function hydrateReactions(raw: Message, previous?: ChatMessage): ReactionEntry[]
 }
 
 function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
-  const { reactions: _serverReactions, attachments: rawAttachments, ...rest } = raw
+  const {
+    reactions: _serverReactions,
+    attachments: rawAttachments,
+    ...rest
+  } = raw
   // 部分 Gateway payload（如管理员临场发言）可能省略 attachments；
   // 缺字段时保留本地已有列表，否则回落空数组，避免渲染层读 .length 崩溃。
   return {
@@ -229,7 +261,10 @@ function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
 }
 
 /** 合并进有序数组：按 ID 去重（保留新数据、合并 reactions），恒升序 */
-function mergeSorted(existing: ChatMessage[], incoming: Message[]): ChatMessage[] {
+function mergeSorted(
+  existing: ChatMessage[],
+  incoming: Message[]
+): ChatMessage[] {
   if (incoming.length === 0) return existing
   const byId = new Map<string, ChatMessage>()
   for (const message of existing) byId.set(message.id, message)
@@ -237,7 +272,10 @@ function mergeSorted(existing: ChatMessage[], incoming: Message[]): ChatMessage[
   return [...byId.values()].sort((a, b) => compareSnowflake(a.id, b.id))
 }
 
-function channelState(state: MessagesState, channelId: string): ChannelMessagesState {
+function channelState(
+  state: MessagesState,
+  channelId: string
+): ChannelMessagesState {
   return state.byChannel[channelId] ?? EMPTY_CHANNEL
 }
 
@@ -247,7 +285,10 @@ function channelState(state: MessagesState, channelId: string): ChannelMessagesS
 
 export const useMessagesStore = create<MessagesState>()((set, get) => {
   /** 更新单个频道的分片状态 */
-  const patchChannel = (channelId: string, patch: Partial<ChannelMessagesState>) =>
+  const patchChannel = (
+    channelId: string,
+    patch: Partial<ChannelMessagesState>
+  ) =>
     set((state) => ({
       byChannel: {
         ...state.byChannel,
@@ -257,7 +298,11 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
   /** 历史 404：标记频道不可用并从 channels store 移除（防扫频语义） */
   const markUnavailable = (channelId: string) => {
-    patchChannel(channelId, { unavailable: true, loadingInitial: false, loadingOlder: false })
+    patchChannel(channelId, {
+      unavailable: true,
+      loadingInitial: false,
+      loadingOlder: false,
+    })
     void import("./channels").then((m) => {
       const byGuild = m.useChannelsStore.getState().byGuild
       for (const [guildId, channels] of Object.entries(byGuild)) {
@@ -272,23 +317,28 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
   const updateMessage = (
     channelId: string,
     messageId: string,
-    updater: (message: ChatMessage) => ChatMessage,
+    updater: (message: ChatMessage) => ChatMessage
   ) =>
     set((state) => {
       const channel = channelState(state, channelId)
-      const index = channel.messages.findIndex((message) => message.id === messageId)
+      const index = channel.messages.findIndex(
+        (message) => message.id === messageId
+      )
       if (index === -1) return state
       const messages = channel.messages.slice()
       messages[index] = updater(messages[index])
       return {
-        byChannel: { ...state.byChannel, [channelId]: { ...channel, messages } },
+        byChannel: {
+          ...state.byChannel,
+          [channelId]: { ...channel, messages },
+        },
       }
     })
 
   const patchPending = (
     channelId: string,
     nonce: string,
-    patch: Partial<PendingMessage>,
+    patch: Partial<PendingMessage>
   ) =>
     set((state) => {
       const queue = state.pendingByChannel[channelId]
@@ -297,7 +347,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
         pendingByChannel: {
           ...state.pendingByChannel,
           [channelId]: queue.map((item) =>
-            item.nonce === nonce ? { ...item, ...patch } : item,
+            item.nonce === nonce ? { ...item, ...patch } : item
           ),
         },
       }
@@ -324,17 +374,26 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
   /** 发送请求主体（send 与 retryPending 共用，nonce 保持不变以幂等去重） */
   const dispatchSend = async (channelId: string, pending: PendingMessage) => {
     try {
+      const isSticker =
+        pending.stickerItems != null && pending.stickerItems.length > 0
       const message = await apiSendMessage(channelId, {
-        content: pending.content || undefined,
+        content: isSticker ? "" : pending.content || undefined,
         reply_to_id: pending.replyToId,
-        attachment_ids: pending.attachmentIds.length > 0 ? pending.attachmentIds : undefined,
+        attachment_ids:
+          !isSticker && pending.attachmentIds.length > 0
+            ? pending.attachmentIds
+            : undefined,
+        sticker_items: isSticker ? pending.stickerItems : undefined,
         nonce: pending.nonce,
       })
       ackPending(channelId, pending.nonce, message)
     } catch (error) {
       const message =
         error instanceof ApiError ? error.message : "发送失败，请检查网络后重试"
-      patchPending(channelId, pending.nonce, { status: "failed", errorMessage: message })
+      patchPending(channelId, pending.nonce, {
+        status: "failed",
+        errorMessage: message,
+      })
       throw error
     }
   }
@@ -350,8 +409,14 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
     loadInitial: async (channelId) => {
       const channel = channelState(get(), channelId)
-      // 已有缓存直接复用（Gateway 事件保持其新鲜；断线由 fillGap 兜底）
-      if (channel.loadedInitial || channel.loadingInitial || channel.unavailable) return
+      // 已有缓存直接复用（Gateway 事件保持其新鲜；断线由 fillGap 兜底）。
+      // 例外：空缓存且曾 loadedInitial（例如误进空壳私信）允许强制重拉。
+      if (channel.loadingInitial || channel.unavailable) return
+      if (channel.loadedInitial && channel.messages.length > 0) return
+      // 空的 loadedInitial 仍重试一次，避免「进了会话但消息永远空」
+      if (channel.loadedInitial && channel.messages.length === 0) {
+        patchChannel(channelId, { loadedInitial: false })
+      }
       patchChannel(channelId, { loadingInitial: true })
       try {
         const page = await listMessages(channelId, { limit: PAGE_SIZE })
@@ -389,6 +454,16 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       }
     },
 
+    /** 丢弃频道消息缓存（私信重开到权威会话后强制重拉历史） */
+    invalidateChannel: (channelId: string) => {
+      set((state) => {
+        if (!state.byChannel[channelId]) return state
+        const next = { ...state.byChannel }
+        delete next[channelId]
+        return { byChannel: next }
+      })
+    },
+
     loadOlder: async (channelId) => {
       const channel = channelState(get(), channelId)
       if (
@@ -403,7 +478,10 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       patchChannel(channelId, { loadingOlder: true })
       const oldest = channel.messages[0].id
       try {
-        const page = await listMessages(channelId, { before: oldest, limit: PAGE_SIZE })
+        const page = await listMessages(channelId, {
+          before: oldest,
+          limit: PAGE_SIZE,
+        })
         set((state) => {
           const current = channelState(state, channelId)
           return {
@@ -432,7 +510,8 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       const channel = channelState(get(), channelId)
       if (channel.unavailable) return false
       // 目标已在缓存内：直接定位，无需重拉
-      if (channel.messages.some((message) => message.id === messageId)) return true
+      if (channel.messages.some((message) => message.id === messageId))
+        return true
       patchChannel(channelId, { loadingInitial: true })
       try {
         // 目标消息 + 前后各一页上下文（FR-18：before/after 各拉一页）
@@ -451,7 +530,10 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
                 // 以目标为中心重建缓存窗口（丢弃原缓存，避免窗口间出现缺口；
                 // 若目标之后还有 >PAGE_SIZE 条更新消息，向下滚动暂不能续拉，
                 // 重进频道或 fillGap 会恢复到最新——P0 可接受的边界）
-                messages: mergeSorted([], [...beforePage, target, ...afterPage]),
+                messages: mergeSorted(
+                  [],
+                  [...beforePage, target, ...afterPage]
+                ),
                 loadedInitial: true,
                 loadingInitial: false,
                 reachedStart: beforePage.length < PAGE_SIZE,
@@ -477,7 +559,10 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       }
       const latest = channel.messages[channel.messages.length - 1].id
       try {
-        const page = await listMessages(channelId, { after: latest, limit: GAP_FILL_LIMIT })
+        const page = await listMessages(channelId, {
+          after: latest,
+          limit: GAP_FILL_LIMIT,
+        })
         if (page.length >= GAP_FILL_LIMIT) {
           // 缺口过大：丢弃缓存，重拉最近一页
           patchChannel(channelId, { ...EMPTY_CHANNEL })
@@ -494,7 +579,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
                 ...state.byChannel,
                 [channelId]: {
                   ...current,
-                  messages: mergeSorted(current.messages, page).slice(-CACHE_LIMIT),
+                  messages: mergeSorted(current.messages, page).slice(
+                    -CACHE_LIMIT
+                  ),
                 },
               },
             }
@@ -522,6 +609,8 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
         replyToId: input.replyToId,
         attachmentIds: input.attachmentIds ?? [],
         attachments: input.attachments ?? [],
+        stickerItems: input.stickerItems,
+        stickerPreview: input.stickerPreview,
         createdAt: new Date().toISOString(),
         status: "sending",
       }
@@ -536,9 +625,14 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
     },
 
     retryPending: async (channelId, nonce) => {
-      const pending = get().pendingByChannel[channelId]?.find((item) => item.nonce === nonce)
+      const pending = get().pendingByChannel[channelId]?.find(
+        (item) => item.nonce === nonce
+      )
       if (!pending || pending.status === "sending") return
-      patchPending(channelId, nonce, { status: "sending", errorMessage: undefined })
+      patchPending(channelId, nonce, {
+        status: "sending",
+        errorMessage: undefined,
+      })
       await dispatchSend(channelId, { ...pending, status: "sending" })
     },
 
@@ -555,20 +649,32 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
     remove: async (channelId, messageId) => {
       await apiDeleteMessage(channelId, messageId)
-      get().applyMessageDelete({ id: messageId, channel_id: channelId, guild_id: "" })
+      get().applyMessageDelete({
+        id: messageId,
+        channel_id: channelId,
+        guild_id: "",
+      })
     },
 
     toggleReaction: async (channelId, messageId, emoji) => {
       const userId = useAuthStore.getState().user?.id
       if (!userId) return
       const message = channelState(get(), channelId).messages.find(
-        (item) => item.id === messageId,
+        (item) => item.id === messageId
       )
       const reacted = Boolean(
-        message?.reactions.find((entry) => entry.emoji === emoji)?.userIds.includes(userId),
+        message?.reactions
+          .find((entry) => entry.emoji === emoji)
+          ?.userIds.includes(userId)
       )
       // 乐观更新，失败回滚（PUT/DELETE 幂等，重复请求无副作用）
-      const payload = { message_id: messageId, channel_id: channelId, guild_id: "", user_id: userId, emoji }
+      const payload = {
+        message_id: messageId,
+        channel_id: channelId,
+        guild_id: "",
+        user_id: userId,
+        emoji,
+      }
       if (reacted) {
         get().applyReactionRemove(payload)
       } else {
@@ -592,7 +698,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       const selfId = useAuthStore.getState().user?.id
       set((state) => {
         const channel = channelState(state, message.channel_id)
-        const alreadyExists = channel.messages.some((item) => item.id === message.id)
+        const alreadyExists = channel.messages.some(
+          (item) => item.id === message.id
+        )
         // 收到该用户消息即清除其 typing 条目
         const typing = state.typingByChannel[message.channel_id]
         const nextTyping =
@@ -600,7 +708,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
             ? {
                 ...state.typingByChannel,
                 [message.channel_id]: Object.fromEntries(
-                  Object.entries(typing).filter(([userId]) => userId !== message.author_id),
+                  Object.entries(typing).filter(
+                    ([userId]) => userId !== message.author_id
+                  )
                 ),
               }
             : state.typingByChannel
@@ -621,7 +731,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
           if (queue?.some((item) => item.nonce === message.nonce)) {
             pendingByChannel = {
               ...state.pendingByChannel,
-              [message.channel_id]: queue.filter((item) => item.nonce !== message.nonce),
+              [message.channel_id]: queue.filter(
+                (item) => item.nonce !== message.nonce
+              ),
             }
           }
         }
@@ -645,20 +757,23 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
     applyMessageUpdate: (message) => {
       updateMessage(message.channel_id, message.id, (previous) =>
-        normalize(message, previous),
+        normalize(message, previous)
       )
     },
 
     applyMessageDelete: (payload) => {
       set((state) => {
         const channel = channelState(state, payload.channel_id)
-        if (!channel.messages.some((message) => message.id === payload.id)) return state
+        if (!channel.messages.some((message) => message.id === payload.id))
+          return state
         return {
           byChannel: {
             ...state.byChannel,
             [payload.channel_id]: {
               ...channel,
-              messages: channel.messages.filter((message) => message.id !== payload.id),
+              messages: channel.messages.filter(
+                (message) => message.id !== payload.id
+              ),
             },
           },
         }
@@ -667,7 +782,9 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
     applyReactionAdd: (payload) => {
       updateMessage(payload.channel_id, payload.message_id, (message) => {
-        const entry = message.reactions.find((item) => item.emoji === payload.emoji)
+        const entry = message.reactions.find(
+          (item) => item.emoji === payload.emoji
+        )
         if (entry) {
           if (entry.userIds.includes(payload.user_id)) return message
           return {
@@ -675,29 +792,36 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
             reactions: message.reactions.map((item) =>
               item.emoji === payload.emoji
                 ? { ...item, userIds: [...item.userIds, payload.user_id] }
-                : item,
+                : item
             ),
           }
         }
         return {
           ...message,
-          reactions: [...message.reactions, { emoji: payload.emoji, userIds: [payload.user_id] }],
+          reactions: [
+            ...message.reactions,
+            { emoji: payload.emoji, userIds: [payload.user_id] },
+          ],
         }
       })
     },
 
     applyReactionRemove: (payload) => {
       updateMessage(payload.channel_id, payload.message_id, (message) => {
-        const entry = message.reactions.find((item) => item.emoji === payload.emoji)
+        const entry = message.reactions.find(
+          (item) => item.emoji === payload.emoji
+        )
         if (!entry || !entry.userIds.includes(payload.user_id)) return message
-        const userIds = entry.userIds.filter((userId) => userId !== payload.user_id)
+        const userIds = entry.userIds.filter(
+          (userId) => userId !== payload.user_id
+        )
         return {
           ...message,
           reactions:
             userIds.length === 0
               ? message.reactions.filter((item) => item.emoji !== payload.emoji)
               : message.reactions.map((item) =>
-                  item.emoji === payload.emoji ? { ...item, userIds } : item,
+                  item.emoji === payload.emoji ? { ...item, userIds } : item
                 ),
         }
       })
@@ -717,6 +841,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       }))
     },
 
-    reset: () => set({ byChannel: {}, pendingByChannel: {}, typingByChannel: {} }),
+    reset: () =>
+      set({ byChannel: {}, pendingByChannel: {}, typingByChannel: {} }),
   }
 })

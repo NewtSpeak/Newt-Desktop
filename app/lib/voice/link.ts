@@ -175,11 +175,13 @@ export class VoiceLink {
     return this.rtc.getDiagnostics()
   }
 
-  /** 设置项变更落到 RTC（输入增益 / 主输出 / 输出设备） */
+  /** 设置项变更落到 RTC（输入增益 / 主输出 / 输出设备 / 采集重开） */
   applyVoiceSettings(patch: {
     inputVolume?: number
     outputVolume?: number
     outputDeviceId?: string | null
+    /** 设备 / AEC·NS·AGC / 立体声 变化时重采麦克风 */
+    reinitMic?: boolean
   }) {
     if (typeof patch.inputVolume === "number")
       this.rtc.setInputVolume(patch.inputVolume)
@@ -187,6 +189,41 @@ export class VoiceLink {
       this.rtc.setMasterOutputVolume(patch.outputVolume)
     if (patch.outputDeviceId !== undefined)
       void this.rtc.setOutputDevice(patch.outputDeviceId)
+    if (patch.reinitMic) void this.rtc.reinitMicFromSettings()
+  }
+
+  /** ns/nsModel/localNs 变化后重算下行降噪链（docs 20 FR-R05/R06） */
+  refreshNoiseSuppression() {
+    this.rtc.refreshNoiseSuppression()
+  }
+
+  /** 上行降噪强度即时应用（docs 20 FR-S06，不重建链） */
+  applyUplinkNsStrength(percent: number) {
+    this.rtc.applyUplinkNsStrength(percent)
+  }
+
+  applyUplinkDfnTuning(
+    params: Partial<import("~/lib/noise-suppression").DfnTuningParams>,
+  ) {
+    this.rtc.applyUplinkDfnTuning(params)
+  }
+
+  applyDownlinkDfnTuning(
+    params: Partial<import("~/lib/noise-suppression").DfnTuningParams>,
+  ) {
+    this.rtc.applyDownlinkDfnTuning(params)
+  }
+
+  applyUplinkDtlnTuning(
+    params: Partial<import("~/lib/noise-suppression").DtlnTuningParams>,
+  ) {
+    this.rtc.applyUplinkDtlnTuning(params)
+  }
+
+  applyDownlinkDtlnTuning(
+    params: Partial<import("~/lib/noise-suppression").DtlnTuningParams>,
+  ) {
+    this.rtc.applyDownlinkDtlnTuning(params)
   }
 
   /** 采集麦克风 + 建 WSS（auth 首帧由 signaling 层在 open 时发出） */

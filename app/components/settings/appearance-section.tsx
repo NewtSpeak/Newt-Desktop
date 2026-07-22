@@ -34,7 +34,7 @@ export function AppearanceSection() {
     <div>
       <SectionTitle>外观</SectionTitle>
 
-      <GroupLabel>主题</GroupLabel>
+      <GroupLabel id="appearance-theme">主题</GroupLabel>
       <div className="grid grid-cols-3 gap-2">
         {THEME_OPTIONS.map(({ value, label, icon: Icon }) => (
           <button
@@ -54,7 +54,7 @@ export function AppearanceSection() {
         ))}
       </div>
 
-      <GroupLabel>字体大小</GroupLabel>
+      <GroupLabel id="appearance-font">字体大小</GroupLabel>
       <div className="rounded-2xl border p-4">
         <div className="mb-2 flex items-baseline justify-between">
           <span className="text-xs text-muted-foreground">12px</span>
@@ -73,7 +73,7 @@ export function AppearanceSection() {
         />
       </div>
 
-      <GroupLabel>消息显示密度</GroupLabel>
+      <GroupLabel id="appearance-density">消息显示密度</GroupLabel>
       <div className="grid grid-cols-2 gap-2">
         {DENSITY_OPTIONS.map((option) => (
           <button

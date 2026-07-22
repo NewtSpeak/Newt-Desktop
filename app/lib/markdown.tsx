@@ -1,14 +1,8 @@
-// 消息正文的有限 Markdown 渲染（docs 05 FR-14/15）。
+// 消息正文的有限 Markdown 解析（docs 05 FR-14/15）。
 //
 // 白名单：粗体 ** / 斜体 * / 删除线 ~~ / 行内代码 ` / 代码块 ``` /
 // 链接（仅 http/https 可点）/ 引用 > / 无序列表 - * / @提及 <@用户ID>。
-// 自己实现的轻量解析器：输出 React 节点（React 自动转义，天然不渲染内联 HTML），
-// 未识别语法一律按纯文本展示；javascript: 等协议链接不生成 <a>。
-
-import { useMemo, useState, type ReactNode } from "react"
-import { CheckIcon, CopyIcon } from "lucide-react"
-
-import { cn } from "~/lib/utils"
+// 轻量解析器供 TipTap bridge 与工具函数使用；UI 渲染见 TipTapMarkdown。
 
 // ---------------------------------------------------------------------------
 // AST
@@ -22,6 +16,8 @@ type InlineNode =
   | { kind: "strike"; children: InlineNode[] }
   | { kind: "link"; href: string; label: string }
   | { kind: "mention"; userId: string }
+  /** 自定义小表情 wire：`<e:item_id:mark>`（docs 17） */
+  | { kind: "custom_emote"; itemId: string; mark: string }
 
 type BlockNode =
   | { kind: "paragraph"; children: InlineNode[] }
@@ -35,6 +31,8 @@ type BlockNode =
 
 /** 提及占位（wire format）：<@用户ID>；服务端用户 ID 为 UUID */
 const MENTION_RE = /<@([0-9a-zA-Z-]{1,36})>/
+/** 自定义小表情（docs 17）：<e:item_id:mark> */
+const CUSTOM_EMOTE_RE = /<e:(\d+):([a-zA-Z0-9_]+)>/
 const BARE_URL_RE = /https?:\/\/[^\s<>]+/
 const MD_LINK_RE = /\[([^\[\]\n]{1,200})\]\(([^()\s]+)\)/
 
@@ -116,6 +114,20 @@ function findEarliest(text: string): InlineMatch | null {
       index: mentionMatch.index,
       length: mentionMatch[0].length,
       node: { kind: "mention", userId: mentionMatch[1] },
+    })
+  }
+
+  // 自定义小表情 <e:item_id:mark>
+  const emoteMatch = CUSTOM_EMOTE_RE.exec(text)
+  if (emoteMatch) {
+    consider({
+      index: emoteMatch.index,
+      length: emoteMatch[0].length,
+      node: {
+        kind: "custom_emote",
+        itemId: emoteMatch[1]!,
+        mark: emoteMatch[2]!,
+      },
     })
   }
 
@@ -243,17 +255,13 @@ export function parseMarkdown(content: string): BlockNode[] {
 }
 
 // ---------------------------------------------------------------------------
-// 提及工具
+// 提及 / 展示工具
 // ---------------------------------------------------------------------------
 
 /** 消息正文是否提及某用户（整行高亮判断用） */
 export function contentMentionsUser(content: string, userId: string): boolean {
   return content.includes(`<@${userId}>`)
 }
-
-// ---------------------------------------------------------------------------
-// 纯 emoji 短消息判定（jumbo emoji）
-// ---------------------------------------------------------------------------
 
 const EMOJI_ONLY_RE =
   /^(?:\p{Extended_Pictographic}|\p{Emoji_Presentation}|[\u{1F3FB}-\u{1F3FF}\u200D\uFE0F\u20E3]|\s)+$/u
@@ -265,295 +273,11 @@ export function isJumboEmoji(content: string): boolean {
   return EMOJI_ONLY_RE.test(trimmed)
 }
 
-// ---------------------------------------------------------------------------
-// 渲染
-// ---------------------------------------------------------------------------
-
-const CODE_COLLAPSE_LINES = 20
-
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const [copied, setCopied] = useState(false)
-  const [expanded, setExpanded] = useState(false)
-  const lineCount = code === "" ? 0 : code.split("\n").length
-  const collapsible = lineCount > CODE_COLLAPSE_LINES
-  const shown =
-    collapsible && !expanded
-      ? code.split("\n").slice(0, CODE_COLLAPSE_LINES).join("\n")
-      : code
-
-  const copy = () => {
-    void navigator.clipboard.writeText(code).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
-
-  return (
-    <div className="group/code relative my-1 max-w-full">
-      <pre className="overflow-x-auto rounded-lg border bg-muted/60 px-3 py-2 text-[13px] leading-relaxed">
-        <code>{shown}</code>
-      </pre>
-      {collapsible && (
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          className="mt-0.5 text-xs text-primary hover:underline"
-        >
-          {expanded ? "收起" : `展开（共 ${lineCount} 行）`}
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={copy}
-        aria-label="复制代码"
-        className="absolute top-1.5 right-1.5 hidden rounded-md border bg-background/90 p-1 text-muted-foreground group-hover/code:block hover:text-foreground"
-      >
-        {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-      </button>
-      {lang && (
-        <span className="absolute right-9 top-2 hidden text-[10px] text-muted-foreground select-none group-hover/code:block">
-          {lang}
-        </span>
-      )}
-    </div>
-  )
-}
-
 export type MentionResolver = (userId: string) => string
 /** 提及头像解析（可选） */
 export type MentionAvatarResolver = (userId: string) => string | undefined
 
-type InlineRenderOpts = {
-  resolveMention: MentionResolver
-  resolveMentionAvatar?: MentionAvatarResolver
-  selfId?: string
-  /** 回复摘要等场景：@卡片略缩小以贴合单行高度 */
-  compact?: boolean
-}
-
-function renderInline(
-  nodes: InlineNode[],
-  opts: InlineRenderOpts,
-  keyPrefix: string,
-): ReactNode[] {
-  const { resolveMention, resolveMentionAvatar, selfId, compact } = opts
-  return nodes.map((node, index) => {
-    const key = `${keyPrefix}-${index}`
-    switch (node.kind) {
-      case "text":
-        return <span key={key}>{node.text}</span>
-      case "code":
-        return (
-          <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-            {node.text}
-          </code>
-        )
-      case "bold":
-        return (
-          <strong key={key} className="font-semibold">
-            {renderInline(node.children, opts, key)}
-          </strong>
-        )
-      case "italic":
-        return <em key={key}>{renderInline(node.children, opts, key)}</em>
-      case "strike":
-        return <s key={key}>{renderInline(node.children, opts, key)}</s>
-      case "link":
-        return (
-          <a
-            key={key}
-            href={node.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline-offset-2 hover:underline break-all"
-          >
-            {node.label}
-          </a>
-        )
-      case "mention": {
-        const name = resolveMention(node.userId)
-        const avatarUrl = resolveMentionAvatar?.(node.userId)
-        const isSelf = selfId !== undefined && node.userId === selfId
-        const avatarSize = compact ? "size-3.5" : "size-4"
-        return (
-          <span
-            key={key}
-            className={cn(
-              "mx-0.5 inline-flex items-center gap-1 rounded-md font-medium align-middle",
-              compact
-                ? "py-px pr-1 pl-0.5 text-[0.9em]"
-                : "py-0.5 pr-1.5 pl-0.5 text-[0.95em]",
-              isSelf
-                ? "bg-amber-500/30 text-amber-700 dark:text-amber-300"
-                : "bg-primary/15 text-primary",
-            )}
-          >
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt=""
-                className={cn(avatarSize, "shrink-0 rounded-full object-cover")}
-                draggable={false}
-              />
-            ) : (
-              <span
-                className={cn(
-                  "flex shrink-0 items-center justify-center rounded-full text-[9px] font-semibold",
-                  avatarSize,
-                  isSelf ? "bg-amber-600/40 text-amber-50" : "bg-primary/30 text-primary-foreground",
-                )}
-                aria-hidden
-              >
-                {(name || "?").slice(0, 1).toUpperCase()}
-              </span>
-            )}
-            <span>@{name}</span>
-          </span>
-        )
-      }
-    }
-  })
-}
-
-export function MarkdownContent({
-  content,
-  resolveMention,
-  resolveMentionAvatar,
-  selfId,
-  className,
-  /**
-   * 紧凑模式：用于回复引用摘要等单行场景。
-   * 块级结构压成行内，@提及仍渲染为与正文一致的头像卡片样式。
-   */
-  compact = false,
-}: {
-  content: string
-  /** 用户 ID → 显示名（members store 查不到时返回原 ID 片段） */
-  resolveMention: MentionResolver
-  /** 用户 ID → 头像 URL（@ 提及左侧） */
-  resolveMentionAvatar?: MentionAvatarResolver
-  selfId?: string
-  className?: string
-  compact?: boolean
-}) {
-  const blocks = useMemo(() => parseMarkdown(content), [content])
-  const jumbo = useMemo(() => isJumboEmoji(content), [content])
-  const inlineOpts: InlineRenderOpts = {
-    resolveMention,
-    resolveMentionAvatar,
-    selfId,
-    compact,
-  }
-
-  if (jumbo && !compact) {
-    return <p className={cn("text-4xl leading-snug", className)}>{content.trim()}</p>
-  }
-
-  // 回复摘要：全部块压成同一行内流，保留 @ 卡片 / 粗斜体等行内样式。
-  if (compact) {
-    const parts: ReactNode[] = []
-    blocks.forEach((block, index) => {
-      if (index > 0) {
-        parts.push(
-          <span key={`sp-${index}`} className="text-muted-foreground/60">
-            {" "}
-          </span>,
-        )
-      }
-      switch (block.kind) {
-        case "paragraph":
-          if (block.children.length > 0) {
-            parts.push(
-              <span key={`p${index}`}>
-                {renderInline(block.children, inlineOpts, `cp${index}`)}
-              </span>,
-            )
-          }
-          break
-        case "codeblock":
-          parts.push(
-            <code
-              key={`c${index}`}
-              className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
-            >
-              [代码]
-            </code>,
-          )
-          break
-        case "quote":
-          block.lines.forEach((line, lineIndex) => {
-            if (lineIndex > 0) parts.push(" ")
-            parts.push(
-              <span key={`q${index}-${lineIndex}`} className="text-muted-foreground">
-                {renderInline(line, inlineOpts, `cq${index}-${lineIndex}`)}
-              </span>,
-            )
-          })
-          break
-        case "list":
-          block.items.forEach((item, itemIndex) => {
-            if (itemIndex > 0) parts.push(" ")
-            parts.push(
-              <span key={`l${index}-${itemIndex}`}>
-                · {renderInline(item, inlineOpts, `cl${index}-${itemIndex}`)}
-              </span>,
-            )
-          })
-          break
-      }
-    })
-    return (
-      <span
-        className={cn(
-          "min-w-0 truncate align-middle [&_.inline-flex]:align-middle",
-          className,
-        )}
-      >
-        {parts.length > 0 ? parts : null}
-      </span>
-    )
-  }
-
-  return (
-    <div className={cn("min-w-0 break-words whitespace-pre-wrap", className)}>
-      {blocks.map((block, index) => {
-        switch (block.kind) {
-          case "paragraph":
-            return block.children.length === 0 ? (
-              // 空行保持段落间距
-              <div key={index} className="h-[0.75em]" aria-hidden />
-            ) : (
-              <p key={index} className="leading-relaxed">
-                {renderInline(block.children, inlineOpts, `p${index}`)}
-              </p>
-            )
-          case "codeblock":
-            return <CodeBlock key={index} lang={block.lang} code={block.code} />
-          case "quote":
-            return (
-              <blockquote
-                key={index}
-                className="my-0.5 border-l-2 border-border pl-3 text-muted-foreground"
-              >
-                {block.lines.map((line, lineIndex) => (
-                  <p key={lineIndex} className="leading-relaxed">
-                    {renderInline(line, inlineOpts, `q${index}-${lineIndex}`)}
-                  </p>
-                ))}
-              </blockquote>
-            )
-          case "list":
-            return (
-              <ul key={index} className="my-0.5 list-disc pl-5">
-                {block.items.map((item, itemIndex) => (
-                  <li key={itemIndex} className="leading-relaxed">
-                    {renderInline(item, inlineOpts, `l${index}-${itemIndex}`)}
-                  </li>
-                ))}
-              </ul>
-            )
-        }
-      })}
-    </div>
-  )
-}
+/** UI 渲染：TipTap 只读组件 */
+export {
+  TipTapMarkdown as MarkdownContent,
+} from "~/components/messages/tiptap-markdown"

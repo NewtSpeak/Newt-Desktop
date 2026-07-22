@@ -18,7 +18,7 @@ export function AboutSection() {
         </div>
       </div>
 
-      <GroupLabel>开源信息</GroupLabel>
+      <GroupLabel id="about-oss">开源信息</GroupLabel>
       <SettingRow
         label="开源许可"
         description="第三方依赖许可信息整理中，将在后续版本提供"

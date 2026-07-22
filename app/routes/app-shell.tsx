@@ -4,7 +4,7 @@
 // 窗口拖拽、顶部 32px 留白（--app-top-inset）、macOS 交通灯避让行为保持不变。
 
 import { useEffect, useState } from "react"
-import { Outlet } from "react-router"
+import { Outlet, useLocation } from "react-router"
 
 import { AppSidebar } from "~/components/app-sidebar"
 import { ChannelList } from "~/components/channel-list"
@@ -13,6 +13,10 @@ import { MemberPanel } from "~/components/member-panel"
 import { QuickSwitcher } from "~/components/quick-switcher"
 import { SearchPanel } from "~/components/search/search-panel"
 import { SettingsPanel } from "~/components/settings/settings-panel"
+import { ChannelSettingsPanel } from "~/components/channel-settings-panel"
+import { GuildPersonalPanel } from "~/components/settings/guild-personal-panel"
+import { GuildAdminPanel } from "~/components/guild-settings/guild-settings-panel"
+import { PackPreviewDialog } from "~/components/messages/pack-preview-dialog"
 import { WelcomeShell } from "~/components/welcome-shell"
 import { SidebarProvider } from "~/components/ui/sidebar"
 import { Toaster } from "~/components/ui/sonner"
@@ -34,6 +38,7 @@ import { useUIStore } from "~/stores/ui"
 export default function AppShell() {
   const status = useAuthBootstrap()
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const guildAdminOpen = useUIStore((s) => s.guildAdminGuildId != null)
 
   // 进入应用壳后：绑定事件分发 + 连接 Gateway + 拉服务器列表
   // + 设置服务端同步 / 空闲检测 / Dock 角标（均幂等）
@@ -113,17 +118,21 @@ export default function AppShell() {
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 卡片外顶部条：可拖窗口 + 居中服名/圆形头像 */}
         <SelectedGuildTitleBar />
-        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2 pt-[calc(var(--app-top-inset)+0.25rem)] md:pl-0">
+        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2 pt-(--app-top-inset) md:pl-0">
           {/* 左：频道列表卡片 */}
           <ChannelList />
-          {/* 中：页面内容卡片 */}
+          {/* 中：页面内容卡片（服管设置嵌入此圆角卡片内，不盖全屏） */}
           <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none">
-              <Outlet />
-            </div>
+            {guildAdminOpen ? (
+              <GuildAdminPanel />
+            ) : (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none">
+                <Outlet />
+              </div>
+            )}
           </main>
-          {/* 右：成员面板卡片（可折叠） */}
-          <MemberPanel />
+          {/* 右：成员面板卡片（可折叠；服管打开时隐藏以腾出空间） */}
+          {!guildAdminOpen ? <MemberPanel /> : null}
           {/* 消息搜索面板（打开时同为圆角卡片） */}
           <SearchPanel />
         </div>
@@ -134,6 +143,12 @@ export default function AppShell() {
       <QuickSwitcher open={switcherOpen} onOpenChange={setSwitcherOpen} />
       {/* 全屏设置面板（Ctrl/Cmd+, 或用户菜单打开） */}
       <SettingsPanel />
+      {/* 服务器个人设置中型面板（docs 17，右键服务器打开） */}
+      <GuildPersonalPanel />
+      {/* 频道设置（docs 03/04，频道右键「编辑频道」） */}
+      <ChannelSettingsPanel />
+      {/* 贴图包预览（消息内点击表情 / 贴图） */}
+      <PackPreviewDialog />
     </SidebarProvider>
   )
 }
@@ -144,20 +159,33 @@ export default function AppShell() {
  * - 居中显示当前服务器名；有 icon_url 时左侧附圆形头像。
  */
 function SelectedGuildTitleBar() {
+  const location = useLocation()
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
   const guild = useGuildsStore((state) =>
-    state.guilds.find((g) => g.id === selectedGuildId)
+    state.guilds.find((g) => g.id === selectedGuildId),
   )
   const hasIcon = Boolean(guild?.icon_url?.trim())
+  const isDm = selectedGuildId === "@me"
+  const isFriends =
+    location.pathname === "/friends" ||
+    location.pathname.startsWith("/friends/")
+  const isHome = !selectedGuildId && !isFriends
+  const title = isFriends
+    ? "好友"
+    : isHome
+      ? "私信"
+      : isDm
+        ? "私信"
+        : guild?.name
 
   return (
     <div
       className="absolute inset-x-0 top-0 z-20 flex h-(--app-top-inset) items-center justify-center px-4"
       onMouseDown={dragWindowOnMouseDown}
     >
-      {guild?.name ? (
+      {title ? (
         <div className="flex max-w-md items-center justify-center gap-2">
-          {hasIcon ? (
+          {!isDm && !isHome && !isFriends && hasIcon && guild ? (
             <GuildAvatar
               guild={guild}
               shape="circle"
@@ -165,7 +193,7 @@ function SelectedGuildTitleBar() {
             />
           ) : null}
           <h1 className="min-w-0 truncate text-center text-sm font-semibold text-sidebar-foreground select-none">
-            {guild.name}
+            {title}
           </h1>
         </div>
       ) : null}

@@ -49,6 +49,24 @@
 }
 
 :root {
+    /* transitions-dev modal tokens（设置弹窗等） */
+    --modal-open-dur: 250ms;
+    --modal-close-dur: 150ms;
+    --modal-scale: 0.96;
+    --modal-scale-close: 0.96;
+    --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    /* transitions-dev notification badge */
+    --badge-slide-dur: 260ms;
+    --badge-pop-dur: 500ms;
+    --badge-pop-close-dur: 180ms;
+    --badge-fade-dur: 400ms;
+    --badge-fade-close-dur: 180ms;
+    --badge-blur: 2px;
+    --badge-offset-x: -6px;
+    --badge-offset-y: 8px;
+    --badge-slide-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --badge-pop-ease: cubic-bezier(0.34, 1.36, 0.64, 1);
+    --badge-close-ease: cubic-bezier(0.4, 0, 0.2, 1);
     --background: oklch(1 0 0);
     --foreground: oklch(0.141 0.005 285.823);
     --card: oklch(1 0 0);
@@ -158,7 +176,137 @@
   }
 }
 
-/* 用户名渐变流动（RoleNameStyle.animated） */
+/* ---------- 设置弹窗（transitions-dev modal 节奏） ---------- */
+.settings-modal-overlay {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: opacity;
+}
+.settings-modal-overlay.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.settings-modal-overlay.is-closing {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+.settings-modal-panel {
+  transform-origin: center center;
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.settings-modal-panel.is-open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.settings-modal-panel.is-closing {
+  transform: scale(var(--modal-scale-close));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+.settings-section-enter {
+  animation: settings-section-in 180ms var(--modal-ease) both;
+}
+
+@keyframes settings-section-in {
+  from {
+    opacity: 0.55;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* transitions-dev: notification badge on inbox bell */
+@keyframes t-badge-slide-in {
+  from {
+    transform: translate(var(--badge-offset-x), var(--badge-offset-y));
+  }
+  to {
+    transform: translate(0, 0);
+  }
+}
+@keyframes t-badge-pop {
+  0% {
+    transform: scale(0.4);
+    filter: blur(var(--badge-blur));
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+/* 角标贴在图标右上内侧，避免 top 负值把数字裁出窗口顶边 */
+.t-badge {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  pointer-events: none;
+  will-change: transform;
+}
+.t-badge[data-open="true"] {
+  animation: t-badge-slide-in var(--badge-slide-dur) var(--badge-slide-ease);
+}
+.t-badge[data-open="false"] {
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity var(--badge-fade-close-dur) var(--badge-close-ease),
+    transform var(--badge-pop-close-dur) var(--badge-close-ease);
+}
+.t-badge-dot {
+  display: flex;
+  min-width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: oklch(0.55 0.22 25);
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: white;
+  transform-origin: center;
+  font-variant-numeric: tabular-nums;
+}
+.t-badge[data-open="true"] .t-badge-dot {
+  animation: t-badge-pop var(--badge-pop-dur) var(--badge-pop-ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-modal-overlay,
+  .settings-modal-panel {
+    transition: none !important;
+  }
+  .settings-section-enter {
+    animation: none !important;
+  }
+  .t-badge,
+  .t-badge-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* 用户名/角色 icon 渐变流动（RoleNameStyle.animated；duration 可由行内覆盖 = speed） */
 @keyframes name-gradient {
   0% {
     background-position: 0% 50%;
@@ -168,5 +316,19 @@
   }
   100% {
     background-position: 0% 50%;
+  }
+}
+
+.name-gradient-animated {
+  background-size: 200% 200%;
+  animation-name: name-gradient;
+  animation-duration: 4s;
+  animation-timing-function: ease;
+  animation-iteration-count: infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .name-gradient-animated {
+    animation: none !important;
   }
 }

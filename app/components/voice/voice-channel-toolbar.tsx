@@ -1,5 +1,8 @@
-// 语音频道主视图底部浮动控制条：白色毛玻璃容器，集中展示麦/视频/屏幕/降噪/闭听/挂断。
-// 逻辑与左下角 VoicePanel 共用连接层，仅改变布局与视觉（对标会议控制条）。
+// 语音频道主视图底部浮动控制条：白色毛玻璃胶囊分组
+//   ① 音频组：麦克风 · 输出/闭听 · 降噪
+//   ② 视频组：摄像头 · 屏幕共享
+//   ③ 挂断
+// 逻辑与左下角 VoicePanel 共用连接层。
 
 import { useState, type ReactNode } from "react"
 import {
@@ -11,7 +14,6 @@ import {
   MicIcon,
   MicOffIcon,
   MonitorUpIcon,
-  MoreHorizontalIcon,
   PhoneOffIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -100,6 +102,8 @@ function GlassIconButton({
   title,
   active,
   danger,
+  /** 开启态用绿色（如噪声抑制） */
+  success,
   disabled,
   onClick,
   children,
@@ -108,6 +112,7 @@ function GlassIconButton({
   title: string
   active?: boolean
   danger?: boolean
+  success?: boolean
   disabled?: boolean
   onClick?: () => void
   children: ReactNode
@@ -124,7 +129,15 @@ function GlassIconButton({
         "flex size-11 items-center justify-center text-foreground/85 transition-colors",
         "hover:bg-black/5 dark:hover:bg-white/10",
         "disabled:pointer-events-none disabled:opacity-40",
-        active && !danger && "bg-primary/15 text-primary hover:bg-primary/20",
+        // success（如降噪开启）：保持毛玻璃白底，仅图标变绿
+        active &&
+          success &&
+          !danger &&
+          "text-emerald-600 dark:text-emerald-400",
+        active &&
+          !danger &&
+          !success &&
+          "bg-primary/15 text-primary hover:bg-primary/20",
         danger && "bg-destructive/15 text-destructive hover:bg-destructive/20",
         className,
       )}
@@ -180,7 +193,7 @@ function GlassSplit({
               title={menuTitle}
               aria-label={menuTitle}
               disabled={disabled}
-              className="flex w-6 items-center justify-center border-l border-black/5 transition-colors hover:bg-black/5 dark:border-white/10 dark:hover:bg-white/10"
+              className="flex w-6 items-center justify-center transition-colors hover:bg-black/5 dark:hover:bg-white/10"
             />
           }
         >
@@ -358,11 +371,12 @@ export function VoiceChannelToolbar({
       </p>
       <Select
         value={voice.inputDeviceId ?? DEFAULT_DEVICE}
-        onValueChange={(value) =>
+        onValueChange={(value) => {
           setVoice({
             inputDeviceId: !value || value === DEFAULT_DEVICE ? null : value,
           })
-        }
+          voiceConnection.applyVoiceSettings({ reinitMic: true })
+        }}
         onOpenChange={(open) => {
           if (open) void refreshDevices()
         }}
@@ -423,21 +437,29 @@ export function VoiceChannelToolbar({
           }}
         />
       </div>
+
+      <button
+        type="button"
+        className="rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted"
+        onClick={() => useSettingsStore.getState().openPanel("voice")}
+      >
+        打开语音设置…
+      </button>
     </>
   )
 
-  const moreMenu = (
+  const outputMenu = (
     <>
       <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
         输出设备
       </p>
       <Select
         value={voice.outputDeviceId ?? DEFAULT_DEVICE}
-        onValueChange={(value) =>
-          setVoice({
-            outputDeviceId: !value || value === DEFAULT_DEVICE ? null : value,
-          })
-        }
+        onValueChange={(value) => {
+          const id = !value || value === DEFAULT_DEVICE ? null : value
+          setVoice({ outputDeviceId: id })
+          voiceConnection.applyVoiceSettings({ outputDeviceId: id })
+        }}
         onOpenChange={(open) => {
           if (open) void refreshDevices()
         }}
@@ -491,10 +513,10 @@ export function VoiceChannelToolbar({
 
   return (
     <>
-      {/* 底部居中：两个独立白色高斯模糊胶囊 + 挂断（无外层白底/描边） */}
+      {/* 底部居中：音频组 | 视频组 | 挂断（组内无竖分割线） */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-5 pt-16">
         <div className="pointer-events-auto flex items-center gap-3">
-          {/* 组 1：麦克风 | 摄像头 */}
+          {/* ① 音频：输入 · 输出/闭听 · 降噪 */}
           <GlassGroup>
             <GlassSplit
               title={micTitle}
@@ -517,7 +539,38 @@ export function VoiceChannelToolbar({
               }
               menu={micMenu}
             />
-            <div className="w-px self-stretch bg-black/10 dark:bg-white/15" />
+            <GlassSplit
+              title={selfDeaf ? "取消闭听" : "闭听"}
+              menuTitle="输出设置"
+              active={selfDeaf}
+              danger={selfDeaf}
+              onAction={() => voiceConnection.toggleDeaf()}
+              icon={
+                selfDeaf ? (
+                  <HeadphoneOffIcon className="size-[1.15rem]" />
+                ) : (
+                  <HeadphonesIcon className="size-[1.15rem]" />
+                )
+              }
+              menu={outputMenu}
+            />
+            <GlassIconButton
+              title={nsEnabled ? "关闭噪声抑制" : "开启噪声抑制"}
+              active={nsEnabled}
+              success
+              onClick={() => {
+                const next = !nsEnabled
+                setVoice({ ns: next })
+                voiceConnection.applyVoiceSettings({ reinitMic: true })
+                toast.message(next ? "噪声抑制已开启" : "噪声抑制已关闭")
+              }}
+            >
+              <AudioLinesIcon className="size-[1.15rem]" />
+            </GlassIconButton>
+          </GlassGroup>
+
+          {/* ② 视频：摄像头 · 屏幕共享 */}
+          <GlassGroup>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -534,10 +587,6 @@ export function VoiceChannelToolbar({
               </TooltipTrigger>
               <TooltipContent side="top">摄像头即将推出</TooltipContent>
             </Tooltip>
-          </GlassGroup>
-
-          {/* 组 2：屏幕 · 降噪 · 闭听 · 更多 */}
-          <GlassGroup>
             <GlassIconButton
               title={screenTitle}
               active={sharing}
@@ -546,53 +595,9 @@ export function VoiceChannelToolbar({
             >
               <MonitorUpIcon className="size-[1.15rem]" />
             </GlassIconButton>
-            <GlassIconButton
-              title={nsEnabled ? "关闭噪声抑制" : "开启噪声抑制"}
-              active={nsEnabled}
-              onClick={() => {
-                const next = !nsEnabled
-                setVoice({ ns: next })
-                toast.message(
-                  next
-                    ? "噪声抑制已开启（重进语音后完全生效）"
-                    : "噪声抑制已关闭（重进语音后完全生效）",
-                )
-              }}
-            >
-              <AudioLinesIcon className="size-[1.15rem]" />
-            </GlassIconButton>
-            <GlassIconButton
-              title={selfDeaf ? "取消闭听" : "闭听"}
-              active={selfDeaf}
-              danger={selfDeaf}
-              onClick={() => voiceConnection.toggleDeaf()}
-            >
-              {selfDeaf ? (
-                <HeadphoneOffIcon className="size-[1.15rem]" />
-              ) : (
-                <HeadphonesIcon className="size-[1.15rem]" />
-              )}
-            </GlassIconButton>
-            <Popover>
-              <PopoverTrigger
-                render={
-                  <button
-                    type="button"
-                    title="更多"
-                    aria-label="更多"
-                    className="flex size-11 items-center justify-center text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-                  />
-                }
-              >
-                <MoreHorizontalIcon className="size-[1.15rem]" />
-              </PopoverTrigger>
-              <PopoverContent side="top" align="center" className="w-72 gap-3 p-3">
-                {moreMenu}
-              </PopoverContent>
-            </Popover>
           </GlassGroup>
 
-          {/* 挂断：高度与两侧毛玻璃胶囊一致（h-11 / size-11） */}
+          {/* ③ 挂断 */}
           <Tooltip>
             <TooltipTrigger
               render={

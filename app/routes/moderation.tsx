@@ -675,7 +675,7 @@ function UserChip({
           <span
             className={cn(
               "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-card",
-              online ? "bg-emerald-500" : "bg-muted-foreground/40",
+              online ? "bg-emerald-500" : "bg-zinc-500",
             )}
           />
         )}

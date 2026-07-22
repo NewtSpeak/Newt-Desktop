@@ -25,7 +25,93 @@ import {
   useSettingsStore,
   type NotifyLevel,
 } from "~/stores/settings"
+import { useUIStore } from "~/stores/ui"
 import { GroupLabel, SectionTitle, SettingRow } from "./section"
+
+/**
+ * 「服务器个人偏好」汇总（docs 17 FR-07 / docs 16 FR-16）：
+ * 列出存在非默认覆盖（通知 perGuild 或 GPS）的服务器，摘要 + 编辑 + 重置。
+ */
+function OverriddenGuildsSummary() {
+  const guilds = useGuildsStore((s) => s.guilds)
+  const perGuild = useSettingsStore((s) => s.notifications.perGuild)
+  const guildPreferences = useSettingsStore((s) => s.guildPreferences)
+
+  const overridden = guilds.filter(
+    (guild) => perGuild[guild.id] || guildPreferences[guild.id],
+  )
+  if (overridden.length === 0) {
+    return (
+      <p className="py-2 text-sm text-muted-foreground">
+        没有服务器使用非默认的个人偏好
+      </p>
+    )
+  }
+
+  const summarize = (guildId: string): string => {
+    const parts: string[] = []
+    const override = perGuild[guildId]
+    if (override?.level === "all") parts.push("全部消息")
+    if (override?.level === "mentions") parts.push("仅 @")
+    if (override?.level === "none") parts.push("无通知")
+    if (isOverrideMuted(override)) parts.push("静音中")
+    if (override?.suppressEveryone) parts.push("抑制 @everyone")
+    const prefs = guildPreferences[guildId]
+    if (prefs?.hideMutedChannels) parts.push("隐藏静音频道")
+    if (prefs?.collapsedCategoryIds?.length)
+      parts.push(`折叠 ${prefs.collapsedCategoryIds.length} 个分类`)
+    return parts.join(" · ") || "已自定义"
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5 rounded-xl bg-muted/30 p-1 dark:bg-white/[0.04]">
+      {overridden.map((guild) => (
+        <div
+          key={guild.id}
+          className="flex items-center justify-between gap-3 px-3 py-2"
+        >
+          <div className="min-w-0">
+            <p className="truncate text-sm">{guild.name}</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {summarize(guild.id)}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                useSettingsStore.getState().closePanel()
+                useUIStore.getState().openGuildPersonal(guild.id)
+              }}
+            >
+              编辑
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                // 仅重置 A 类偏好（通知覆盖 + GPS）；昵称等 B 类不受影响（docs 17 FR-07）
+                useSettingsStore.getState().setGuildNotify(guild.id, {
+                  level: undefined,
+                  muted: undefined,
+                  mutedUntil: undefined,
+                  suppressEveryone: undefined,
+                })
+                useSettingsStore.getState().setGuildPreference(guild.id, {
+                  collapsedCategoryIds: [],
+                  hideMutedChannels: false,
+                })
+              }}
+            >
+              重置
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 const LEVEL_OPTIONS: { value: NotifyLevel; label: string; description: string }[] = [
   { value: "all", label: "全部消息", description: "每条新消息都发送系统通知" },
@@ -42,7 +128,7 @@ function GuildOverrideRow({ guildId, name }: { guildId: string; name: string }) 
   const remaining = muteRemainingLabel(override)
 
   return (
-    <div className="flex items-center justify-between gap-4 border-b py-3 last:border-b-0">
+    <div className="flex items-center justify-between gap-4 py-3">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{name}</p>
         {remaining && (
@@ -108,7 +194,7 @@ function ChannelOverrideRow({ channelId }: { channelId: string }) {
   const remaining = muteRemainingLabel(override)
 
   return (
-    <div className="flex items-center justify-between gap-4 border-b py-3 last:border-b-0">
+    <div className="flex items-center justify-between gap-4 py-3">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">
           #{channel?.name ?? `频道 ${channelId.slice(0, 8)}`}
@@ -180,7 +266,7 @@ export function NotificationsSection() {
     <div>
       <SectionTitle>通知</SectionTitle>
 
-      <GroupLabel>全局默认</GroupLabel>
+      <GroupLabel id="notify-global">全局默认</GroupLabel>
       <RadioGroup
         className="gap-2"
         value={notifications.globalLevel}
@@ -197,7 +283,7 @@ export function NotificationsSection() {
         ))}
       </RadioGroup>
 
-      <GroupLabel>提示音</GroupLabel>
+      <GroupLabel id="notify-sounds">提示音</GroupLabel>
       <SettingRow label="新消息提示音" description="通过通知判定的普通消息播放短促提示音">
         <div className="flex items-center gap-2">
           <Button
@@ -245,7 +331,50 @@ export function NotificationsSection() {
         </div>
       </SettingRow>
 
-      <GroupLabel>每服务器覆盖</GroupLabel>
+      <GroupLabel id="notify-system">系统通知（docs 21）</GroupLabel>
+      <p className="mb-2 text-xs text-muted-foreground">
+        控制桌面弹窗；账号安全类通知始终穿透。收件箱 API 就绪后生效。
+      </p>
+      <SettingRow label="好友请求" description="有人请求添加你为好友时弹窗">
+        <Switch
+          checked={notifications.desktopFriendRequest !== false}
+          onCheckedChange={(c) =>
+            setNotifications({ desktopFriendRequest: Boolean(c) })
+          }
+        />
+      </SettingRow>
+      <SettingRow label="好友接受" description="对方接受你的好友请求时弹窗">
+        <Switch
+          checked={notifications.desktopFriendAccept !== false}
+          onCheckedChange={(c) =>
+            setNotifications({ desktopFriendAccept: Boolean(c) })
+          }
+        />
+      </SettingRow>
+      <SettingRow label="服务器处罚" description="被踢/禁/超时等处罚通知">
+        <Switch
+          checked={notifications.desktopGuildModeration !== false}
+          onCheckedChange={(c) =>
+            setNotifications({ desktopGuildModeration: Boolean(c) })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        label="系统公告"
+        description="默认仅角标；开启后额外弹出桌面通知"
+      >
+        <Switch
+          checked={notifications.desktopSystemAnnounce === true}
+          onCheckedChange={(c) =>
+            setNotifications({ desktopSystemAnnounce: Boolean(c) })
+          }
+        />
+      </SettingRow>
+
+      <GroupLabel id="notify-overridden">已覆盖的服务器</GroupLabel>
+      <OverriddenGuildsSummary />
+
+      <GroupLabel id="notify-guild">每服务器覆盖</GroupLabel>
       {guilds.length === 0 ? (
         <p className="py-2 text-sm text-muted-foreground">尚未加入任何服务器</p>
       ) : (
@@ -256,7 +385,7 @@ export function NotificationsSection() {
         </div>
       )}
 
-      <GroupLabel>每频道覆盖</GroupLabel>
+      <GroupLabel id="notify-channel">每频道覆盖</GroupLabel>
       {overriddenChannelIds.length === 0 ? (
         <p className="py-2 text-sm text-muted-foreground">
           尚无频道覆盖；在频道列表右键频道 →「通知设置 / 静音」即可添加

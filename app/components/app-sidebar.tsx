@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useNavigate } from "react-router"
+import { useLocation, useNavigate } from "react-router"
 import { HomeIcon, PlusIcon } from "lucide-react"
 
 import { AddGuildDialog } from "~/components/add-guild-dialog"
@@ -17,18 +17,97 @@ import {
 } from "~/components/ui/sidebar"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
 import { useIsMacDesktop } from "~/lib/platform"
+import {
+  closestCenter,
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+
 import { cn } from "~/lib/utils"
 import { useGuildsStore } from "~/stores/guilds"
+import { useSettingsStore } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
+
+/** 服务器条目的可拖拽外壳（拖拽启动阈值 6px，不影响点击/右键） */
+function SortableRailShell({
+  id,
+  children,
+}: {
+  id: string
+  children: React.ReactNode
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id })
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn(isDragging && "z-20 opacity-70")}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </div>
+  )
+}
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const isMacDesktop = useIsMacDesktop()
   const navigate = useNavigate()
+  const location = useLocation()
   const guilds = useGuildsStore((state) => state.guilds)
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
   const [addOpen, setAddOpen] = React.useState(false)
+  const isFriendsRoute =
+    location.pathname === "/friends" ||
+    location.pathname.startsWith("/friends/")
 
-  /** 回到「选择一个服务器」空态：清空选中服并跳转首页 */
+  // 服务器栏个人排序（docs 17 FR-23）：guildOrder 优先，未收录的按加入时间排末尾
+  const guildOrder = useSettingsStore((state) => state.guildOrder)
+  const orderedGuilds = React.useMemo(() => {
+    if (guildOrder.length === 0) return guilds
+    const rank = new Map(guildOrder.map((id, index) => [id, index]))
+    return [...guilds].sort((a, b) => {
+      const ra = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER
+      const rb = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER
+      if (ra !== rb) return ra - rb
+      // 同 id 不同账号：稳定按 account_id 排
+      return (a.account_id ?? "").localeCompare(b.account_id ?? "")
+    })
+  }, [guilds, guildOrder])
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  )
+  const railKey = (guild: { id: string; account_id?: string }) =>
+    `${guild.account_id ?? ""}:${guild.id}`
+
+  const onDragEnd = React.useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+      const keys = orderedGuilds.map(railKey)
+      const from = keys.indexOf(String(active.id))
+      const to = keys.indexOf(String(over.id))
+      if (from < 0 || to < 0) return
+      const reordered = arrayMove(orderedGuilds, from, to)
+      // 排序仍按 guild.id（个人设置）；同 id 多账号条目顺序随之变化
+      useSettingsStore.getState().setGuildOrder(reordered.map((g) => g.id))
+    },
+    [orderedGuilds],
+  )
+
+  /** 回到私信落地页（空白主内容 + 左侧私信列表） */
   const goHome = () => {
     useUIStore.getState().selectGuild(null)
     navigate("/")
@@ -41,7 +120,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       {...props}
     >
       {/* Home + 加号固定在顶部，不随服务器列表滚动。
-          左右对称间距：icon 模式下 px 统一，条目居中（不再为左侧未读条预留空隙）。 */}
+          左右对称间距：icon 模式下 px 统一，条目居中（不再为左侧未读条预留空隙）。
+          私信未读角标已移至右上角信封。 */}
       <SidebarHeader
         className={cn(
           "shrink-0 gap-0.5 border-b border-sidebar-border/50 group-data-[collapsible=icon]:px-1",
@@ -49,11 +129,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         )}
       >
         <SidebarMenu>
-          <SidebarMenuItem className="flex justify-center">
+          <SidebarMenuItem className="relative flex justify-center">
             <SidebarMenuButton
               tooltip="主页"
               aria-label="主页"
-              isActive={selectedGuildId == null}
+              isActive={
+                !isFriendsRoute &&
+                (selectedGuildId == null || selectedGuildId === "@me")
+              }
               onClick={goHome}
               className="justify-center rounded-lg"
             >
@@ -84,9 +167,29 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       >
         <SidebarGroup className="min-h-0 group-data-[collapsible=icon]:px-1">
           <SidebarMenu>
-            {guilds.map((guild) => (
-              <ServerRailItem key={guild.id} guildId={guild.id} />
-            ))}
+            {/* 拖拽排序（docs 17 FR-23）：仅本人可见，经 settings-sync 跨端同步 */}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={onDragEnd}
+            >
+              <SortableContext
+                items={orderedGuilds.map(railKey)}
+                strategy={verticalListSortingStrategy}
+              >
+                {orderedGuilds.map((guild) => (
+                  <SortableRailShell
+                    key={railKey(guild)}
+                    id={railKey(guild)}
+                  >
+                    <ServerRailItem
+                      guildId={guild.id}
+                      accountId={guild.account_id}
+                    />
+                  </SortableRailShell>
+                ))}
+              </SortableContext>
+            </DndContext>
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>

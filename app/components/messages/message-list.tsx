@@ -2,11 +2,27 @@
 // 滚动到顶 before 翻页（prepend 滚动补偿）、底部粘滞自动滚动、
 // 上翻时浮动「↓ N 条新消息」按钮、到头渲染频道欢迎块。
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
 import { ArrowDownIcon, HashIcon } from "lucide-react"
 
+import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
+import { TooltipProvider } from "~/components/ui/tooltip"
+import { UserProfilePopover } from "~/components/user-profile-popover"
 import type { MentionResolver } from "~/lib/markdown"
-import { compareSnowflake, useMessagesStore, type ChatMessage } from "~/stores/messages"
+import { nameInitials } from "~/lib/user-display"
+import { cn } from "~/lib/utils"
+import {
+  compareSnowflake,
+  useMessagesStore,
+  type ChatMessage,
+} from "~/stores/messages"
 import { useReadStatesStore } from "~/stores/read-states"
 import { MessageRow, PendingRow } from "./message-item"
 
@@ -31,19 +47,22 @@ function dayLabel(iso: string): string {
 
 function DateDivider({ iso }: { iso: string }) {
   return (
-    <div className="mx-4 mt-3 flex items-center gap-3" role="separator">
-      <div className="h-px flex-1 bg-border" />
-      <span className="text-xs text-muted-foreground select-none">{dayLabel(iso)}</span>
-      <div className="h-px flex-1 bg-border" />
+    <div className="mx-4 mt-3 flex items-center justify-center" role="separator">
+      <span className="text-xs text-muted-foreground select-none">
+        {dayLabel(iso)}
+      </span>
     </div>
   )
 }
 
-/** 红色「新消息」分割线（docs 15 FR-06/UX-03） */
+/** 「新消息」标记（docs 15 FR-06/UX-03）— 仅保留徽章，不画横向线 */
 function NewMessagesDivider() {
   return (
-    <div className="mx-4 mt-2 flex items-center gap-2" role="separator" aria-label="新消息">
-      <div className="h-px flex-1 bg-red-500/70" />
+    <div
+      className="mx-4 mt-2 flex items-center justify-center"
+      role="separator"
+      aria-label="新消息"
+    >
       <span className="rounded-sm bg-red-500 px-1 text-[9px] font-bold text-white select-none">
         新消息
       </span>
@@ -58,7 +77,9 @@ function WelcomeBlock({ channelName }: { channelName: string }) {
         <HashIcon className="size-7 text-muted-foreground" />
       </div>
       <p className="text-xl font-bold">欢迎来到 #{channelName}</p>
-      <p className="text-sm text-muted-foreground">这里是 #{channelName} 频道的开始。</p>
+      <p className="text-sm text-muted-foreground">
+        这里是 #{channelName} 频道的开始。
+      </p>
     </div>
   )
 }
@@ -79,6 +100,10 @@ export type MessageListProps = {
   focusMessageId?: string | null
   /** 锚点定位完成（或目标不在列表中无法定位）后的回调，用于清理 URL 参数 */
   onFocusDone?: () => void
+  /**
+   * 底部悬浮输入区高度（px）。列表底部留白，避免最后几条消息被毛玻璃 Composer 挡住。
+   */
+  bottomInset?: number
 }
 
 function MessageList({
@@ -95,6 +120,7 @@ function MessageList({
   onReply,
   focusMessageId,
   onFocusDone,
+  bottomInset = 0,
 }: MessageListProps) {
   const channel = useMessagesStore((state) => state.byChannel[channelId])
   const pending = useMessagesStore((state) => state.pendingByChannel[channelId])
@@ -117,7 +143,7 @@ function MessageList({
   // 进入频道时捕获一次 last_read（组件按频道 key 重挂载）：
   // 「新消息」分割线按该快照定位，停留期间不跳动（docs 15 FR-06）
   const [entryLastRead] = useState<string | null>(
-    () => useReadStatesStore.getState().lastReadByChannel[channelId] ?? null,
+    () => useReadStatesStore.getState().lastReadByChannel[channelId] ?? null
   )
 
   const scrollToBottom = useCallback(() => {
@@ -195,7 +221,9 @@ function MessageList({
         scrollToBottom()
       } else {
         const appendedCount = previous.lastId
-          ? messages.filter((message) => compareSnowflake(message.id, previous.lastId!) > 0).length
+          ? messages.filter(
+              (message) => compareSnowflake(message.id, previous.lastId!) > 0
+            ).length
           : 1
         setNewCount((count) => count + Math.max(1, appendedCount))
       }
@@ -222,7 +250,11 @@ function MessageList({
     stickRef.current = false
     target.scrollIntoView({ block: "center" })
     setFlashingId(messageId)
-    setTimeout(() => setFlashingId((current) => (current === messageId ? null : current)), flashMs)
+    setTimeout(
+      () =>
+        setFlashingId((current) => (current === messageId ? null : current)),
+      flashMs
+    )
     return true
   }, [])
 
@@ -240,8 +272,13 @@ function MessageList({
   let previousMessage: ChatMessage | null = null
   let newDividerPlaced = false
   for (const message of messages) {
-    if (!previousMessage || dayKey(previousMessage.created_at) !== dayKey(message.created_at)) {
-      rows.push(<DateDivider key={`divider-${message.id}`} iso={message.created_at} />)
+    if (
+      !previousMessage ||
+      dayKey(previousMessage.created_at) !== dayKey(message.created_at)
+    ) {
+      rows.push(
+        <DateDivider key={`divider-${message.id}`} iso={message.created_at} />
+      )
     }
     // 「新消息」分割线：进频时快照的 last_read 之后第一条消息上方（一次性定位）
     if (
@@ -287,27 +324,36 @@ function MessageList({
         onReply={onReply}
         onJump={jumpTo}
         flashing={flashingId === message.id}
-      />,
+      />
     )
     previousMessage = message
   }
+
+  const padBottom = Math.max(bottomInset, 16)
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto overscroll-contain pb-4"
+        className="flex-1 overflow-y-auto overscroll-contain"
+        style={{ paddingBottom: padBottom }}
         role="log"
         aria-label={`#${channelName} 的消息`}
       >
         {channel?.reachedStart && <WelcomeBlock channelName={channelName} />}
         {channel?.loadingOlder && (
-          <p className="py-2 text-center text-xs text-muted-foreground">加载更早的消息…</p>
+          <p className="py-2 text-center text-xs text-muted-foreground">
+            加载更早的消息…
+          </p>
         )}
-        {channel?.loadingInitial && !channel.loadedInitial && (
-          <p className="py-8 text-center text-sm text-muted-foreground">消息加载中…</p>
-        )}
+        {channel?.loadingInitial &&
+          !channel.loadedInitial &&
+          messages.length === 0 && (
+            <p className="py-2 text-center text-sm text-muted-foreground">
+              消息加载中…
+            </p>
+          )}
         {rows}
         {pendingList.map((item, index) => {
           // 与上一条正式消息 / 上一条 pending 合并：连发时不重复出头像
@@ -323,9 +369,9 @@ function MessageList({
             Date.now() - prevTime < GROUP_WINDOW_MS
           const groupedWithPrevMessage = Boolean(
             prevMessage &&
-              selfId &&
-              String(prevMessage.author_id) === String(selfId) &&
-              withinWindow,
+            selfId &&
+            String(prevMessage.author_id) === String(selfId) &&
+            withinWindow
           )
           const groupedWithPrevPending = Boolean(prevPending)
           const grouped = groupedWithPrevMessage || groupedWithPrevPending
@@ -334,8 +380,10 @@ function MessageList({
               key={item.nonce}
               nonce={item.nonce}
               channelId={channelId}
+              guildId={guildId}
               content={item.content}
               attachments={item.attachments}
+              stickerPreview={item.stickerPreview}
               status={item.status}
               errorMessage={item.errorMessage}
               selfName={selfName}
@@ -355,7 +403,8 @@ function MessageList({
             setNewCount(0)
             scrollToBottom()
           }}
-          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90"
+          className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90"
+          style={{ bottom: Math.max(bottomInset, 12) + 12 }}
         >
           <ArrowDownIcon className="size-3.5" />
           {newCount} 条新消息
@@ -366,15 +415,48 @@ function MessageList({
 }
 
 // ---------------------------------------------------------------------------
-// typing 指示
+// typing 指示：头像列表 + 悬停显示名 + 点击打开资料卡
 // ---------------------------------------------------------------------------
+
+const TYPING_AVATAR_MAX = 5
+
+function TypingDots({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn("inline-flex items-center gap-0.5", className)}
+      aria-hidden
+    >
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="size-1 animate-bounce rounded-full bg-muted-foreground/70"
+          style={{ animationDelay: `${i * 0.15}s`, animationDuration: "0.9s" }}
+        />
+      ))}
+    </span>
+  )
+}
+
+function typingSummaryText(
+  names: string[],
+): string {
+  if (names.length === 0) return "有人正在输入"
+  if (names.length === 1) return `${names[0]} 正在输入`
+  if (names.length === 2) return `${names[0]}、${names[1]} 正在输入`
+  if (names.length === 3) {
+    return `${names[0]}、${names[1]}、${names[2]} 正在输入`
+  }
+  return `${names[0]}、${names[1]} 和另外 ${names.length - 2} 人正在输入`
+}
 
 export function TypingIndicator({
   channelId,
   resolveName,
+  resolveAvatarUrl,
 }: {
   channelId: string
   resolveName: MentionResolver
+  resolveAvatarUrl?: (userId: string) => string | undefined
 }) {
   const typing = useMessagesStore((state) => state.typingByChannel[channelId])
   const [, forceTick] = useState(0)
@@ -393,21 +475,87 @@ export function TypingIndicator({
         .map(([userId]) => userId)
     : []
 
-  if (activeIds.length === 0) return <div className="h-5" aria-hidden />
-
-  let text: string
-  if (activeIds.length === 1) {
-    text = `${resolveName(activeIds[0])} 正在输入…`
-  } else if (activeIds.length <= 3) {
-    text = `${activeIds.map((userId) => resolveName(userId)).join("、")} 正在输入…`
-  } else {
-    text = "多人正在输入…"
+  // 无 typing 时保留高度，避免输入区跳动
+  if (activeIds.length === 0) {
+    return <div className="h-6" aria-hidden />
   }
 
+  const names = activeIds.map((id) => resolveName(id))
+  const shownIds = activeIds.slice(0, TYPING_AVATAR_MAX)
+  const overflow = activeIds.length - shownIds.length
+  const summary = typingSummaryText(names)
+
   return (
-    <p className="h-5 truncate px-4 text-xs text-muted-foreground" aria-live="polite">
-      {text}
-    </p>
+    <TooltipProvider delay={200}>
+      <div
+        className="flex h-6 min-w-0 items-center gap-2 px-4"
+        aria-live="polite"
+        aria-label={summary}
+      >
+        {/* 正在输入的用户头像列表（悬停名称 / 点击资料卡） */}
+        <div className="flex shrink-0 items-center pl-0.5">
+          {shownIds.map((userId, index) => {
+            const name = resolveName(userId)
+            const avatarUrl = resolveAvatarUrl?.(userId)
+            return (
+              <div
+                key={userId}
+                className={cn(
+                  "relative shrink-0 rounded-full ring-2 ring-background",
+                  index > 0 && "-ml-1.5",
+                )}
+                style={{ zIndex: shownIds.length - index }}
+              >
+                <UserProfilePopover
+                  userId={userId}
+                  displayName={name}
+                  avatarUrl={avatarUrl}
+                  tooltip={name}
+                  side="top"
+                >
+                  <span className="relative inline-flex size-5">
+                    <Avatar className="size-5 after:border-0">
+                      {avatarUrl ? (
+                        <AvatarImage
+                          src={avatarUrl}
+                          alt=""
+                          className="object-cover"
+                        />
+                      ) : null}
+                      <AvatarFallback className="text-[9px] font-semibold">
+                        {nameInitials(name)}
+                      </AvatarFallback>
+                    </Avatar>
+                  </span>
+                </UserProfilePopover>
+              </div>
+            )
+          })}
+          {overflow > 0 ? (
+            <span
+              className={cn(
+                "relative -ml-1.5 flex size-5 shrink-0 items-center justify-center",
+                "rounded-full bg-muted text-[9px] font-semibold text-muted-foreground",
+                "ring-2 ring-background",
+              )}
+              title={`还有 ${overflow} 人正在输入`}
+            >
+              +{overflow}
+            </span>
+          ) : null}
+        </div>
+
+        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          <span className="font-medium text-foreground/80">
+            {activeIds.length <= 3
+              ? names.join("、")
+              : `${names[0]}、${names[1]} 和另外 ${activeIds.length - 2} 人`}
+          </span>
+          <span> 正在输入</span>
+          <TypingDots className="ml-1.5 align-middle" />
+        </p>
+      </div>
+    </TooltipProvider>
   )
 }
 

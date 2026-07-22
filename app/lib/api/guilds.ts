@@ -3,12 +3,15 @@
 import { api } from "./http"
 import type {
   Channel,
+  ChannelOverwrite,
   ChannelType,
   Guild,
+  GuildBanner,
   GuildInvite,
   GuildMember,
   MemberRecord,
   Role,
+  RoleNameStyle,
 } from "./types"
 
 /** 我加入的服务器列表 */
@@ -17,6 +20,110 @@ export const listMyGuilds = () => api<Guild[]>("/users/@me/guilds")
 /** 创建服务器（name 2-100 字符），创建者自动成为 owner 与成员 */
 export const createGuild = (name: string) =>
   api<Guild>("/guilds", { method: "POST", body: JSON.stringify({ name }) })
+
+// ---------------------------------------------------------------------------
+// 服管设置（docs 18；guildapi guild.go / assets.go）
+// ---------------------------------------------------------------------------
+
+/** 更新服务器（需 MANAGE_GUILD；restriction_reason_required 仅系统管） */
+export const patchGuild = (
+  guildId: string,
+  patch: {
+    name?: string
+    description?: string
+    restriction_badge_visible?: boolean
+    restriction_reason_required?: boolean
+  },
+) =>
+  api<Guild>(`/guilds/${guildId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  })
+
+/** 上传服务器图标（multipart 字段 file，PNG/JPEG/WebP/GIF/MP4，需 MANAGE_GUILD）→ GUILD_UPDATE 广播 */
+export const uploadGuildIcon = async (guildId: string, file: File) => {
+  const form = new FormData()
+  form.append("file", file)
+  // 后端返回 { url, guild }；兼容若将来直接返回 Guild
+  const raw = await api<{ url?: string; guild?: Guild } & Partial<Guild>>(
+    `/guilds/${guildId}/icon`,
+    { method: "POST", body: form },
+  )
+  if (raw && typeof raw === "object" && "guild" in raw && raw.guild) {
+    return raw.guild
+  }
+  return raw as Guild
+}
+
+/** 移除服务器图标（需 MANAGE_GUILD）→ 返回更新后的 Guild */
+export const deleteGuildIcon = (guildId: string) =>
+  api<Guild>(`/guilds/${guildId}/icon`, { method: "DELETE" })
+
+// ---------------------------------------------------------------------------
+// 服务器横幅 / 多 banner（docs 协议/服务器外观资产.md）
+// ---------------------------------------------------------------------------
+
+/** 上传单张服务器横幅（banner_url；multipart 字段 file，需 MANAGE_GUILD） */
+export const uploadGuildBanner = async (guildId: string, file: File) => {
+  const form = new FormData()
+  form.append("file", file)
+  const raw = await api<{ url?: string; guild?: Guild } & Partial<Guild>>(
+    `/guilds/${guildId}/banner`,
+    { method: "POST", body: form },
+  )
+  if (raw && typeof raw === "object" && "guild" in raw && raw.guild) {
+    return raw.guild
+  }
+  return raw as Guild
+}
+
+/** 移除单张服务器横幅（清空 banner_url） */
+export const deleteGuildBanner = (guildId: string) =>
+  api<Guild>(`/guilds/${guildId}/banner`, { method: "DELETE" })
+
+/** 列出多 banner（position 升序） */
+export const listGuildBanners = (guildId: string) =>
+  api<{ guild_id: string; banners: GuildBanner[]; limit: number }>(
+    `/guilds/${guildId}/banners`,
+  )
+
+/** 新增多 banner（追加末尾；超上限 400 BANNER_LIMIT_REACHED） */
+export const addGuildBanner = async (guildId: string, file: File) => {
+  const form = new FormData()
+  form.append("file", file)
+  return api<{ banner: GuildBanner; banners: GuildBanner[] }>(
+    `/guilds/${guildId}/banners`,
+    { method: "POST", body: form },
+  )
+}
+
+/** 删除指定 banner（按 id）→ 返回剩余列表 */
+export const removeGuildBanner = (guildId: string, bannerId: string) =>
+  api<{ banners: GuildBanner[] }>(
+    `/guilds/${guildId}/banners/${bannerId}`,
+    { method: "DELETE" },
+  )
+
+/** 重排序多 banner（全量有序 ID 数组） */
+export const reorderGuildBanners = (guildId: string, bannerIds: string[]) =>
+  api<{ banners: GuildBanner[] }>(`/guilds/${guildId}/banners`, {
+    method: "PATCH",
+    body: JSON.stringify({ banner_ids: bannerIds }),
+  })
+
+/** 转让所有权（仅所有者；新所有者须为本服成员）→ GUILD_UPDATE */
+export const transferGuildOwnership = (guildId: string, newOwnerUserId: string) =>
+  api<void>(`/guilds/${guildId}/transfer-ownership`, {
+    method: "POST",
+    body: JSON.stringify({ new_owner_user_id: newOwnerUserId }),
+  })
+
+/** 删除服务器（仅所有者；confirm_name 必须与当前名称一致，docs 02 FR-27） */
+export const deleteGuild = (guildId: string, confirmName: string) =>
+  api<void>(`/guilds/${guildId}`, {
+    method: "DELETE",
+    body: JSON.stringify({ confirm_name: confirmName }),
+  })
 
 /** 当前用户可见的频道列表；非成员/服不存在一律 404 */
 export const listChannels = (guildId: string) => api<Channel[]>(`/guilds/${guildId}/channels`)
@@ -52,6 +159,58 @@ export const reorderChannels = (guildId: string, items: ChannelReorderItem[]) =>
     body: JSON.stringify(items),
   })
 
+/** 更新频道（PATCH /channels/:id，需 MANAGE_CHANNELS）→ CHANNEL_UPDATE */
+export type UpdateChannelInput = {
+  name?: string
+  topic?: string
+  user_limit?: number
+  rate_limit_per_user?: number
+  /** null = 移出分类 */
+  parent_id?: string | null
+}
+
+export const updateChannel = (channelId: string, input: UpdateChannelInput) =>
+  api<Channel>(`/channels/${channelId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  })
+
+/** 删除频道 / 分类（需 MANAGE_CHANNELS） */
+export const deleteChannel = (channelId: string) =>
+  api<void>(`/channels/${channelId}`, { method: "DELETE" })
+
+// ---------------------------------------------------------------------------
+// 频道权限覆盖（docs 04 FR-09–15；需 MANAGE_ROLES）
+// ---------------------------------------------------------------------------
+
+/** 列出频道既有覆盖 */
+export const listChannelOverwrites = (guildId: string, channelId: string) =>
+  api<ChannelOverwrite[]>(
+    `/guilds/${guildId}/channels/${channelId}/overwrites`,
+  )
+
+/** 创建/更新覆盖（targetId 为 role_id 或 member 记录 id） */
+export const upsertChannelOverwrite = (
+  channelId: string,
+  targetId: string,
+  input: { type: "ROLE" | "MEMBER"; allow: number; deny: number },
+) =>
+  api<ChannelOverwrite>(`/channels/${channelId}/overwrites/${targetId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  })
+
+/** 删除覆盖 */
+export const deleteChannelOverwrite = (
+  channelId: string,
+  targetId: string,
+  type?: "ROLE" | "MEMBER",
+) =>
+  api<void>(
+    `/channels/${channelId}/overwrites/${targetId}${type ? `?type=${type}` : ""}`,
+    { method: "DELETE" },
+  )
+
 /** 创建服务器邀请（需 CREATE_INSTANT_INVITE）；不传参 = 不过期、不限次 */
 export const createGuildInvite = (
   guildId: string,
@@ -80,7 +239,270 @@ export const joinInvite = (code: string) =>
 /** 服务器全量角色（成员即可见） */
 export const listRoles = (guildId: string) => api<Role[]>(`/guilds/${guildId}/roles`)
 
-/** 给成员绑定角色（需 MANAGE_ROLES + 层级；memberId 为成员记录 ID，非 user_id） */
+/** 创建/更新角色请求体（guildapi roleRequest） */
+export type RoleWriteInput = {
+  name: string
+  /** int64 位掩码；JS 安全整数范围内用 number，高位由服务端合并保留 */
+  permissions: number
+  /** @everyone 固定 0；自定义角色 ≥1 */
+  position: number
+  color?: string
+  hoist?: boolean
+  mentionable?: boolean
+}
+
+/** 创建角色（需 MANAGE_ROLES + 防提权）→ GUILD_ROLE_CREATE */
+export const createRole = (guildId: string, input: RoleWriteInput) =>
+  api<Role>(`/guilds/${guildId}/roles`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  })
+
+/** 更新角色（需 MANAGE_ROLES + 层级；内置 managed 权限/层级锁定）→ GUILD_ROLE_UPDATE */
+export const updateRole = (guildId: string, roleId: string, input: RoleWriteInput) =>
+  api<Role>(`/guilds/${guildId}/roles/${roleId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  })
+
+/** 角色名样式类型（PUT /roles/{id}/style，customization/style.go） */
+export type RoleStyleType = "" | "solid" | "linear" | "radial"
+
+/** 编辑器用表面样式（type 必填联合，与 types.RoleSurfaceStyle 对齐） */
+export type RoleStyleSurface = {
+  type: RoleStyleType
+  colors?: string[]
+  angle?: number
+  shape?: "circle" | "ellipse"
+  animated?: boolean
+  speed?: number
+}
+
+export type RoleStyleBadge = {
+  enabled?: boolean
+  background?: RoleStyleSurface
+  background_image_url?: string
+  icon_url?: string
+  show_name?: boolean
+  text_color?: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
+}
+
+export type RoleStyle = RoleStyleSurface & {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
+  icon_sync?: boolean
+  icon?: RoleStyleSurface
+  badge?: RoleStyleBadge
+}
+
+function parseSurface(
+  obj: RoleNameStyle | RoleStyleSurface | null | undefined,
+): RoleStyleSurface {
+  if (!obj?.type) return { type: "" }
+  const type = obj.type as RoleStyleType
+  if (type !== "solid" && type !== "linear" && type !== "radial") {
+    return { type: "" }
+  }
+  return {
+    type,
+    colors: obj.colors?.length ? [...obj.colors] : undefined,
+    angle: obj.angle,
+    shape:
+      obj.shape === "ellipse" || obj.shape === "circle" ? obj.shape : undefined,
+    animated: Boolean(obj.animated) || undefined,
+    speed:
+      typeof obj.speed === "number" && obj.speed >= 0.5 && obj.speed <= 20
+        ? obj.speed
+        : undefined,
+  }
+}
+
+/** 解析 Role.style（JSON 字符串或对象）为可编辑草稿 */
+export function parseRoleStyle(
+  raw: string | RoleNameStyle | undefined | null,
+): RoleStyle {
+  if (!raw) return { type: "" }
+  let obj: RoleNameStyle | null = null
+  if (typeof raw === "object") {
+    obj = raw
+  } else {
+    const text = raw.trim()
+    if (text && text !== "{}") {
+      try {
+        obj = JSON.parse(text) as RoleNameStyle
+      } catch {
+        obj = null
+      }
+    }
+  }
+  if (!obj) return { type: "" }
+  const base = parseSurface(obj)
+  const icon = obj.icon ? parseSurface(obj.icon) : undefined
+  const badgeRaw = obj.badge
+  const badgeBg = badgeRaw?.background
+    ? parseSurface(badgeRaw.background as RoleNameStyle)
+    : undefined
+  const badge: RoleStyleBadge | undefined = badgeRaw
+    ? {
+        enabled: Boolean(badgeRaw.enabled) || undefined,
+        background: badgeBg?.type ? badgeBg : undefined,
+        background_image_url:
+          badgeRaw.background_image_url?.trim() || undefined,
+        icon_url: badgeRaw.icon_url?.trim() || undefined,
+        show_name: badgeRaw.show_name,
+        text_color: badgeRaw.text_color?.trim() || undefined,
+        bold: Boolean(badgeRaw.bold) || undefined,
+        italic: Boolean(badgeRaw.italic) || undefined,
+        underline: Boolean(badgeRaw.underline) || undefined,
+        strikethrough: Boolean(badgeRaw.strikethrough) || undefined,
+      }
+    : undefined
+  const hasBadge =
+    badge &&
+    (badge.enabled ||
+      badge.background ||
+      badge.background_image_url ||
+      badge.icon_url ||
+      badge.text_color ||
+      badge.bold ||
+      badge.italic ||
+      badge.underline ||
+      badge.strikethrough)
+  const hasTextDecor =
+    Boolean(obj.bold) ||
+    Boolean(obj.italic) ||
+    Boolean(obj.underline) ||
+    Boolean(obj.strikethrough)
+  if (!base.type && !hasBadge && !hasTextDecor) return { type: "" }
+  return {
+    type: base.type,
+    colors: base.colors,
+    angle: base.angle,
+    shape: base.shape,
+    animated: base.animated,
+    speed: base.speed,
+    bold: Boolean(obj.bold) || undefined,
+    italic: Boolean(obj.italic) || undefined,
+    underline: Boolean(obj.underline) || undefined,
+    strikethrough: Boolean(obj.strikethrough) || undefined,
+    icon_sync: Boolean(obj.icon_sync) || undefined,
+    icon: icon?.type ? icon : undefined,
+    badge: hasBadge ? badge : undefined,
+  }
+}
+
+/** icon 实际应用的表面样式（sync / 独立 / 回退主色） */
+export function resolveRoleIconStyle(
+  style: RoleStyle | null | undefined,
+): RoleStyleSurface | null {
+  if (!style?.type) return null
+  if (style.icon_sync) {
+    return {
+      type: style.type,
+      colors: style.colors,
+      angle: style.angle,
+      shape: style.shape,
+      animated: style.animated,
+      speed: style.speed,
+    }
+  }
+  if (style.icon?.type) return style.icon
+  if (style.colors?.[0]) return { type: "solid", colors: [style.colors[0]] }
+  return null
+}
+
+/**
+ * 更新角色名样式（纯色 / 线性 / 径向 + 速度 + icon 同步/独立）。
+ * 需 MANAGE_CUSTOMIZATION 或 MANAGE_ROLES → GUILD_ROLE_UPDATE。
+ * type 为空对象表示清除样式。
+ */
+export const updateRoleStyle = (
+  guildId: string,
+  roleId: string,
+  style: RoleStyle,
+) =>
+  api<Role>(`/guilds/${guildId}/roles/${roleId}/style`, {
+    method: "PUT",
+    body: JSON.stringify(style),
+  })
+
+async function uploadRoleBadgeAsset(
+  guildId: string,
+  roleId: string,
+  path: "badge-icon" | "badge-background",
+  file: File,
+): Promise<{ role: Role; icon_url?: string; background_image_url?: string }> {
+  const { apiBaseURL, ensureAccessToken } = await import("./http")
+  const token = await ensureAccessToken()
+  const headers = new Headers()
+  headers.set("Content-Type", file.type || "application/octet-stream")
+  if (token) headers.set("Authorization", `Bearer ${token}`)
+  const response = await fetch(
+    `${apiBaseURL()}/guilds/${guildId}/roles/${roleId}/${path}`,
+    { method: "PUT", headers, body: file },
+  )
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: { message?: string }
+    }
+    throw new Error(body.error?.message ?? `上传失败（${response.status}）`)
+  }
+  return response.json() as Promise<{
+    role: Role
+    icon_url?: string
+    background_image_url?: string
+  }>
+}
+
+/** 上传角色徽章 icon（原始字节，Content-Type 为文件 MIME） */
+export async function uploadRoleBadgeIcon(
+  guildId: string,
+  roleId: string,
+  file: File,
+) {
+  return uploadRoleBadgeAsset(guildId, roleId, "badge-icon", file)
+}
+
+export const deleteRoleBadgeIcon = (guildId: string, roleId: string) =>
+  api<Role>(`/guilds/${guildId}/roles/${roleId}/badge-icon`, {
+    method: "DELETE",
+  })
+
+/** 上传角色徽章背景图 */
+export async function uploadRoleBadgeBackground(
+  guildId: string,
+  roleId: string,
+  file: File,
+) {
+  return uploadRoleBadgeAsset(guildId, roleId, "badge-background", file)
+}
+
+export const deleteRoleBadgeBackground = (guildId: string, roleId: string) =>
+  api<Role>(`/guilds/${guildId}/roles/${roleId}/badge-background`, {
+    method: "DELETE",
+  })
+
+/** 删除角色（@everyone / managed 不可删）→ GUILD_ROLE_DELETE */
+export const deleteRole = (guildId: string, roleId: string) =>
+  api<void>(`/guilds/${guildId}/roles/${roleId}`, { method: "DELETE" })
+
+/** 批量排序角色（body: [{id, position}]；@everyone/managed 不可参与）→ 逐条 GUILD_ROLE_UPDATE */
+export const reorderRoles = (
+  guildId: string,
+  items: { id: string; position: number }[],
+) =>
+  api<void>(`/guilds/${guildId}/roles`, {
+    method: "PATCH",
+    body: JSON.stringify(items),
+  })
+
+/** 给成员绑定角色（需 MANAGE_ROLES + 层级；memberId 为成员记录 ID 或 user_id） */
 export const assignMemberRole = (guildId: string, memberId: string, roleId: string) =>
   api<void>(`/guilds/${guildId}/members/${memberId}/roles/${roleId}`, { method: "PUT" })
 
@@ -88,7 +510,21 @@ export const assignMemberRole = (guildId: string, memberId: string, roleId: stri
 export const removeMemberRole = (guildId: string, memberId: string, roleId: string) =>
   api<void>(`/guilds/${guildId}/members/${memberId}/roles/${roleId}`, { method: "DELETE" })
 
-/** 踢出成员（需 KICK_MEMBERS + 层级；memberId 为成员记录 ID） */
+// ---------------------------------------------------------------------------
+// 邀请管理（docs 18 §5.7；publicinvite list/delete）
+// ---------------------------------------------------------------------------
+
+/** 本服有效邀请列表（需 CREATE_INSTANT_INVITE 或 MANAGE_GUILD） */
+export const listGuildInvites = (guildId: string) =>
+  api<GuildInvite[]>(`/guilds/${guildId}/invites`)
+
+/** 撤销邀请（按 code；需 CREATE_INSTANT_INVITE 或 MANAGE_GUILD） */
+export const revokeGuildInvite = (guildId: string, code: string) =>
+  api<void>(`/guilds/${guildId}/invites/${encodeURIComponent(code)}`, {
+    method: "DELETE",
+  })
+
+/** 踢出成员（需 KICK_MEMBERS + 层级；memberId 为成员记录 ID 或 user_id） */
 export const kickMember = (guildId: string, memberId: string) =>
   api<void>(`/guilds/${guildId}/members/${memberId}`, { method: "DELETE" })
 
@@ -96,7 +532,10 @@ export const kickMember = (guildId: string, memberId: string) =>
 export const leaveGuild = (guildId: string) =>
   api<void>(`/guilds/${guildId}/members/@me`, { method: "DELETE" })
 
-/** 修改成员昵称（本人 CHANGE_NICKNAME / 他人 MANAGE_NICKNAMES；空串清空） */
+/**
+ * 修改成员昵称（本人 CHANGE_NICKNAME / 他人 MANAGE_NICKNAMES；空串清空）。
+ * @param memberId 成员记录 ID、user_id 或 "@me"（本人）
+ */
 export const updateMemberNickname = (
   guildId: string,
   memberId: string,
@@ -106,6 +545,23 @@ export const updateMemberNickname = (
     method: "PATCH",
     body: JSON.stringify({ nickname }),
   })
+
+/**
+ * 本人选用用户名样式来源角色（PATCH /members/@me/name-style）。
+ * roleId 为 null 表示清除，恢复自动（最高有样式的持有角色）。
+ * 不改变角色绑定，只切换展示用的 style 来源。
+ */
+export const updateMyNameStylePreference = (
+  guildId: string,
+  roleId: string | null,
+) =>
+  api<{ id: string; name_style_role_id?: string | null }>(
+    `/guilds/${guildId}/members/@me/name-style`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ role_id: roleId }),
+    },
+  )
 
 /** 封禁用户（需 BAN_MEMBERS + 层级；按 user_id，效果 = 移除成员 + 禁止再加入） */
 export const banUser = (guildId: string, userId: string, reason?: string) =>

@@ -9,6 +9,8 @@ export default [
   // 应用壳：未登录时渲染欢迎空态（页内添加服务器 / 登录注册），不再有独立登录页路由
   layout("routes/app-shell.tsx", [
     index("routes/home.tsx"),
+    // 好友页：右上角信封入口（私信落地页为 index）
+    route("friends", "routes/friends.tsx"),
     route("channels/:guildId/:channelId", "routes/channel.tsx"),
     // 服务器管理员操作面板（语音静音/禁听/踢出、成员踢封、封禁列表）
     route("guilds/:guildId/moderation", "routes/moderation.tsx"),

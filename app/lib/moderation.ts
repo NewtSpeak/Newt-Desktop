@@ -27,6 +27,8 @@ export type AdminCaps = {
   canBan: boolean
   canManageRoles: boolean
   canManageNicknames: boolean
+  /** 多维限制（超时/禁言等，MODERATE_MEMBERS） */
+  canModerateMembers: boolean
 }
 
 /** 根据本人身份与角色计算管理能力 */
@@ -58,6 +60,10 @@ export function computeAdminCaps(
     systemAdmin ||
     isOwner ||
     hasPermission(perms, Permissions.MANAGE_NICKNAMES)
+  const canModerateMembers =
+    systemAdmin ||
+    isOwner ||
+    hasPermission(perms, Permissions.MODERATE_MEMBERS)
   const isModerator =
     systemAdmin ||
     isOwner ||
@@ -67,7 +73,8 @@ export function computeAdminCaps(
     canDeafen ||
     canDisconnect ||
     canKick ||
-    canBan
+    canBan ||
+    canModerateMembers
 
   return {
     isModerator,
@@ -79,6 +86,7 @@ export function computeAdminCaps(
     canBan,
     canManageRoles,
     canManageNicknames,
+    canModerateMembers,
   }
 }
 

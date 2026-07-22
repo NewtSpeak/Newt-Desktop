@@ -1,5 +1,5 @@
-// 消息输入区：多行自适应 contenteditable（Enter 发送 / Shift+Enter 换行）、
-// 行内 @chip（灰色背景，非独立组件）、4000 字计数、typing 节流、@成员补全面板、
+// 消息输入区：TipTap 有限 Markdown 编辑器（Enter 发送 / Shift+Enter 换行）、
+// 行内 @chip、格式工具栏与快捷键、4000 字计数、typing 节流、@成员补全面板、
 // 附件三入口（+ 按钮 / 拖拽 / 粘贴图片）与 presign+直传进度。
 
 import {
@@ -12,6 +12,7 @@ import {
 import {
   CrownIcon,
   FileIcon,
+  LockIcon,
   PlusIcon,
   SendIcon,
   SmileIcon,
@@ -21,6 +22,7 @@ import {
 import { presignAttachment, uploadAttachmentWithProgress } from "~/lib/api/attachments"
 import { ApiError } from "~/lib/api/http"
 import { sendTyping } from "~/lib/api/messages"
+import type { DmBlockState } from "~/lib/api/social"
 import { MESSAGE_TYPE_SYSTEM_ADMIN, type GuildMember } from "~/lib/api/types"
 import {
   memberDisplayName,
@@ -31,230 +33,19 @@ import { cn } from "~/lib/utils"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
 import { formatBytes } from "./attachments"
-import { EmojiPickerPopover } from "./emoji-picker"
+import {
+  TipTapComposerEditor,
+  type TipTapComposerHandle,
+} from "./composer-tiptap"
+import { useStickersStore } from "~/stores/stickers"
+import {
+  EmojiPickerPopover,
+  type ExpressionPick,
+} from "./emoji-picker"
 
 const MAX_CONTENT = 4000
 const MAX_ATTACHMENTS = 10
 const TYPING_THROTTLE_MS = 8000
-
-/** 行内 @chip 样式（与消息正文提及风格接近，输入区略收敛） */
-const MENTION_CHIP_CLASS =
-  "mx-0.5 inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[0.95em] font-medium text-foreground align-middle select-none"
-
-// ---------------------------------------------------------------------------
-// contenteditable：序列化 / 光标 / @chip
-// ---------------------------------------------------------------------------
-
-/** 将编辑器 DOM 序列化为发送用 wire 文本（chip → <@uuid>） */
-function serializeComposer(root: HTMLElement): string {
-  let out = ""
-  const walk = (node: Node, isRoot = false) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      out += (node.textContent ?? "").replace(/\u00A0/g, " ")
-      return
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return
-    const el = node as HTMLElement
-    if (el.dataset.mentionUserId) {
-      out += `<@${el.dataset.mentionUserId}>`
-      return
-    }
-    if (el.tagName === "BR") {
-      out += "\n"
-      return
-    }
-    const isBlock = el.tagName === "DIV" || el.tagName === "P"
-    // contenteditable 换行常包在 DIV 里：块前补换行（根下第一个块除外）
-    if (isBlock && !isRoot && out.length > 0 && !out.endsWith("\n")) {
-      out += "\n"
-    }
-    for (const child of el.childNodes) walk(child)
-  }
-  for (const child of root.childNodes) walk(child, true)
-  // 浏览器空编辑器可能只剩 <br>
-  if (out === "\n") return ""
-  return out
-}
-
-function isEditorVisuallyEmpty(root: HTMLElement): boolean {
-  const text = serializeComposer(root).trim()
-  return text === ""
-}
-
-/** 创建不可编辑的 @chip */
-function createMentionChip(userId: string, label: string): HTMLSpanElement {
-  const span = document.createElement("span")
-  span.contentEditable = "false"
-  span.dataset.mentionUserId = userId
-  span.className = MENTION_CHIP_CLASS
-  span.textContent = `@${label}`
-  // 避免拖选拆开 chip
-  span.draggable = false
-  return span
-}
-
-/** 取选区前的「纯文本」视图（chip 视为空格，便于 (^|\s)@ 匹配） */
-function plainTextBeforeCaret(root: HTMLElement): string {
-  const sel = window.getSelection()
-  if (!sel || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) {
-    return serializeComposer(root)
-  }
-  const end = sel.getRangeAt(0)
-  const range = document.createRange()
-  range.selectNodeContents(root)
-  range.setEnd(end.endContainer, end.endOffset)
-
-  let out = ""
-  const walk = (node: Node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      out += (node.textContent ?? "").replace(/\u00A0/g, " ")
-      return
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return
-    const el = node as HTMLElement
-    if (el.dataset.mentionUserId) {
-      out += " "
-      return
-    }
-    if (el.tagName === "BR") {
-      out += "\n"
-      return
-    }
-    for (const child of el.childNodes) walk(child)
-  }
-  // 用 TreeWalker 只遍历 range 内节点较繁琐；改用 cloneContents
-  const frag = range.cloneContents()
-  for (const child of frag.childNodes) walk(child)
-  return out
-}
-
-/** 从光标向前删除 count 个纯文本字符（用于插入 chip 前清掉 @query） */
-function deleteTextBeforeCaret(root: HTMLElement, charCount: number) {
-  if (charCount <= 0) return
-  const sel = window.getSelection()
-  if (!sel || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) return
-
-  let remaining = charCount
-  while (remaining > 0) {
-    const r = sel.getRangeAt(0)
-    const { startContainer: container, startOffset: offset } = r
-
-    if (container.nodeType === Node.TEXT_NODE) {
-      const tn = container as Text
-      if (offset > 0) {
-        const del = Math.min(offset, remaining)
-        tn.deleteData(offset - del, del)
-        remaining -= del
-        const nextOffset = offset - del
-        if (tn.length === 0) {
-          const parent = tn.parentNode!
-          const index = Array.prototype.indexOf.call(parent.childNodes, tn)
-          tn.remove()
-          r.setStart(parent, index)
-        } else {
-          r.setStart(tn, nextOffset)
-        }
-        r.collapse(true)
-        sel.removeAllRanges()
-        sel.addRange(r)
-        continue
-      }
-      // 文本节点开头：跳到前一个叶子
-      const prev = previousLeaf(root, tn)
-      if (!prev) break
-      placeCaretAfter(sel, prev)
-      continue
-    }
-
-    // 光标在元素节点上（如 root 的子节点间隙）
-    if (container.nodeType === Node.ELEMENT_NODE) {
-      if (offset > 0) {
-        const child = container.childNodes[offset - 1]
-        if (child.nodeType === Node.TEXT_NODE) {
-          const tn = child as Text
-          r.setStart(tn, tn.length)
-          r.collapse(true)
-          sel.removeAllRanges()
-          sel.addRange(r)
-          continue
-        }
-        // chip 或 br：整块删掉（@query 不会落在 chip 上，一般不会走到）
-        if ((child as HTMLElement).dataset?.mentionUserId || (child as HTMLElement).tagName === "BR") {
-          child.parentNode?.removeChild(child)
-          remaining -= 1
-          r.setStart(container, offset - 1)
-          r.collapse(true)
-          sel.removeAllRanges()
-          sel.addRange(r)
-          continue
-        }
-        placeCaretAfter(sel, child)
-        continue
-      }
-      const prev = previousLeaf(root, container)
-      if (!prev) break
-      placeCaretAfter(sel, prev)
-      continue
-    }
-    break
-  }
-}
-
-function placeCaretAfter(sel: Selection, node: Node) {
-  const r = document.createRange()
-  if (node.nodeType === Node.TEXT_NODE) {
-    r.setStart(node, (node as Text).length)
-  } else {
-    r.setStartAfter(node)
-  }
-  r.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(r)
-}
-
-function previousLeaf(root: HTMLElement, node: Node): Node | null {
-  let current: Node | null = node
-  while (current && current !== root) {
-    if (current.previousSibling) {
-      current = current.previousSibling
-      while (current.lastChild) current = current.lastChild
-      return current
-    }
-    current = current.parentNode
-  }
-  return null
-}
-
-/** 在光标处插入节点并放光标到其后 */
-function insertNodeAtCaret(node: Node) {
-  const sel = window.getSelection()
-  if (!sel || sel.rangeCount === 0) return
-  const range = sel.getRangeAt(0)
-  range.deleteContents()
-  range.insertNode(node)
-  range.setStartAfter(node)
-  range.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(range)
-}
-
-/** 在光标处插入纯文本 */
-function insertTextAtCaret(text: string) {
-  const sel = window.getSelection()
-  if (!sel || sel.rangeCount === 0) return
-  const range = sel.getRangeAt(0)
-  range.deleteContents()
-  const textNode = document.createTextNode(text)
-  range.insertNode(textNode)
-  range.setStartAfter(textNode)
-  range.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(range)
-}
-
-function clearEditor(root: HTMLElement) {
-  root.innerHTML = ""
-}
 
 // ---------------------------------------------------------------------------
 // 上传项
@@ -340,13 +131,6 @@ function AttachmentTrayCard({ item, onRemove }: { item: UploadItem; onRemove: ()
 // @ 提及补全
 // ---------------------------------------------------------------------------
 
-function matchMentionQuery(text: string, caret: number): { start: number; query: string } | null {
-  const before = text.slice(0, caret)
-  const match = /(^|\s)@([\p{L}\p{N}_-]{0,32})$/u.exec(before)
-  if (!match) return null
-  return { start: caret - match[2].length - 1, query: match[2] }
-}
-
 function filterMembers(members: GuildMember[], query: string): GuildMember[] {
   const lowered = query.toLowerCase()
   return members
@@ -376,6 +160,14 @@ export type ComposerProps = {
   /** 输入框为空时按 ↑：编辑自己最近一条消息 */
   onEditLast: () => void
   resolveName: (userId: string) => string
+  /** 解析用户头像（私信需从 recipients 取，不能只靠 guild members） */
+  resolveAvatarUrl?: (userId: string) => string | undefined
+  /**
+   * 1:1 私信拉黑状态：
+   * - blocked_by_me：我拉黑了对方 →「请解除拉黑之后再发送消息！」
+   * - blocked_by_peer：对方拉黑了我 →「对方开启了好友验证…」
+   */
+  dmBlockState?: DmBlockState | null
 }
 
 export function Composer({
@@ -386,6 +178,8 @@ export function Composer({
   onCancelReply,
   onEditLast,
   resolveName,
+  resolveAvatarUrl,
+  dmBlockState = null,
 }: ComposerProps) {
   const send = useMessagesStore((state) => state.send)
   const discardPending = useMessagesStore((state) => state.discardPending)
@@ -398,19 +192,20 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false)
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
+  /** 发送失败后从错误码推断的对端拉黑（本地 relationships 看不到对方拉黑我） */
+  const [peerBlockHint, setPeerBlockHint] = useState(false)
 
-  const editableRef = useRef<HTMLDivElement>(null)
+  const tipTapRef = useRef<TipTapComposerHandle | null>(null)
   const lastTypingRef = useRef(0)
   const uploadsRef = useRef(uploads)
   uploadsRef.current = uploads
 
-  // 频道切换：清空本地输入态（上传中的先中止）+ 清空编辑器
+  // 频道切换：清空本地输入态（上传中的先中止）；编辑器自身也会随 channelId 清空
   useEffect(() => {
-    if (editableRef.current) {
-      clearEditor(editableRef.current)
-      setValue("")
-      setMention(null)
-    }
+    setPeerBlockHint(false)
+    setInlineError(null)
+    setMention(null)
+    setValue("")
     return () => {
       for (const item of uploadsRef.current) {
         item.abort?.()
@@ -419,27 +214,27 @@ export function Composer({
     }
   }, [channelId])
 
+  // 服务端/关系 store 给出的拉黑状态优先；发送时发现对端拉黑则本地提示
+  const blockState: DmBlockState | "" =
+    dmBlockState === "blocked_by_me" || dmBlockState === "blocked_by_peer"
+      ? dmBlockState
+      : peerBlockHint
+        ? "blocked_by_peer"
+        : ""
+  const isBlocked = Boolean(blockState)
+  const blockHintText =
+    blockState === "blocked_by_me"
+      ? "请解除拉黑之后再发送消息！"
+      : blockState === "blocked_by_peer"
+        ? "对方开启了好友验证，您暂时无法给对方发送消息！"
+        : null
+
   // 429 冷却倒计时
   useEffect(() => {
     if (cooldown <= 0) return
     const timer = setTimeout(() => setCooldown((seconds) => seconds - 1), 1000)
     return () => clearTimeout(timer)
   }, [cooldown])
-
-  const resize = () => {
-    const el = editableRef.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
-  }
-
-  const syncValueFromDom = useCallback(() => {
-    const el = editableRef.current
-    if (!el) return ""
-    const next = serializeComposer(el)
-    setValue(next)
-    return next
-  }, [])
 
   // -------------------------------------------------------------------------
   // 附件上传
@@ -559,12 +354,20 @@ export function Composer({
   // typing 节流
   // -------------------------------------------------------------------------
 
-  const reportTyping = () => {
+  const reportTyping = useCallback(() => {
     const now = Date.now()
     if (now - lastTypingRef.current < TYPING_THROTTLE_MS) return
     lastTypingRef.current = now
     void sendTyping(channelId).catch(() => undefined)
-  }
+  }, [channelId])
+
+  const onEditorChange = useCallback(
+    (markdown: string) => {
+      setValue(markdown)
+      if (markdown.trim() !== "") reportTyping()
+    },
+    [reportTyping],
+  )
 
   // -------------------------------------------------------------------------
   // @ 补全
@@ -575,43 +378,65 @@ export function Composer({
     [mention, members],
   )
 
-  const refreshMentionFromCaret = () => {
-    const root = editableRef.current
-    if (!root) {
+  const onMentionQuery = useCallback(
+    (query: { start: number; query: string } | null) => {
+      setMention(query)
+      if (query) setMentionIndex(0)
+    },
+    [],
+  )
+
+  /** 在输入框光标处插入 @chip，替换正在输入的 @query */
+  const insertMention = useCallback(
+    (member: GuildMember) => {
+      if (!mention) return
+      const handle = tipTapRef.current
+      if (!handle) return
+
+      const queryLen = mention.query.length + 1 // 含 @
+      const already = handle.getMarkdown().includes(`<@${member.user_id}>`)
+
+      if (already) {
+        handle.deleteBeforeCaret(queryLen)
+      } else {
+        const label = memberDisplayName(member) || member.username
+        handle.insertMention(member.user_id, label, queryLen)
+      }
       setMention(null)
+      requestAnimationFrame(() => handle.focus())
+    },
+    [mention],
+  )
+
+  // mention 面板键盘：捕获阶段优先于 TipTap 内部 Enter 发送
+  const onComposerKeyDownCapture = (event: React.KeyboardEvent) => {
+    if (!mention || mentionCandidates.length === 0) return
+    if (event.key === "ArrowDown") {
+      event.preventDefault()
+      event.stopPropagation()
+      setMentionIndex((index) => (index + 1) % mentionCandidates.length)
       return
     }
-    const before = plainTextBeforeCaret(root)
-    const matched = matchMentionQuery(before, before.length)
-    setMention(matched)
-    if (matched) setMentionIndex(0)
-  }
-
-  /** 在输入框光标处插入灰色 @chip，替换正在输入的 @query */
-  const insertMention = (member: GuildMember) => {
-    if (!mention) return
-    const root = editableRef.current
-    if (!root) return
-    root.focus()
-
-    // 已存在同一提及：只删掉正在打的 @query，不重复插 chip
-    const already = serializeComposer(root).includes(`<@${member.user_id}>`)
-    const queryLen = mention.query.length + 1 // 含 @
-    deleteTextBeforeCaret(root, queryLen)
-
-    if (!already) {
-      const label = memberDisplayName(member) || member.username
-      const chip = createMentionChip(member.user_id, label)
-      insertNodeAtCaret(chip)
-      insertTextAtCaret(" ")
+    if (event.key === "ArrowUp") {
+      event.preventDefault()
+      event.stopPropagation()
+      setMentionIndex(
+        (index) =>
+          (index - 1 + mentionCandidates.length) % mentionCandidates.length,
+      )
+      return
     }
-
-    setMention(null)
-    syncValueFromDom()
-    requestAnimationFrame(() => {
-      root.focus()
-      resize()
-    })
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault()
+      event.stopPropagation()
+      insertMention(mentionCandidates[mentionIndex])
+      return
+    }
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      setMention(null)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -625,16 +450,85 @@ export function Composer({
     .filter((item) => item.status === "done" && item.attachmentId)
     .map((item) => item.attachmentId!)
   const canSend =
+    !isBlocked &&
     cooldown <= 0 &&
     overCount <= 0 &&
     !uploading &&
     failedUploads.length === 0 &&
     (value.trim() !== "" || doneAttachmentIds.length > 0)
 
+  const sendSticker = async (item: {
+    id: string
+    pack_id: string
+    mark: string
+    asset_url: string
+  }) => {
+    if (isBlocked || cooldown > 0) return
+    setInlineError(null)
+    setPeerBlockHint(false)
+    try {
+      await send(channelId, {
+        content: "",
+        replyToId: replyTo?.id,
+        stickerItems: [{ item_id: item.id }],
+        stickerPreview: [
+          {
+            item_id: item.id,
+            pack_id: item.pack_id,
+            mark: item.mark,
+            asset_url: item.asset_url,
+          },
+        ],
+      })
+      onCancelReply()
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.code === "SLOWMODE_RATE_LIMITED" && error.retryAfterSeconds) {
+          setCooldown(error.retryAfterSeconds)
+          return
+        }
+        if (
+          error.code === "DM_BLOCKED" ||
+          error.code === "BLOCKED_BY_PEER" ||
+          /拉黑|屏蔽|好友验证/i.test(error.message)
+        ) {
+          setPeerBlockHint(true)
+          return
+        }
+        setInlineError(error.message)
+      } else {
+        setInlineError("发送失败，请重试")
+      }
+    }
+  }
+
+  const onExpressionPick = (pick: ExpressionPick) => {
+    if (pick.type === "unicode") {
+      tipTapRef.current?.insertEmoji(pick.emoji)
+      tipTapRef.current?.focus()
+      return
+    }
+    if (pick.type === "emote") {
+      useStickersStore.getState().cacheItems([pick.item])
+      tipTapRef.current?.insertCustomEmote({
+        itemId: pick.item.id,
+        mark: pick.item.mark,
+        assetUrl: pick.item.asset_url,
+        animated: pick.item.animated,
+      })
+      tipTapRef.current?.focus()
+      return
+    }
+    // 贴图：独立发送
+    useStickersStore.getState().cacheItems([pick.item])
+    void sendSticker(pick.item)
+  }
+
   const doSend = async () => {
+    if (isBlocked) return
     if (!canSend) return
-    const root = editableRef.current
-    const content = (root ? serializeComposer(root) : value).trim()
+    const handle = tipTapRef.current
+    const content = (handle?.getMarkdown() ?? value).trim()
     const attachments = uploads
       .filter((item) => item.status === "done" && item.attachmentId)
       .map((item) => ({
@@ -645,7 +539,7 @@ export function Composer({
       }))
     setInlineError(null)
     // 先清空输入（乐观回显由 store 的 pending 队列负责）
-    if (root) clearEditor(root)
+    handle?.clear()
     setValue("")
     setMention(null)
     for (const item of uploads) {
@@ -654,7 +548,6 @@ export function Composer({
     setUploads([])
     onCancelReply()
     lastTypingRef.current = 0
-    requestAnimationFrame(resize)
     try {
       await send(channelId, {
         content,
@@ -669,92 +562,29 @@ export function Composer({
           setInlineError("发送过快，请稍候")
           return
         }
+        // 拉黑：保留 failed pending（红叹号），并切换输入区锁态文案
+        if (
+          error.code === "BLOCKED_BY_SELF" ||
+          error.code === "BLOCKED_BY_PEER"
+        ) {
+          if (error.code === "BLOCKED_BY_PEER") setPeerBlockHint(true)
+          // 不 discard pending，message-item 展示红色感叹号
+          return
+        }
         if (error.status === 403 || error.status === 404) {
-          // 无权限/频道不可用：pending 重试无意义，直接移除并内联提示
+          // 其他无权限/频道不可用：pending 重试无意义，移除并内联提示
           setInlineError(
             error.status === 403 ? error.message : "频道不可用，消息未能发送",
           )
-          const pendingQueue = useMessagesStore.getState().pendingByChannel[channelId] ?? []
+          const pendingQueue =
+            useMessagesStore.getState().pendingByChannel[channelId] ?? []
           const failed = pendingQueue.filter((item) => item.status === "failed")
-          if (failed.length > 0) discardPending(channelId, failed[failed.length - 1].nonce)
+          if (failed.length > 0)
+            discardPending(channelId, failed[failed.length - 1].nonce)
           return
         }
       }
-      // 其他错误：保留 failed pending 行供重试，无需内联提示
-    }
-  }
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (mention && mentionCandidates.length > 0) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault()
-        setMentionIndex((index) => (index + 1) % mentionCandidates.length)
-        return
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault()
-        setMentionIndex(
-          (index) => (index - 1 + mentionCandidates.length) % mentionCandidates.length,
-        )
-        return
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault()
-        insertMention(mentionCandidates[mentionIndex])
-        return
-      }
-      if (event.key === "Escape") {
-        event.preventDefault()
-        setMention(null)
-        return
-      }
-    }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault()
-      void doSend()
-      return
-    }
-    const root = editableRef.current
-    if (event.key === "ArrowUp" && root && isEditorVisuallyEmpty(root)) {
-      event.preventDefault()
-      onEditLast()
-      return
-    }
-    if (event.key === "Escape" && replyTo) {
-      event.preventDefault()
-      onCancelReply()
-    }
-  }
-
-  const onPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
-    const files: File[] = []
-    for (const clipboardItem of event.clipboardData.items) {
-      if (clipboardItem.kind === "file") {
-        const file = clipboardItem.getAsFile()
-        if (file) {
-          // 剪贴板位图通常无文件名：命名 image.png
-          files.push(
-            file.name
-              ? file
-              : new File([file], "image.png", { type: file.type || "image/png" }),
-          )
-        }
-      }
-    }
-    if (files.length > 0) {
-      event.preventDefault()
-      addFiles(files)
-      return
-    }
-    // 纯文本粘贴，避免带入 HTML 破坏 chip 结构
-    const text = event.clipboardData.getData("text/plain")
-    if (text) {
-      event.preventDefault()
-      insertTextAtCaret(text)
-      syncValueFromDom()
-      resize()
-      refreshMentionFromCaret()
-      if (text.trim()) reportTyping()
+      // 其他错误：保留 failed pending 行供重试
     }
   }
 
@@ -766,8 +596,13 @@ export function Composer({
     input.click()
   }
 
+  const mentionOpen = Boolean(mention && mentionCandidates.length > 0)
+
   return (
-    <div className="relative shrink-0 px-4 pb-4">
+    <div
+      className="relative px-4 pt-1 pb-3"
+      onKeyDownCapture={onComposerKeyDownCapture}
+    >
       {/* 拖放遮罩 */}
       {dragOver && (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-background/80">
@@ -785,82 +620,12 @@ export function Composer({
         </p>
       )}
 
-      {/* 回复条 */}
-      {replyTo && (
-        <div className="flex items-center justify-between rounded-t-lg border border-b-0 bg-muted/50 px-3 py-1.5 text-xs">
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-muted-foreground">
-            正在回复
-            {(() => {
-              const isSystemAdmin = replyTo.type === MESSAGE_TYPE_SYSTEM_ADMIN
-              // 临场超管：固定皇冠头像 + 名称，禁止回落到本人资料
-              if (isSystemAdmin) {
-                return (
-                  <span className="inline-flex items-center gap-1 font-medium text-foreground">
-                    <span
-                      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-amber-600 text-white"
-                      title="系统超级管理员"
-                    >
-                      <CrownIcon className="size-2.5 text-white" aria-hidden />
-                    </span>
-                    系统超级管理员
-                  </span>
-                )
-              }
-              const authorId = replyTo.author_id
-              const m = members.find((item) => item.user_id === authorId)
-              const name =
-                resolveName(authorId) || replyTo.author_username
-              const avatar = resolveProfileAssetUrl(m?.avatar_url)
-              return (
-                <span className="inline-flex items-center gap-1 font-medium text-foreground">
-                  {avatar ? (
-                    <img
-                      src={avatar}
-                      alt=""
-                      className="size-4 rounded-full object-cover"
-                    />
-                  ) : (
-                    <span className="flex size-4 items-center justify-center rounded-full bg-muted text-[9px]">
-                      {nameInitials(name)}
-                    </span>
-                  )}
-                  @{name}
-                </span>
-              )
-            })()}
-          </span>
-          <button
-            type="button"
-            aria-label="取消回复"
-            onClick={onCancelReply}
-            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-          >
-            <XIcon className="size-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* 待发附件区 */}
-      {uploads.length > 0 && (
-        <div
-          className={cn(
-            "flex gap-2 overflow-x-auto border border-b-0 bg-muted/30 p-2",
-            replyTo ? "" : "rounded-t-lg",
-          )}
-        >
-          {uploads.map((item) => (
-            <AttachmentTrayCard
-              key={item.localId}
-              item={item}
-              onRemove={() => removeUpload(item.localId)}
-            />
-          ))}
-        </div>
-      )}
-
       {/* @ 补全面板（带头像）；chip 本身在输入框内渲染 */}
-      {mention && mentionCandidates.length > 0 && (
-        <div className="absolute bottom-full left-4 z-30 mb-1 w-72 rounded-lg border bg-popover p-1 shadow-lg">
+      {mentionOpen && (
+        <div
+          data-mention-panel
+          className="absolute bottom-full left-4 z-30 mb-1 w-72 rounded-lg border bg-popover p-1 shadow-lg"
+        >
           <p className="px-2 py-1 text-xs text-muted-foreground select-none">成员</p>
           {mentionCandidates.map((member, index) => {
             const name = memberDisplayName(member)
@@ -897,84 +662,168 @@ export function Composer({
         </div>
       )}
 
-      {/* 输入行：圆角灰底无边框；图标与输入区垂直居中 */}
+      {/* 输入框本体：灰色半透明 + 高斯模糊，无阴影 */}
       <div
         className={cn(
-          "flex items-center gap-1 rounded-2xl border-0 bg-muted px-2 py-1.5",
-          (replyTo || uploads.length > 0) && "rounded-t-none",
+          "overflow-hidden rounded-2xl border-0 shadow-none",
+          "bg-muted/55 backdrop-blur-2xl",
+          "supports-[backdrop-filter]:bg-muted/40",
         )}
       >
-        <button
-          type="button"
-          aria-label="添加附件"
-          onClick={pickFiles}
-          disabled={uploads.length >= MAX_ATTACHMENTS}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background/60 hover:text-foreground disabled:opacity-40"
-          title={uploads.length >= MAX_ATTACHMENTS ? "一条消息最多 10 个附件" : "上传文件"}
-        >
-          <PlusIcon className="size-5" />
-        </button>
-        <div
-          ref={editableRef}
-          role="textbox"
-          aria-multiline="true"
-          aria-label={`给 #${channelName} 发消息`}
-          contentEditable
-          suppressContentEditableWarning
-          data-placeholder={`给 #${channelName} 发消息`}
-          data-empty={value.trim() === "" ? "true" : "false"}
-          onInput={() => {
-            const next = syncValueFromDom()
-            resize()
-            refreshMentionFromCaret()
-            if (next.trim() !== "") reportTyping()
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onClick={() => refreshMentionFromCaret()}
-          onKeyUp={() => refreshMentionFromCaret()}
-          className={cn(
-            "max-h-56 min-h-9 flex-1 overflow-y-auto bg-transparent px-1 py-1.5 text-sm leading-6 outline-none",
-            "whitespace-pre-wrap break-words",
-            // 空内容时显示占位（含浏览器只剩 <br> 的情况）
-            "data-[empty=true]:before:pointer-events-none",
-            "data-[empty=true]:before:text-muted-foreground",
-            "data-[empty=true]:before:content-[attr(data-placeholder)]",
-          )}
-        />
-        <EmojiPickerPopover
-          onPick={(emoji) => {
-            const root = editableRef.current
-            root?.focus()
-            insertTextAtCaret(emoji)
-            syncValueFromDom()
-            resize()
-          }}
-        >
-          <button
-            type="button"
-            aria-label="插入表情"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background/60 hover:text-foreground"
+        {/* 回复条 */}
+        {replyTo && (
+          <div className="flex items-center justify-between border-0 px-3 py-1.5 text-xs">
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-muted-foreground">
+              正在回复
+              {(() => {
+                const isSystemAdmin = replyTo.type === MESSAGE_TYPE_SYSTEM_ADMIN
+                // 临场超管：固定皇冠头像 + 名称，禁止回落到本人资料
+                if (isSystemAdmin) {
+                  return (
+                    <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                      <span
+                        className="flex size-4 shrink-0 items-center justify-center rounded-full bg-amber-600 text-white"
+                        title="系统超级管理员"
+                      >
+                        <CrownIcon className="size-2.5 text-white" aria-hidden />
+                      </span>
+                      系统超级管理员
+                    </span>
+                  )
+                }
+                const authorId = replyTo.author_id
+                const m = members.find((item) => item.user_id === authorId)
+                const name =
+                  resolveName(authorId) || replyTo.author_username
+                const avatar =
+                  resolveAvatarUrl?.(authorId) ||
+                  resolveProfileAssetUrl(m?.avatar_url)
+                return (
+                  <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                    {avatar ? (
+                      <img
+                        src={avatar}
+                        alt=""
+                        className="size-4 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-4 items-center justify-center rounded-full bg-muted text-[9px]">
+                        {nameInitials(name)}
+                      </span>
+                    )}
+                    @{name}
+                  </span>
+                )
+              })()}
+            </span>
+            <button
+              type="button"
+              aria-label="取消回复"
+              onClick={onCancelReply}
+              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* 待发附件区 */}
+        {uploads.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto border-0 p-2">
+            {uploads.map((item) => (
+              <AttachmentTrayCard
+                key={item.localId}
+                item={item}
+                onRemove={() => removeUpload(item.localId)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* 拉黑态：红锁 + 红字（仍保留会话窗口，仅禁止发送） */}
+        {isBlocked && blockHintText ? (
+          <div
+            className="flex items-center gap-2 px-3 py-2.5"
+            role="status"
+            aria-live="polite"
           >
-            <SmileIcon className="size-5" />
-          </button>
-        </EmojiPickerPopover>
-        <button
-          type="button"
-          aria-label="发送"
-          onClick={() => void doSend()}
-          disabled={!canSend}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-primary hover:bg-background/60 disabled:opacity-40"
-          title={
-            uploading
-              ? "附件上传中…"
-              : failedUploads.length > 0
-                ? "有附件上传失败，移除或等待重试后再发送"
-                : undefined
-          }
-        >
-          <SendIcon className="size-5" />
-        </button>
+            <LockIcon
+              className="size-4 shrink-0 text-red-600 dark:text-red-500"
+              aria-hidden
+            />
+            <p className="text-[13px] font-medium text-red-600 dark:text-red-500">
+              {blockHintText}
+            </p>
+          </div>
+        ) : (
+          <TipTapComposerEditor
+            channelId={channelId}
+            channelName={channelName}
+            disabled={isBlocked}
+            onChange={onEditorChange}
+            onSubmit={() => void doSend()}
+            onEditLast={onEditLast}
+            onEscapeReply={replyTo ? onCancelReply : undefined}
+            onMentionQuery={onMentionQuery}
+            mentionOpen={mentionOpen}
+            onPasteFiles={addFiles}
+            editorRef={tipTapRef}
+            resolveMentionLabel={resolveName}
+            leadingActions={
+              <button
+                type="button"
+                aria-label="添加附件"
+                onClick={pickFiles}
+                disabled={uploads.length >= MAX_ATTACHMENTS}
+                className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/5 hover:text-foreground disabled:opacity-40"
+                title={
+                  uploads.length >= MAX_ATTACHMENTS
+                    ? "一条消息最多 10 个附件"
+                    : "上传文件"
+                }
+              >
+                <PlusIcon className="size-5" />
+              </button>
+            }
+            trailingActions={
+              <>
+                <EmojiPickerPopover
+                  guildId={guildId || undefined}
+                  mode="composer"
+                  onPick={(emoji) => {
+                    tipTapRef.current?.insertEmoji(emoji)
+                    tipTapRef.current?.focus()
+                  }}
+                  onExpressionPick={onExpressionPick}
+                >
+                  <button
+                    type="button"
+                    aria-label="插入表情或贴图"
+                    className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[background-color,color,transform] duration-150 hover:bg-foreground/5 hover:text-foreground active:scale-[0.96] cursor-pointer"
+                  >
+                    <SmileIcon className="size-5" />
+                  </button>
+                </EmojiPickerPopover>
+                <button
+                  type="button"
+                  aria-label="发送"
+                  onClick={() => void doSend()}
+                  disabled={!canSend}
+                  className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full text-primary hover:bg-foreground/5 disabled:opacity-40"
+                  title={
+                    uploading
+                      ? "附件上传中…"
+                      : failedUploads.length > 0
+                        ? "有附件上传失败，移除或等待重试后再发送"
+                        : undefined
+                  }
+                >
+                  <SendIcon className="size-5" />
+                </button>
+              </>
+            }
+          />
+        )}
       </div>
 
       {/* 字数计数（接近/超出上限时显示） */}

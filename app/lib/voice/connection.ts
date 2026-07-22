@@ -33,7 +33,12 @@ import type {
   VoiceServerUpdatePayload,
   VoiceStateUpdatePayload,
 } from "~/lib/gateway/events"
+import {
+  downlinkNsSoftLimit,
+  downlinkWasmModel,
+} from "~/lib/noise-suppression"
 import { useAuthStore } from "~/stores/auth"
+import { useSettingsStore } from "~/stores/settings"
 import { inferChannelMode, useStageStore } from "~/stores/stage"
 import {
   canPublishAudio,
@@ -180,11 +185,184 @@ class VoiceConnectionManager {
   private speakingActive = new Set<string>()
   private speakingFadeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+  /** 按键说话：按住时 true；释放后经 pttReleaseDelayMs 关麦 */
+  private pttHeld = false
+  private pttReleaseTimer: ReturnType<typeof setTimeout> | null = null
+  private pttKeyDown = false
+
   constructor() {
     if (typeof window !== "undefined") {
       window.addEventListener("online", () => this.handleOnline())
       window.addEventListener("offline", () => this.handleOffline())
+      this.bindNoiseSettingsWatch()
+      this.bindPttKeys()
     }
+  }
+
+  /** 应用焦点内 PTT（docs 16 FR-08）；全局热键待 Tauri 插件 */
+  private bindPttKeys() {
+    const matches = (event: KeyboardEvent | MouseEvent): boolean => {
+      const code = useSettingsStore.getState().voice.pttKey || "KeyV"
+      if (event instanceof KeyboardEvent) {
+        // 输入框内不抢 PTT，避免打字冲突
+        const t = event.target as HTMLElement | null
+        if (
+          t &&
+          (t.tagName === "INPUT" ||
+            t.tagName === "TEXTAREA" ||
+            t.isContentEditable)
+        ) {
+          return false
+        }
+        return event.code === code
+      }
+      // Mouse4/5 = button 3/4
+      if (code === "Mouse4") return event.button === 3
+      if (code === "Mouse5") return event.button === 4
+      return false
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!matches(event) || event.repeat) return
+      if (useSettingsStore.getState().voice.inputMode !== "push-to-talk") return
+      if (!useVoiceStore.getState().session) return
+      event.preventDefault()
+      this.pttKeyDown = true
+      this.setPttHeld(true)
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!matches(event)) return
+      this.pttKeyDown = false
+      this.setPttHeld(false)
+    }
+    const onBlur = () => {
+      if (!this.pttKeyDown && !this.pttHeld) return
+      this.pttKeyDown = false
+      this.setPttHeld(false)
+    }
+    const onMouseDown = (event: MouseEvent) => {
+      if (!matches(event)) return
+      if (useSettingsStore.getState().voice.inputMode !== "push-to-talk") return
+      if (!useVoiceStore.getState().session) return
+      event.preventDefault()
+      this.setPttHeld(true)
+    }
+    const onMouseUp = (event: MouseEvent) => {
+      if (!matches(event)) return
+      this.setPttHeld(false)
+    }
+    window.addEventListener("keydown", onKeyDown, true)
+    window.addEventListener("keyup", onKeyUp, true)
+    window.addEventListener("blur", onBlur)
+    window.addEventListener("mousedown", onMouseDown, true)
+    window.addEventListener("mouseup", onMouseUp, true)
+  }
+
+  private setPttHeld(held: boolean) {
+    if (this.pttReleaseTimer) {
+      clearTimeout(this.pttReleaseTimer)
+      this.pttReleaseTimer = null
+    }
+    if (held) {
+      this.pttHeld = true
+      this.applyMicState()
+      return
+    }
+    const delay = Math.max(
+      0,
+      Math.min(2000, useSettingsStore.getState().voice.pttReleaseDelayMs ?? 0),
+    )
+    if (delay <= 0) {
+      this.pttHeld = false
+      this.applyMicState()
+      return
+    }
+    this.pttReleaseTimer = setTimeout(() => {
+      this.pttReleaseTimer = null
+      this.pttHeld = false
+      this.applyMicState()
+    }, delay)
+  }
+
+  /**
+   * 订阅降噪相关设置（docs 20）：ns 总开关 / nsModel / localNs 名单变化时
+   * —— 无论来自本端 UI 还是他端 settings 同步（FR-R06 跨端）——
+   * 重采上行链（模型热切，FR-S04）并重算下行链（FR-R05）。
+   * AEC/AGC/设备等其余采集项仍由 UI 显式 applyVoiceSettings({reinitMic}) 触发。
+   */
+  private bindNoiseSettingsWatch() {
+    let prev = useSettingsStore.getState().voice
+    useSettingsStore.subscribe((state) => {
+      const voice = state.voice
+      if (voice === prev) return
+      const uplinkChanged =
+        voice.ns !== prev.ns || voice.nsModel !== prev.nsModel
+      const strengthChanged =
+        voice.nsStrengthByModel !== prev.nsStrengthByModel
+      const dfnTuningChanged =
+        voice.dfnAttenuationLimitDb !== prev.dfnAttenuationLimitDb ||
+        voice.dfnPresenceGainDb !== prev.dfnPresenceGainDb
+      const dtlnTuningChanged =
+        voice.dtlnPresenceGainDb !== prev.dtlnPresenceGainDb ||
+        voice.dtlnMakeupGainDb !== prev.dtlnMakeupGainDb
+      const downlinkChanged =
+        uplinkChanged ||
+        strengthChanged ||
+        voice.localNs !== prev.localNs ||
+        voice.localNsModels !== prev.localNsModels
+      const pttModeChanged =
+        voice.inputMode !== prev.inputMode ||
+        voice.pttKey !== prev.pttKey ||
+        voice.pttReleaseDelayMs !== prev.pttReleaseDelayMs
+      prev = voice
+      if (pttModeChanged) {
+        // 切回语音激活时清掉按住态，立刻按新模式重算闸门
+        if (voice.inputMode !== "push-to-talk") {
+          this.pttHeld = false
+          if (this.pttReleaseTimer) {
+            clearTimeout(this.pttReleaseTimer)
+            this.pttReleaseTimer = null
+          }
+        }
+        this.applyMicState()
+      }
+      if (uplinkChanged) {
+        this.activeLink?.applyVoiceSettings({ reinitMic: true })
+        this.pendingLink?.applyVoiceSettings({ reinitMic: true })
+      } else {
+        if (strengthChanged) {
+          // 强度变更不重建链（FR-S06 即时生效）
+          const strength =
+            voice.nsStrengthByModel?.[voice.nsModel ?? "rnnoise"] ?? 100
+          this.activeLink?.applyUplinkNsStrength(strength)
+          this.pendingLink?.applyUplinkNsStrength(strength)
+        }
+        if (dfnTuningChanged) {
+          const tuning = {
+            attenuationLimitDb: voice.dfnAttenuationLimitDb,
+            presenceGainDb: voice.dfnPresenceGainDb,
+          }
+          this.activeLink?.applyUplinkDfnTuning(tuning)
+          this.pendingLink?.applyUplinkDfnTuning(tuning)
+          this.activeLink?.applyDownlinkDfnTuning(tuning)
+          this.pendingLink?.applyDownlinkDfnTuning(tuning)
+        }
+        if (dtlnTuningChanged) {
+          const tuning = {
+            presenceGainDb: voice.dtlnPresenceGainDb,
+            makeupGainDb: voice.dtlnMakeupGainDb,
+          }
+          this.activeLink?.applyUplinkDtlnTuning(tuning)
+          this.pendingLink?.applyUplinkDtlnTuning(tuning)
+          this.activeLink?.applyDownlinkDtlnTuning(tuning)
+          this.pendingLink?.applyDownlinkDtlnTuning(tuning)
+        }
+      }
+      if (downlinkChanged) {
+        this.activeLink?.refreshNoiseSuppression()
+        this.pendingLink?.refreshNoiseSuppression()
+      }
+    })
   }
 
   // ---------------------------------------------------------------------------
@@ -356,6 +534,34 @@ class VoiceConnectionManager {
     this.activeLink?.setLocalMute(userId, muted)
     this.pendingLink?.setLocalMute(userId, muted)
     vlog("本地静音", userId, "→", muted)
+  }
+
+  /**
+   * 对某用户开/关「本地为其降噪」（docs 20 FR-R01/R06）：
+   * 写 settings.voice.localNs（跨端同步，决议 R4）；下行链重算由
+   * bindNoiseSettingsWatch 的订阅统一驱动。名单超上限时提示并拒绝。
+   */
+  setLocalNs(userId: string, enabled: boolean) {
+    const ok = useSettingsStore.getState().setLocalNs(userId, enabled)
+    if (!ok) {
+      toast.error("本地降噪名单已达上限（500 人），请先清理")
+      return
+    }
+    // FR-R09 / 决议 R6：同时降噪路数软上限（DFN 4 / 轻量 8，设置可覆盖）——仅提示不拦截
+    if (enabled) {
+      const voice = useSettingsStore.getState().voice
+      const count = Object.keys(voice.localNs ?? {}).length
+      const model =
+        voice.localNsModels?.[userId] ??
+        downlinkWasmModel(voice.nsModel ?? "rnnoise")
+      const limit = voice.localNsMaxTracks ?? downlinkNsSoftLimit(model)
+      if (count > limit) {
+        toast.warning(
+          `同时降噪人数较多（${count} 人，建议 ≤${limit}），可能影响性能`,
+        )
+      }
+    }
+    vlog("本地降噪", userId, "→", enabled)
   }
 
   /** 每用户本地音量（百分比 0–200）；持久化，重连/迁移后重放（FR-21） */
@@ -1103,11 +1309,21 @@ class VoiceConnectionManager {
     }
   }
 
-  /** 恢复说话三条件收口：self_mute=false ∧ server_mute=false ∧ caps 含 publish_audio */
+  /**
+   * 恢复说话收口：
+   * self_mute=false ∧ server_mute=false ∧ caps 含 publish_audio
+   * ∧（非 PTT 模式 或 正在按住 PTT 键）
+   */
   private applyMicState() {
     const session = useVoiceStore.getState().session
     if (!session) return
-    const wanted = canPublishAudio(session)
+    let wanted = canPublishAudio(session)
+    if (wanted) {
+      const voice = useSettingsStore.getState().voice
+      if (voice.inputMode === "push-to-talk" && !this.pttHeld) {
+        wanted = false
+      }
+    }
     this.activeLink?.setMicWanted(wanted)
     // pendingLink 同步意愿（上行闸门仍关，CUTOVER 放行时即为正确状态）
     this.pendingLink?.setMicWanted(wanted)
@@ -1452,16 +1668,19 @@ class VoiceConnectionManager {
         streams: [] as import("./webrtc").VoiceStreamStat[],
         connectionState: null as string | null,
         iceState: null as string | null,
+        nsUplinkModel: null as string | null,
+        nsDownlinkCount: 0,
       }
     }
     return this.activeLink.getDiagnostics()
   }
 
-  /** 运行中同步设置：输入增益 / 主输出音量 / 输出设备 → 已接入的 SFU 链路 */
+  /** 运行中同步设置：输入增益 / 主输出音量 / 输出设备 / 重采麦克风 → 已接入的 SFU 链路 */
   applyVoiceSettings(patch: {
     inputVolume?: number
     outputVolume?: number
     outputDeviceId?: string | null
+    reinitMic?: boolean
   }) {
     this.activeLink?.applyVoiceSettings(patch)
     this.pendingLink?.applyVoiceSettings(patch)

@@ -1,11 +1,12 @@
 // 未连接服务器 / 未登录时的欢迎壳：保留应用壳布局，左侧栏只有「+」添加按钮，
-// 右侧为引导文案；提交邀请链接并预检通过后，右侧切换为该服务器的页内
-// 登录/注册流程（ServerAuthView）。
+// 右侧为引导 + 已记住账号的一键登录；提交邀请链接并预检通过后，右侧切换为
+// 该服务器的页内登录/注册流程（ServerAuthView）。
 
 import * as React from "react"
 import { PlusIcon } from "lucide-react"
 
 import { AddServerDialog } from "~/components/add-server-dialog"
+import { SavedCredentialsPanel } from "~/components/saved-credentials-panel"
 import { ServerAuthView } from "~/components/server-auth"
 import {
   Sidebar,
@@ -17,10 +18,8 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from "~/components/ui/sidebar"
-import { Button } from "~/components/ui/button"
 import { Toaster } from "~/components/ui/sonner"
 import { useIsMacDesktop } from "~/lib/platform"
-import { getSavedServer } from "~/lib/server-connection"
 import { cn } from "~/lib/utils"
 import {
   dragWindowOnMouseDown,
@@ -28,44 +27,22 @@ import {
 } from "~/lib/window-drag"
 import { useConnectStore } from "~/stores/connect"
 
-/** 右侧引导：默认空态；有已保存服务器（会话过期/登出后）时提供重新登录入口 */
+/** 右侧引导：已记住的「服务器 + 账号」一键登录；无记录时提示去添加服务器 */
 function WelcomeGuide() {
-  const saved = getSavedServer()
-
-  const relogin = () => {
-    if (!saved) return
-    let host = saved.baseUrl
-    try {
-      host = new URL(saved.baseUrl).host
-    } catch {
-      // 保留原始基址
-    }
-    useConnectStore.getState().startAuth({
-      serverBaseUrl: saved.baseUrl,
-      serverName: saved.name ?? host,
-      invite: null,
-    })
-  }
-
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-      <p className="text-base font-medium">欢迎使用 OwlSpeak</p>
-      <p className="text-sm text-muted-foreground">
-        点击左侧「+」按钮，通过邀请链接添加服务器
-      </p>
-      {saved && (
-        <div className="mt-6 flex flex-col items-center gap-2 rounded-2xl bg-muted/50 px-8 py-4">
-          <p className="text-sm text-muted-foreground">
-            已保存的服务器：
-            <span className="text-foreground">
-              {saved.name ?? saved.baseUrl}
-            </span>
-          </p>
-          <Button variant="outline" size="sm" onClick={relogin}>
-            重新登录
-          </Button>
-        </div>
-      )}
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+      <div className="text-center">
+        <p className="text-base font-medium">欢迎使用 OwlSpeak</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          点击已记住的账号即可登录；或点左侧「+」通过邀请链接添加服务器
+        </p>
+      </div>
+      {/* 灰色卡片、无描边：已记住账号（含服务器信息）一键登录 */}
+      <SavedCredentialsPanel
+        action="login"
+        asCard
+        className="w-full max-w-md"
+      />
     </div>
   )
 }

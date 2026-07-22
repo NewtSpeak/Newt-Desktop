@@ -16,7 +16,25 @@ export type SendMessageInput = {
   attachment_ids?: string[]
   /** 幂等标识；不传则自动生成。失败重试必须沿用同一 nonce 防重复落库 */
   nonce?: string
+  /**
+   * 贴图消息（docs 17）：长度必须为 1，且与 content/attachment_ids 互斥。
+   * 小表情请写入 content 的 `<e:item_id:mark>` wire，勿放此字段。
+   */
+  sticker_items?: { item_id: string }[]
 }
+
+/** 发送贴图消息（一条恰好一张） */
+export const sendStickerMessage = (
+  channelId: string,
+  itemId: string,
+  opts: { reply_to_id?: string; nonce?: string } = {},
+) =>
+  sendMessage(channelId, {
+    content: "",
+    sticker_items: [{ item_id: itemId }],
+    reply_to_id: opts.reply_to_id,
+    nonce: opts.nonce,
+  })
 
 /** 发送消息（nonce 幂等，重复提交短窗口内返回原消息） */
 export const sendMessage = (channelId: string, input: SendMessageInput) =>

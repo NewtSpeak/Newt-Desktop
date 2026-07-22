@@ -1,5 +1,5 @@
-// 单条消息渲染：作者分组首条/后续两种形态、悬停操作条（反应/回复/编辑/删除）、
-// 右键菜单（复制/回复/编辑/删除/反应/复制 ID）、反应胶囊、内联编辑态、
+// 单条消息渲染：作者分组首条/后续两种形态、悬停操作条（反应/回复/编辑/撤回）、
+// 右键菜单（复制/回复/编辑/撤回/反应/复制 ID）、反应胶囊、内联编辑态、
 // 回复引用摘要、(已编辑) 标记、本人被提及高亮。
 
 import { memo, useEffect, useRef, useState } from "react"
@@ -33,27 +33,35 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog"
 import { Button } from "~/components/ui/button"
-import { MESSAGE_TYPE_SYSTEM_ADMIN } from "~/lib/api/types"
+import {
+  isGroupDmSystemMessage,
+  MESSAGE_TYPE_STICKER,
+  MESSAGE_TYPE_SYSTEM_ADMIN,
+} from "~/lib/api/types"
 import { ApiError } from "~/lib/api/http"
 import { copyText } from "~/lib/clipboard"
 import {
-  MarkdownContent,
   contentMentionsUser,
   type MentionResolver,
 } from "~/lib/markdown"
+import { memberRoleBadges, resolveMemberNameStyle } from "~/lib/name-style"
 import {
-  memberRoleBadges,
-  resolveMemberNameStyle,
-} from "~/lib/name-style"
+  customReactionKey,
+  isCustomReactionKey,
+  parseCustomReactionItemId,
+} from "~/lib/stickers/format"
 import { RoleBadgePills, StyledDisplayName } from "~/components/styled-name"
 import { resolveProfileAssetUrl } from "~/lib/user-display"
 import { useAuthStore } from "~/stores/auth"
 import { useMembersStore } from "~/stores/members"
-import { useRolesStore } from "~/stores/roles"
-import { cn } from "~/lib/utils"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
+import { useRolesStore } from "~/stores/roles"
+import { useStickersStore } from "~/stores/stickers"
+import { cn } from "~/lib/utils"
 import { MessageAttachments } from "./attachments"
-import { EmojiPickerPopover } from "./emoji-picker"
+import { CustomEmoteImg, StickerMessageBody } from "./custom-emote"
+import { EmojiPickerPopover, type ExpressionPick } from "./emoji-picker"
+import { MessageContent } from "./message-content"
 
 // ---------------------------------------------------------------------------
 // 时间格式
@@ -69,7 +77,10 @@ function sameDay(a: Date, b: Date): boolean {
 
 function shortTime(iso: string): string {
   const date = new Date(iso)
-  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
 
 /** 组首条的「今天 14:32」式时间 */
@@ -138,7 +149,7 @@ function AuthorAvatar({
     <div
       className={cn(
         "flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white select-none",
-        color,
+        color
       )}
       aria-hidden
     >
@@ -155,7 +166,7 @@ function SystemAdminAvatar({ size = "md" }: { size?: "sm" | "md" }) {
     <div
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full bg-amber-600 text-white select-none",
-        box,
+        box
       )}
       title="系统超级管理员"
       aria-label="系统超级管理员"
@@ -171,7 +182,7 @@ function SystemAdminBadge({ className }: { className?: string }) {
     <span
       className={cn(
         "inline-flex h-3.5 shrink-0 items-center rounded-full bg-amber-600 px-1.5 text-[9px] font-medium text-white",
-        className,
+        className
       )}
       title="系统超级管理员"
     >
@@ -184,12 +195,12 @@ function isSystemAdminMessage(type: string | undefined): boolean {
   return type === MESSAGE_TYPE_SYSTEM_ADMIN
 }
 
-/** 回复指示：lucide Reply，上下翻转 + 左右翻转 */
+/** 回复指示：lucide Reply，仅左右翻转（不上下翻转） */
 function ReplyCornerIcon({ className }: { className?: string }) {
   return (
     <span
       className={cn("inline-flex origin-center", className)}
-      style={{ transform: "scaleX(-1) scaleY(-1)" }}
+      style={{ transform: "scaleX(-1)" }}
       aria-hidden
     >
       <ReplyIcon className="size-full" />
@@ -201,49 +212,90 @@ function ReplyCornerIcon({ className }: { className?: string }) {
 // 反应胶囊
 // ---------------------------------------------------------------------------
 
+function ReactionGlyph({ emoji }: { emoji: string }) {
+  if (isCustomReactionKey(emoji)) {
+    const itemId = parseCustomReactionItemId(emoji)
+    if (itemId) {
+      return (
+        <CustomEmoteImg itemId={itemId} reaction className="rounded-sm" />
+      )
+    }
+  }
+  return <span className="text-sm leading-none">{emoji}</span>
+}
+
 function ReactionPills({
   message,
   channelId,
+  guildId,
   selfId,
 }: {
   message: ChatMessage
   channelId: string
+  guildId?: string
   selfId?: string
 }) {
   const toggleReaction = useMessagesStore((state) => state.toggleReaction)
   const [pickerOpen, setPickerOpen] = useState(false)
   if (message.reactions.length === 0) return null
+
+  const applyPick = (pick: ExpressionPick) => {
+    const key =
+      pick.type === "unicode"
+        ? pick.emoji
+        : customReactionKey(pick.item.id)
+    void toggleReaction(channelId, message.id, key).catch(() => undefined)
+  }
+
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1">
       {message.reactions.map((entry) => {
         const mine = selfId !== undefined && entry.userIds.includes(selfId)
+        const label = isCustomReactionKey(entry.emoji)
+          ? `自定义表情反应，共 ${entry.userIds.length} 人`
+          : `${entry.emoji} 反应，共 ${entry.userIds.length} 人`
         return (
           <button
             key={entry.emoji}
             type="button"
-            aria-label={`${entry.emoji} 反应，共 ${entry.userIds.length} 人${mine ? "，包含你" : ""}`}
-            onClick={() => void toggleReaction(channelId, message.id, entry.emoji).catch(() => undefined)}
+            aria-label={`${label}${mine ? "，包含你" : ""}`}
+            onClick={() =>
+              void toggleReaction(channelId, message.id, entry.emoji).catch(
+                () => undefined,
+              )
+            }
             className={cn(
-              "flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm transition-colors",
+              "flex min-h-7 items-center gap-1 rounded-full px-2 py-0.5",
+              "transition-[background-color,transform] duration-150",
+              "active:scale-[0.96] cursor-pointer",
               mine
-                ? "border-primary/50 bg-primary/10"
-                : "border-transparent bg-muted hover:border-border",
+                ? "bg-primary/15"
+                : "bg-muted hover:bg-muted/80",
             )}
           >
-            <span>{entry.emoji}</span>
-            <span className="text-xs text-muted-foreground">{entry.userIds.length}</span>
+            <ReactionGlyph emoji={entry.emoji} />
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {entry.userIds.length}
+            </span>
           </button>
         )
       })}
       <EmojiPickerPopover
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        onPick={(emoji) => void toggleReaction(channelId, message.id, emoji).catch(() => undefined)}
+        guildId={guildId}
+        mode="reaction"
+        onPick={(emoji) =>
+          void toggleReaction(channelId, message.id, emoji).catch(
+            () => undefined,
+          )
+        }
+        onExpressionPick={applyPick}
       >
         <button
           type="button"
           aria-label="添加反应"
-          className="rounded-full border border-transparent bg-muted px-2 py-0.5 text-sm text-muted-foreground hover:border-border hover:text-foreground"
+          className="min-h-7 rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground active:scale-[0.96] cursor-pointer"
         >
           +
         </button>
@@ -340,12 +392,14 @@ function InlineEditor({
 function HoverActions({
   message,
   channelId,
+  guildId,
   isOwn,
   onReply,
   onEdit,
 }: {
   message: ChatMessage
   channelId: string
+  guildId?: string
   isOwn: boolean
   onReply: () => void
   onEdit: () => void
@@ -356,13 +410,23 @@ function HoverActions({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
+  const applyReactionPick = (pick: ExpressionPick) => {
+    const key =
+      pick.type === "unicode"
+        ? pick.emoji
+        : customReactionKey(pick.item.id)
+    void toggleReaction(channelId, message.id, key).catch(() => undefined)
+  }
+
   const doDelete = async () => {
     try {
       await remove(channelId, message.id)
       setConfirmOpen(false)
     } catch (error) {
       // 服务端裁决：对他人消息无 MANAGE_MESSAGES 时收敛为通用提示
-      setDeleteError(error instanceof ApiError ? error.message : "删除失败，请重试")
+      setDeleteError(
+        error instanceof ApiError ? error.message : "撤回失败，请重试"
+      )
     }
   }
 
@@ -374,31 +438,47 @@ function HoverActions({
       <div
         className={cn(
           "absolute -top-3.5 right-4 hidden items-center gap-0.5 rounded-lg border bg-background p-0.5 shadow-sm group-hover/message:flex",
-          pickerOpen && "flex",
+          pickerOpen && "flex"
         )}
       >
         <EmojiPickerPopover
           open={pickerOpen}
           onOpenChange={setPickerOpen}
+          guildId={guildId}
+          mode="reaction"
           onPick={(emoji) =>
-            void toggleReaction(channelId, message.id, emoji).catch(() => undefined)
+            void toggleReaction(channelId, message.id, emoji).catch(
+              () => undefined,
+            )
           }
+          onExpressionPick={applyReactionPick}
         >
           <button type="button" aria-label="添加反应" className={iconButton}>
             <SmilePlusIcon className="size-4" />
           </button>
         </EmojiPickerPopover>
-        <button type="button" aria-label="回复" className={iconButton} onClick={onReply}>
+        <button
+          type="button"
+          aria-label="回复"
+          className={iconButton}
+          onClick={onReply}
+        >
           <CornerUpLeftIcon className="size-4" />
         </button>
         {isOwn && (
-          <button type="button" aria-label="编辑" className={iconButton} onClick={onEdit}>
+          <button
+            type="button"
+            aria-label="编辑"
+            className={iconButton}
+            onClick={onEdit}
+          >
             <PencilIcon className="size-4" />
           </button>
         )}
         <button
           type="button"
-          aria-label="删除"
+          aria-label="撤回消息"
+          title="撤回消息"
           className={cn(iconButton, "hover:text-destructive")}
           onClick={(event) => {
             // Shift+点击跳过确认
@@ -416,12 +496,12 @@ function HoverActions({
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>删除消息</DialogTitle>
+            <DialogTitle>撤回消息</DialogTitle>
             <DialogDescription>
-              确定要删除这条消息吗？此操作无法撤销。
+              确定要撤回这条消息吗？撤回后所有人将无法再看到，此操作无法撤销。
               {!isOwn && (
                 <span className="mt-1 block text-amber-600 dark:text-amber-400">
-                  你正在删除他人消息，该操作将被记录。
+                  你正在撤回他人消息，该操作将被记录。
                 </span>
               )}
             </DialogDescription>
@@ -429,18 +509,22 @@ function HoverActions({
           <div className="max-h-32 overflow-y-auto rounded-lg border bg-muted/40 px-3 py-2 text-sm">
             <span className="font-medium">{message.author_username}：</span>
             {message.content ? (
-              <span className="whitespace-pre-wrap break-words">{message.content}</span>
+              <span className="break-words whitespace-pre-wrap">
+                {message.content}
+              </span>
             ) : (
               <span className="text-muted-foreground">[附件消息]</span>
             )}
           </div>
-          {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+          {deleteError && (
+            <p className="text-sm text-destructive">{deleteError}</p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
               取消
             </Button>
             <Button variant="destructive" onClick={() => void doDelete()}>
-              删除
+              撤回消息
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -471,15 +555,17 @@ function ReplyPreview({
   onJump: (messageId: string) => void
 }) {
   const referenced = useMessagesStore((state) =>
-    state.byChannel[channelId]?.messages.find((message) => message.id === replyToId),
+    state.byChannel[channelId]?.messages.find(
+      (message) => message.id === replyToId
+    )
   )
   const member = useMembersStore((state) =>
     guildId
       ? state.byGuild[guildId]?.find((m) => m.user_id === referenced?.author_id)
-      : undefined,
+      : undefined
   )
   const roles = useRolesStore((state) =>
-    guildId ? state.byGuild[guildId] : undefined,
+    guildId ? state.byGuild[guildId] : undefined
   )
 
   if (!referenced) {
@@ -509,7 +595,7 @@ function ReplyPreview({
     <button
       type="button"
       onClick={() => onJump(referenced.id)}
-      className="mb-0.5 flex min-w-0 max-w-full items-center gap-1.5 pl-11 text-left text-xs text-muted-foreground hover:text-foreground"
+      className="mb-0.5 flex max-w-full min-w-0 items-center gap-1.5 pl-11 text-left text-xs text-muted-foreground hover:text-foreground"
     >
       <ReplyCornerIcon className="size-3.5 shrink-0 text-muted-foreground/80" />
       {systemAdmin ? (
@@ -536,21 +622,25 @@ function ReplyPreview({
       ) : (
         <RoleBadgePills badges={badges} className="shrink-0" />
       )}
-      {/* 正文走 Markdown 紧凑渲染：@提及与原消息同为头像卡片样式 */}
+      {/* 正文：Markdown + 自定义小表情 */}
       {hasContent ? (
-        <MarkdownContent
+        <MessageContent
           content={referenced.content}
           resolveMention={resolveName}
-          resolveMentionAvatar={
-            systemAdmin ? undefined : resolveAvatarUrl
-          }
+          resolveMentionAvatar={systemAdmin ? undefined : resolveAvatarUrl}
           selfId={selfId}
+          guildId={guildId}
           compact
           className="min-w-0 flex-1 text-xs text-muted-foreground"
         />
       ) : (
         <span className="min-w-0 truncate">
-          {hasAttachments ? "[附件]" : ""}
+          {hasAttachments
+            ? "[附件]"
+            : referenced.type === MESSAGE_TYPE_STICKER ||
+                (referenced.sticker_items?.length ?? 0) > 0
+              ? "[贴图]"
+              : ""}
         </span>
       )}
     </button>
@@ -596,15 +686,17 @@ export const MessageRow = memo(function MessageRow({
   flashing,
 }: MessageRowProps) {
   const isOwn = selfId !== undefined && message.author_id === selfId
-  const mentioned = selfId !== undefined && contentMentionsUser(message.content, selfId)
+  const mentioned =
+    selfId !== undefined && contentMentionsUser(message.content, selfId)
   const systemAdmin = isSystemAdminMessage(message.type)
+  const groupSystem = isGroupDmSystemMessage(message.type)
   const selfUser = useAuthStore((state) => state.user)
   const displayName =
     resolveName(message.author_id) ||
     message.author_username ||
     (systemAdmin ? "系统超级管理员" : "未知用户")
   // 连发合并时不因 reply_to 强制展开头像栏——回复引用条已单独展示
-  const showHeader = !grouped
+  const showHeader = !grouped && !groupSystem
   const remove = useMessagesStore((state) => state.remove)
   const toggleReaction = useMessagesStore((state) => state.toggleReaction)
   const [ctxDeleteOpen, setCtxDeleteOpen] = useState(false)
@@ -612,13 +704,15 @@ export const MessageRow = memo(function MessageRow({
   const authorMember = useMembersStore((state) =>
     guildId
       ? state.byGuild[guildId]?.find((m) => m.user_id === message.author_id)
-      : undefined,
+      : undefined
   )
   const roles = useRolesStore((state) =>
-    guildId ? state.byGuild[guildId] : undefined,
+    guildId ? state.byGuild[guildId] : undefined
   )
   // 临场发言不套角色色/角色徽章，统一皇冠 + 固定中文徽章
-  const authorStyle = systemAdmin ? null : resolveMemberNameStyle(authorMember, roles)
+  const authorStyle = systemAdmin
+    ? null
+    : resolveMemberNameStyle(authorMember, roles)
   const authorBadges = systemAdmin ? [] : memberRoleBadges(authorMember, roles)
   // 本人头像优先 auth 会话资料，避免成员缓存未就绪时回落文字头像
   const authorAvatarUrl = systemAdmin
@@ -628,13 +722,25 @@ export const MessageRow = memo(function MessageRow({
         ? resolveProfileAssetUrl(selfUser?.avatar_url)
         : resolveProfileAssetUrl(authorMember?.avatar_url))
 
+  // 群组私信系统灰条：居中轻提示，无头像/菜单
+  if (groupSystem) {
+    return (
+      <div
+        id={`message-${message.id}`}
+        className="px-4 py-1.5 text-center text-xs text-muted-foreground"
+      >
+        {message.content || "系统消息"}
+      </div>
+    )
+  }
+
   const doDelete = async () => {
     try {
       await remove(channelId, message.id)
       setCtxDeleteOpen(false)
     } catch (error) {
       setCtxDeleteError(
-        error instanceof ApiError ? error.message : "删除失败，请重试",
+        error instanceof ApiError ? error.message : "撤回失败，请重试"
       )
     }
   }
@@ -646,7 +752,7 @@ export const MessageRow = memo(function MessageRow({
         "group/message relative px-4 py-0.5 transition-colors hover:bg-muted/40",
         showHeader && "mt-2.5",
         mentioned && "bg-amber-500/10 hover:bg-amber-500/15",
-        flashing && "animate-pulse bg-primary/15",
+        flashing && "animate-pulse bg-primary/15"
       )}
     >
       {message.reply_to_id && (
@@ -689,28 +795,53 @@ export const MessageRow = memo(function MessageRow({
               ) : (
                 <RoleBadgePills badges={authorBadges} />
               )}
-              <span className="shrink-0 text-xs text-muted-foreground" title={fullTime(message.created_at)}>
+              <span
+                className="shrink-0 text-xs text-muted-foreground"
+                title={fullTime(message.created_at)}
+              >
                 {groupTime(message.created_at)}
               </span>
             </p>
           )}
           {editing ? (
-            <InlineEditor channelId={channelId} message={message} onDone={onStopEdit} />
+            <InlineEditor
+              channelId={channelId}
+              message={message}
+              onDone={onStopEdit}
+            />
           ) : (
             <div className="text-sm">
               {message.content && (
                 <span className="inline-block w-full align-top">
-                  <MarkdownContent
+                  <MessageContent
                     content={message.content}
                     resolveMention={resolveName}
                     resolveMentionAvatar={resolveAvatarUrl}
                     selfId={selfId}
+                    guildId={guildId ?? message.guild_id}
                   />
                 </span>
               )}
+              {(message.type === MESSAGE_TYPE_STICKER ||
+                (message.sticker_items?.length ?? 0) > 0) &&
+                message.sticker_items?.map((ref) => (
+                  <StickerMessageBody
+                    key={ref.item_id}
+                    itemId={ref.item_id}
+                    packId={ref.pack_id}
+                    mark={ref.mark}
+                    assetUrl={ref.asset_url}
+                    onOpenPack={(packId, itemId) =>
+                      useStickersStore.getState().openPackPreview(packId, {
+                        itemId,
+                        guildId: guildId ?? message.guild_id,
+                      })
+                    }
+                  />
+                ))}
               {message.edit_count > 0 && (
                 <span
-                  className="ml-1 align-baseline text-[10px] text-muted-foreground select-none"
+                  className="ml-1 align-baseline text-[10px] text-muted-foreground select-none tabular-nums"
                   title={`已编辑 ×${message.edit_count}${message.edited_at ? `，最后编辑 ${fullTime(message.edited_at)}` : ""}`}
                 >
                   (已编辑)
@@ -719,13 +850,19 @@ export const MessageRow = memo(function MessageRow({
             </div>
           )}
           <MessageAttachments attachments={message.attachments} />
-          <ReactionPills message={message} channelId={channelId} selfId={selfId} />
+          <ReactionPills
+            message={message}
+            channelId={channelId}
+            guildId={guildId ?? message.guild_id}
+            selfId={selfId}
+          />
         </div>
       </div>
       {!editing && (
         <HoverActions
           message={message}
           channelId={channelId}
+          guildId={guildId ?? message.guild_id}
           isOwn={isOwn}
           onReply={() => onReply(message)}
           onEdit={() => onStartEdit(message.id)}
@@ -762,7 +899,7 @@ export const MessageRow = memo(function MessageRow({
           <ContextMenuItem
             onClick={() =>
               void toggleReaction(channelId, message.id, "👍").catch(
-                () => undefined,
+                () => undefined
               )
             }
           >
@@ -770,9 +907,7 @@ export const MessageRow = memo(function MessageRow({
             添加 👍 反应
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem
-            onClick={() => void copyText("消息 ID", message.id)}
-          >
+          <ContextMenuItem onClick={() => void copyText("消息 ID", message.id)}>
             <HashIcon />
             复制消息 ID
           </ContextMenuItem>
@@ -780,7 +915,7 @@ export const MessageRow = memo(function MessageRow({
             onClick={() =>
               void copyText(
                 "消息链接",
-                `${window.location.origin}/channels/${message.guild_id}/${channelId}?around=${message.id}`,
+                `${window.location.origin}/channels/${message.guild_id}/${channelId}?around=${message.id}`
               )
             }
           >
@@ -793,9 +928,7 @@ export const MessageRow = memo(function MessageRow({
             <AtSignIcon />
             复制作者 ID
           </ContextMenuItem>
-          <ContextMenuItem
-            onClick={() => void copyText("作者名", displayName)}
-          >
+          <ContextMenuItem onClick={() => void copyText("作者名", displayName)}>
             <CopyIcon />
             复制作者名
           </ContextMenuItem>
@@ -808,7 +941,7 @@ export const MessageRow = memo(function MessageRow({
             }}
           >
             <Trash2Icon />
-            删除消息
+            撤回消息
           </ContextMenuItem>
           {message.guild_id ? (
             <AdminMemberMenuSection
@@ -822,12 +955,12 @@ export const MessageRow = memo(function MessageRow({
       <Dialog open={ctxDeleteOpen} onOpenChange={setCtxDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>删除消息</DialogTitle>
+            <DialogTitle>撤回消息</DialogTitle>
             <DialogDescription>
-              确定要删除这条消息吗？此操作无法撤销。
+              确定要撤回这条消息吗？撤回后所有人将无法再看到，此操作无法撤销。
               {!isOwn && (
                 <span className="mt-1 block text-amber-600 dark:text-amber-400">
-                  你正在删除他人消息，该操作将被记录。
+                  你正在撤回他人消息，该操作将被记录。
                 </span>
               )}
             </DialogDescription>
@@ -835,7 +968,7 @@ export const MessageRow = memo(function MessageRow({
           <div className="max-h-32 overflow-y-auto rounded-lg border bg-muted/40 px-3 py-2 text-sm">
             <span className="font-medium">{message.author_username}：</span>
             {message.content ? (
-              <span className="whitespace-pre-wrap break-words">
+              <span className="break-words whitespace-pre-wrap">
                 {message.content}
               </span>
             ) : (
@@ -850,7 +983,7 @@ export const MessageRow = memo(function MessageRow({
               取消
             </Button>
             <Button variant="destructive" onClick={() => void doDelete()}>
-              删除
+              撤回消息
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -866,8 +999,10 @@ export const MessageRow = memo(function MessageRow({
 export function PendingRow({
   nonce,
   channelId,
+  guildId,
   content,
   attachments,
+  stickerPreview,
   status,
   errorMessage,
   selfName,
@@ -879,8 +1014,15 @@ export function PendingRow({
 }: {
   nonce: string
   channelId: string
+  guildId?: string
   content: string
   attachments?: { id: string; filename: string }[] | null
+  stickerPreview?: {
+    item_id: string
+    pack_id?: string
+    mark?: string
+    asset_url?: string
+  }[]
   status: "sending" | "failed"
   errorMessage?: string
   selfName: string
@@ -896,6 +1038,12 @@ export function PendingRow({
   const attachmentList = attachments ?? []
   const resolvedAvatar =
     avatarUrl || resolveProfileAssetUrl(selfUser?.avatar_url)
+  // 拉黑等隐私错误：不提供重试（需先解除拉黑）
+  const isBlockFail =
+    Boolean(errorMessage) &&
+    (errorMessage!.includes("拉黑") ||
+      errorMessage!.includes("好友验证") ||
+      errorMessage!.includes("无法给对方发送"))
 
   return (
     <div
@@ -929,32 +1077,68 @@ export function PendingRow({
               {failed ? "发送失败" : "发送中…"}
             </p>
           )}
-          <div className={cn("text-sm", failed && "text-destructive")}>
-            {content && (
-              <MarkdownContent content={content} resolveMention={resolveName} selfId={selfId} />
-            )}
-            {attachmentList.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                [{attachmentList.map((attachment) => attachment.filename).join("、")}]
-              </p>
-            )}
+          <div className="flex items-start gap-1.5">
+            <div className={cn("min-w-0 flex-1 text-sm", failed && "text-destructive/90")}>
+              {content && (
+                <MessageContent
+                  content={content}
+                  resolveMention={resolveName}
+                  selfId={selfId}
+                  guildId={guildId}
+                />
+              )}
+              {stickerPreview?.map((ref) => (
+                <StickerMessageBody
+                  key={ref.item_id}
+                  itemId={ref.item_id}
+                  packId={ref.pack_id}
+                  mark={ref.mark}
+                  assetUrl={ref.asset_url}
+                />
+              ))}
+              {attachmentList.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  [
+                  {attachmentList
+                    .map((attachment) => attachment.filename)
+                    .join("、")}
+                  ]
+                </p>
+              )}
+            </div>
+            {/* 发送失败：红色感叹号 */}
+            {failed ? (
+              <span
+                className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-white shadow-sm"
+                title={errorMessage ?? "发送失败"}
+                aria-label={errorMessage ?? "发送失败"}
+              >
+                <span className="text-[11px] font-bold leading-none">!</span>
+              </span>
+            ) : null}
           </div>
           {failed && (
-            <p className="mt-0.5 flex items-center gap-2 text-xs">
-              <span className="text-destructive">{errorMessage ?? "发送失败"}</span>
-              <button
-                type="button"
-                className="font-medium text-primary hover:underline"
-                onClick={() => void retryPending(channelId, nonce).catch(() => undefined)}
-              >
-                重试
-              </button>
+            <p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium text-red-600 dark:text-red-500">
+                {errorMessage ?? "发送失败"}
+              </span>
+              {!isBlockFail ? (
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() =>
+                    void retryPending(channelId, nonce).catch(() => undefined)
+                  }
+                >
+                  重试
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="font-medium text-muted-foreground hover:underline"
                 onClick={() => discardPending(channelId, nonce)}
               >
-                删除
+                取消发送
               </button>
             </p>
           )}

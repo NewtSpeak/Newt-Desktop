@@ -87,6 +87,11 @@ export type Guild = {
   banner_url?: string
   /** 多 banner 列表（position 升序）；列表/READY/GUILD_UPDATE 可携带 */
   banners?: GuildBanner[]
+  /**
+   * 归属账号 id（客户端多账号字段，非服务端返回）。
+   * 用于 API 鉴权上下文与频道列表身份头像。
+   */
+  account_id?: string
   created_at?: string
   updated_at?: string
 }
@@ -98,6 +103,12 @@ export type Channel = {
   guild_id: string
   name: string
   type: ChannelType
+  /** 频道主题 / 简介 */
+  topic?: string
+  /** 语音频道人数上限（0 = 不限） */
+  user_limit?: number
+  /** 文本慢速模式秒数 */
+  rate_limit_per_user?: number
   /** 服务端当前模型未含 position 字段，预留：缺失时按 0 处理 */
   position?: number
   /** 所属分类（CATEGORY 的 id）；仅 TEXT/VOICE */
@@ -108,7 +119,20 @@ export type Channel = {
   updated_at?: string
 }
 
-/** 创建邀请响应（POST /guilds/:id/invites） */
+/** 频道权限覆盖（list overwrites 响应） */
+export type ChannelOverwrite = {
+  id: string
+  channel_id: string
+  type: "ROLE" | "MEMBER"
+  target_id: string
+  target_name?: string
+  allow: number | string
+  deny: number | string
+  allow_str?: string
+  deny_str?: string
+}
+
+/** 创建邀请响应 / 列表项（POST|GET /guilds/:id/invites） */
 export type GuildInvite = {
   id: string
   guild_id: string
@@ -118,8 +142,10 @@ export type GuildInvite = {
   max_uses: number
   uses: number
   created_at?: string
-  /** 部分列表接口会附带完整分享链接 */
+  /** 列表接口附带完整分享链接 */
   share_url?: string
+  /** 列表接口附带深链（桌面唤起） */
+  deep_link?: string
 }
 
 export type GuildMember = {
@@ -135,19 +161,56 @@ export type GuildMember = {
   bio?: string
   is_owner: boolean
   role_ids: string[]
+  /**
+   * 本人选用的用户名样式来源角色 ID；空 = 自动取持有角色中最高有样式者。
+   * 仅影响展示，不改变角色绑定。
+   */
+  name_style_role_id?: string | null
 }
 
 /**
  * 角色名样式（Role.Style jsonb，customization/style.go）：
- * solid / linear / radial；colors 为 #RRGGBB。
+ * solid / linear / radial；colors 为 #RRGGBB；
+ * speed 流动周期秒；icon_sync / icon 色点；badge 角色徽章。
  */
-export type RoleNameStyle = {
+export type RoleSurfaceStyle = {
   type?: "solid" | "linear" | "radial" | ""
   colors?: string[]
   angle?: number
   shape?: "circle" | "ellipse" | string
   animated?: boolean
+  /** 流动动画周期（秒），0.5–20，默认 4 */
+  speed?: number
 }
+
+/** 文字装饰 */
+export type RoleTextDecor = {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strikethrough?: boolean
+}
+
+/** 角色徽章（消息流/成员列表标签） */
+export type RoleBadgeStyle = RoleTextDecor & {
+  enabled?: boolean
+  background?: RoleSurfaceStyle
+  /** 背景图（可与渐变叠加） */
+  background_image_url?: string
+  icon_url?: string
+  show_name?: boolean
+  text_color?: string
+}
+
+export type RoleNameStyle = RoleSurfaceStyle &
+  RoleTextDecor & {
+    /** 色点与文字合并样式 */
+    icon_sync?: boolean
+    /** 独立色点样式（icon_sync=false 时） */
+    icon?: RoleSurfaceStyle
+    /** 角色徽章 */
+    badge?: RoleBadgeStyle
+  }
 
 /** 服务器角色（model.Role；permissions 为 int64 位掩码，JSON 序列化为 number） */
 export type Role = {
@@ -200,12 +263,43 @@ export type MessageType = string
 /** 系统管理员临场发言（adminpresence）；客户端特殊头像/徽章渲染 */
 export const MESSAGE_TYPE_SYSTEM_ADMIN = "SYSTEM_ADMIN" as const
 
+/** 贴图消息（docs 17）：正文为空、恰一张 sticker */
+export const MESSAGE_TYPE_STICKER = "STICKER" as const
+
+/** 群组私信系统灰条（Server-16 BN.5） */
+export const MESSAGE_TYPE_SYSTEM_RECIPIENT_ADD = "SYSTEM_RECIPIENT_ADD" as const
+export const MESSAGE_TYPE_SYSTEM_RECIPIENT_REMOVE =
+  "SYSTEM_RECIPIENT_REMOVE" as const
+export const MESSAGE_TYPE_SYSTEM_CHANNEL_NAME_CHANGE =
+  "SYSTEM_CHANNEL_NAME_CHANGE" as const
+
+export function isGroupDmSystemMessage(type: string | undefined): boolean {
+  return (
+    type === MESSAGE_TYPE_SYSTEM_RECIPIENT_ADD ||
+    type === MESSAGE_TYPE_SYSTEM_RECIPIENT_REMOVE ||
+    type === MESSAGE_TYPE_SYSTEM_CHANNEL_NAME_CHANGE ||
+    type === "SYSTEM"
+  )
+}
+
 /** 服务端 messageView 反应聚合（docs 05 FR-26）：count 为总数，me 标记调用者是否已反应 */
 export type ReactionSummary = {
   emoji: string
   count: number
   /** 列表/单条 REST 带 viewer 时准确；Gateway MESSAGE_* 广播常省略或为 false */
   me?: boolean
+}
+
+/** 消息内贴图/表情快照（docs 17） */
+export type MessageStickerRef = {
+  item_id: string
+  pack_id: string
+  mark: string
+  kind?: "emote" | "sticker"
+  animated?: boolean
+  asset_url?: string
+  width?: number
+  height?: number
 }
 
 export type Message = {
@@ -219,6 +313,8 @@ export type Message = {
   content: string
   reply_to_id?: string
   attachments: MessageAttachment[]
+  /** 贴图消息载荷（type=STICKER 时长度 1） */
+  sticker_items?: MessageStickerRef[]
   /** 被提及且确为本服成员的用户 ID（wire format <@UUID>） */
   mentions?: string[]
   /** 被提及且确为本服角色的角色 ID */
@@ -232,6 +328,89 @@ export type Message = {
   nonce?: string
   created_at: string
   deleted_at?: string
+}
+
+// ---------------------------------------------------------------------------
+// 贴图与表情包（docs 17）
+// ---------------------------------------------------------------------------
+
+export type StickerKind = "emote" | "sticker"
+export type StickerPackScope = "account" | "guild"
+export type StickerPackStatus =
+  | "active"
+  | "soft_deleted"
+  | "soft_deleted_expired"
+  | "globally_banned"
+  | "purged"
+
+export type StickerPack = {
+  id: string
+  owner_user_id: string
+  scope: StickerPackScope
+  guild_id?: string
+  kind: StickerKind
+  name: string
+  description?: string
+  cover_item_id?: string
+  cover_asset_id?: string
+  /** 服务端解析：自定义上传 > 指定条目 > 包内首条 */
+  cover_url?: string
+  /** 是否为用户上传的独立封面 */
+  cover_custom?: boolean
+  allow_browse_full: boolean
+  status: StickerPackStatus
+  soft_deleted_at?: string
+  restore_deadline?: string
+  item_count?: number
+  items?: StickerItem[]
+  created_at: string
+  updated_at: string
+}
+
+export type StickerItem = {
+  id: string
+  pack_id: string
+  kind: StickerKind
+  name?: string
+  content_hash: string
+  mark: string
+  asset_id: string
+  asset_url: string
+  width: number
+  height: number
+  animated: boolean
+  source_item_id?: string
+  source_pack_id?: string
+  sort_order: number
+  status: "active" | "purged"
+  created_at: string
+  updated_at: string
+}
+
+export type StickerLibraryEntry = {
+  pack_id: string
+  status: "active" | "hidden"
+  installed_at: string
+  sort_order: number
+  pack?: StickerPack
+}
+
+export type GuildStickerPackBan = {
+  guild_id: string
+  pack_id: string
+  banned_by: string
+  reason?: string
+  created_at: string
+}
+
+/** 正文内嵌小表情 wire format：`<e:item_id:mark>` */
+export function customEmoteWire(itemId: string, mark: string): string {
+  return `<e:${itemId}:${mark}>`
+}
+
+/** 自定义反应路径键：`item:{item_id}` */
+export function customReactionKey(itemId: string): string {
+  return `item:${itemId}`
 }
 
 export type MessageEdit = {
