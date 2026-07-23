@@ -14,6 +14,7 @@
     "typecheck": "react-router typegen && tsc",
     "tauri": "tauri",
     "copy-dtln": "node scripts/copy-dtln-assets.mjs",
+    "pack:web": "bun run build && node scripts/copy-dtln-assets.mjs && bash scripts/pack-web/pack.sh",
     "format": "prettier --write \"**/*.{ts,tsx}\""
   },
   "dependencies": {

@@ -1,9 +1,12 @@
-# Owl-Desktop 发布：Tauri 多平台安装包 + GitHub Release
-# 触发：推送 v* 标签，或手动 workflow_dispatch
-# 可选 Secrets（代码签名，未配置则产出未签名包）：
-#   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-#   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY
-#   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
+# Owl-Desktop 发布：
+# - Windows / Linux / macOS 桌面安装包
+# - 可独立部署的 Web 前端包
+# - 本仓 Release + 同步到 OwlSpeak/OwlSpeak
+#
+# 可选 Secrets（代码签名）：
+#   TAURI_SIGNING_* / APPLE_*
+# 必选（同步中心仓）：
+#   RELEASE_HUB_TOKEN
 name: Release
 
 on:
@@ -12,12 +15,20 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（不含 v 前缀，如 0.1.0；会写回 package.json / tauri.conf）"
+        description: "版本号（不含 v 前缀，如 0.1.0）"
+        required: true
+        type: string
+      extra_notes:
+        description: "附加到 Release 说明的额外备注（可选）"
         required: false
         type: string
+        default: ""
 
 permissions:
   contents: write
+
+env:
+  RELEASE_HUB_REPO: OwlSpeak/OwlSpeak
 
 jobs:
   resolve-version:
@@ -30,43 +41,82 @@ jobs:
       - name: Compute version
         id: v
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION="0.0.0-ci.${GITHUB_SHA::7}"
+            echo "需要 tag 或 version 输入" >&2
+            exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Release version: ${VERSION}"
 
-  build-tauri:
-    name: ${{ matrix.platform }}
+  # ---------- 独立 Web 前端包 ----------
+  pack-web:
+    name: Pack standalone web
     needs: resolve-version
-    permissions:
-      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install & build SPA
+        run: |
+          bun install --frozen-lockfile || bun install
+          bun run build
+          test -f build/client/index.html
+
+      - name: Pack zip
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          chmod +x scripts/pack-web/pack.sh
+          sudo apt-get update -qq && sudo apt-get install -y -qq zip
+          VERSION="$VERSION" ./scripts/pack-web/pack.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owl-desktop-web-${{ needs.resolve-version.outputs.version }}
+          path: |
+            dist-web/owl-desktop-web-*.zip
+            dist-web/owl-desktop-web-*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------- 桌面安装包（win / linux / macos） ----------
+  build-tauri:
+    name: Desktop ${{ matrix.name }}
+    needs: resolve-version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - name: macos-universal
+            platform: macos-latest
             args: --target universal-apple-darwin
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-          - platform: ubuntu-22.04
+            bundle_glob: src-tauri/target/universal-apple-darwin/release/bundle/**
+          - name: linux-x64
+            platform: ubuntu-22.04
             args: ""
             rust_targets: ""
-          - platform: windows-latest
+            bundle_glob: src-tauri/target/release/bundle/**
+          - name: windows-x64
+            platform: windows-latest
             args: ""
             rust_targets: ""
+            bundle_glob: src-tauri/target/release/bundle/**
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
@@ -86,40 +136,42 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
 
-      - name: Cache cargo
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.name }}
 
       - name: Sync version into manifests
         env:
           VERSION: ${{ needs.resolve-version.outputs.version }}
+        shell: bash
         run: |
-          # package.json
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('package.json','utf8'));
             p.version = process.env.VERSION;
             fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
           "
-          # tauri.conf.json
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8'));
             p.version = process.env.VERSION;
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(p, null, 2) + '\n');
           "
-          # Cargo.toml package.version
-          sed -i.bak -E "s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            sed -i.bak -E "s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+          else
+            sed -i.bak -E "s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+          fi
           rm -f src-tauri/Cargo.toml.bak
           echo "version set to ${VERSION}"
 
-      - name: Build Tauri app
+      # 只构建，不在此创建 Release（统一由 release job 发布）
+      - name: Build Tauri bundles
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,12 +184,136 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ needs.resolve-version.outputs.tag }}
-          releaseName: Owl-Desktop ${{ needs.resolve-version.outputs.tag }}
-          releaseBody: |
-            OwlSpeak 桌面客户端 ${{ needs.resolve-version.outputs.tag }}
-
-            安装包由 GitHub Actions 自动构建。
-          releaseDraft: false
-          prerelease: false
           args: ${{ matrix.args }}
+          uploadUpdaterJson: false
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p collected
+          # shellcheck disable=SC2086
+          shopt -s nullglob globstar
+          for f in ${{ matrix.bundle_glob }}; do
+            if [[ -f "$f" ]]; then
+              # 仅保留安装包常见类型
+              case "$f" in
+                *.dmg|*.app.tar.gz|*.msi|*.exe|*.nsis.zip|*.deb|*.AppImage|*.rpm|*.updater*)
+                  cp -v "$f" collected/
+                  ;;
+              esac
+            fi
+          done
+          # 若过滤后为空，尽量收集 bundle 目录下所有非目录文件
+          if [[ -z "$(ls -A collected 2>/dev/null || true)" ]]; then
+            for f in ${{ matrix.bundle_glob }}; do
+              [[ -f "$f" ]] && cp -v "$f" collected/ || true
+            done
+          fi
+          ls -lah collected || true
+          # 规范化前缀，便于中心仓识别
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          for f in collected/*; do
+            [[ -f "$f" ]] || continue
+            base="$(basename "$f")"
+            if [[ "$base" != owl-desktop-* ]]; then
+              mv -v "$f" "collected/owl-desktop-${VERSION}-${{ matrix.name }}-${base}"
+            fi
+          done
+          ls -lah collected
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owl-desktop-${{ matrix.name }}-${{ needs.resolve-version.outputs.version }}
+          path: collected/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Release + Hub sync
+    needs: [resolve-version, pack-web, build-tauri]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: owl-desktop-*
+          merge-multiple: true
+
+      - name: Prepare checksums & list
+        working-directory: release-assets
+        run: |
+          ls -lahR
+          find . -type f ! -name '*.sha256' -print0 | sort -z | xargs -0 sha256sum \
+            > "SHA256SUMS-owl-desktop-${{ needs.resolve-version.outputs.version }}.txt"
+          cat "SHA256SUMS-owl-desktop-${{ needs.resolve-version.outputs.version }}.txt"
+
+      - name: Write extra notes
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.extra_notes != '' }}
+        run: |
+          printf '%s\n' "${{ inputs.extra_notes }}" > EXTRA_NOTES.md
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          chmod +x scripts/ci/generate-release-notes.sh
+          EXTRA=""
+          if [ -f EXTRA_NOTES.md ]; then EXTRA=EXTRA_NOTES.md; fi
+          {
+            scripts/ci/generate-release-notes.sh "Owl-Desktop" "$EXTRA"
+            echo
+            echo "### 本版本产物"
+            echo
+            echo "| 类型 | 说明 |"
+            echo "|------|------|"
+            echo "| 桌面安装包 | Windows / Linux / macOS（Universal） |"
+            echo "| \`owl-desktop-web-*.zip\` | **纯前端静态包**，可独立部署到 Nginx / CDN / 任意静态托管 |"
+            echo
+          } | tee RELEASE_BODY.md
+
+      - name: Flatten assets
+        run: |
+          mkdir -p flat-assets
+          find release-assets -type f -print0 | while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            # 避免重名覆盖：若已存在则加目录前缀
+            dest="flat-assets/${base}"
+            if [[ -e "$dest" ]]; then
+              dest="flat-assets/$(echo "$f" | sed 's#^release-assets/##' | tr '/' '-')"
+            fi
+            cp -v "$f" "$dest"
+          done
+          ls -lah flat-assets
+          test -n "$(ls -A flat-assets)"
+
+      - name: Create own-repo Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          name: Owl-Desktop ${{ needs.resolve-version.outputs.tag }}
+          body_path: RELEASE_BODY.md
+          files: flat-assets/*
+          fail_on_unmatched_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync to OwlSpeak/OwlSpeak hub
+        env:
+          RELEASE_HUB_TOKEN: ${{ secrets.RELEASE_HUB_TOKEN }}
+          RELEASE_HUB_REPO: ${{ env.RELEASE_HUB_REPO }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+          COMPONENT_KEY: Owl-Desktop
+          COMPONENT_TITLE: Owl-Desktop（桌面客户端 + Web 前端包）
+          RELEASE_BODY_PATH: RELEASE_BODY.md
+          ASSET_GLOBS: "flat-assets/*"
+        run: |
+          chmod +x scripts/ci/sync-release-hub.sh
+          scripts/ci/sync-release-hub.sh
