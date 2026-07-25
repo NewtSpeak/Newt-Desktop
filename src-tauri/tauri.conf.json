@@ -5,7 +5,7 @@
   "identifier": "com.owlspeak.desktop",
   "build": {
     "frontendDist": "../build/client",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeDevCommand": "bun run dev",
     "beforeBuildCommand": "bun run build"
   },
@@ -21,7 +21,8 @@
         "center": true,
         "resizable": true,
         "fullscreen": false,
-        "decorations": false
+        "decorations": false,
+        "additionalBrowserArgs": "--proxy-server=direct:// --proxy-bypass-list=<-loopback>;127.0.0.1;localhost --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
       }
     ],
     "security": {
@@ -43,6 +44,13 @@
     },
     "macOS": {
       "entitlements": "./Entitlements.plist"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["owlspeak"]
+      }
     }
   }
 }

@@ -6,6 +6,11 @@ import {
 } from "@react-router/dev/routes"
 
 export default [
+  // OAuth 授权（CLI / AI）：独立于应用壳，Desktop 与用户 Web 共用
+  route("oauth/device", "routes/oauth-device.tsx"),
+  route("oauth/authorize", "routes/oauth-authorize.tsx"),
+  // 开发/e2e：scope 预设演示（无后端）
+  route("oauth/scope-demo", "routes/oauth-scope-demo.tsx"),
   // 应用壳：未登录时渲染欢迎空态（页内添加服务器 / 登录注册），不再有独立登录页路由
   layout("routes/app-shell.tsx", [
     index("routes/home.tsx"),

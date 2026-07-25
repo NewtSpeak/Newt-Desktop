@@ -33,6 +33,10 @@ export const SECTION_TOC: Record<SettingsSection, SettingsTocItem[]> = {
     { id: "privacy-block", label: "屏蔽列表" },
     { id: "privacy-server", label: "每服务器" },
   ],
+  applications: [
+    { id: "apps-list", label: "活跃授权" },
+    { id: "apps-revoke-all", label: "全部吊销" },
+  ],
   voice: [
     { id: "voice-devices", label: "设备" },
     { id: "voice-mic-test", label: "麦克风测试" },

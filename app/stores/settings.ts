@@ -239,6 +239,7 @@ export type SettingsSection =
   | "account"
   | "profile"
   | "privacy"
+  | "applications"
   | "voice"
   | "notifications"
   | "appearance"

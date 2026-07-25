@@ -1,6 +1,11 @@
 // 安全存储（keyring）：refresh token 等敏感值走 OS 级凭证库
 // （macOS Keychain / Windows Credential Manager / Linux Secret Service）。
 // service 固定为应用标识，key 作为凭证的 user 字段。
+//
+// 深链：tauri-plugin-deep-link 注册 owlspeak://；
+// 单实例：二次启动/深链唤起时聚焦已有窗口，并把 argv 中的 URL 发给前端。
+
+use tauri::{AppHandle, Emitter, Manager};
 
 const SECURE_STORAGE_SERVICE: &str = "com.owlspeak.desktop";
 
@@ -36,10 +41,38 @@ fn secure_delete(key: String) -> Result<(), String> {
   }
 }
 
+/// 从二次启动参数中提取疑似深链 / URL，转发给前端。
+fn forward_deep_link_args(app: &AppHandle, argv: &[String]) {
+  let urls: Vec<String> = argv
+    .iter()
+    .skip(1) // argv[0] 通常是可执行路径
+    .filter(|a| {
+      let s = a.as_str();
+      s.contains("://")
+        && (s.starts_with("owlspeak:")
+          || s.starts_with("http://")
+          || s.starts_with("https://"))
+    })
+    .cloned()
+    .collect();
+  if !urls.is_empty() {
+    let _ = app.emit("owl://deep-link", urls);
+  }
+  if let Some(window) = app.get_webview_window("main") {
+    let _ = window.set_focus();
+    let _ = window.unminimize();
+    let _ = window.show();
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
+    .plugin(tauri_plugin_deep_link::init())
+    .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+      forward_deep_link_args(app, &argv);
+    }))
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -47,6 +80,13 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build(),
         )?;
+        // 开发模式自动打开 WebView 开发者工具，便于排查白屏/卡加载
+        #[cfg(debug_assertions)]
+        {
+          if let Some(window) = app.get_webview_window("main") {
+            window.open_devtools();
+          }
+        }
       }
       Ok(())
     })

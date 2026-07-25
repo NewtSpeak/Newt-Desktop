@@ -13,6 +13,7 @@ import {
   KeyboardIcon,
   MicIcon,
   PaletteIcon,
+  KeyRoundIcon,
   ShieldIcon,
   StickerIcon,
   XIcon,
@@ -22,6 +23,7 @@ import { cn } from "~/lib/utils"
 import { useSettingsStore, type SettingsSection } from "~/stores/settings"
 import { AboutSection } from "./about-section"
 import { AccountSection } from "./account-section"
+import { ApplicationsSection } from "./applications-section"
 import { AppearanceSection } from "./appearance-section"
 import { KeybindsSection } from "./keybinds-section"
 import { NotificationsSection } from "./notifications-section"
@@ -45,6 +47,7 @@ const NAV: {
       { id: "account", label: "我的账号", icon: CircleUserRoundIcon },
       { id: "profile", label: "个人资料", icon: IdCardIcon },
       { id: "privacy", label: "隐私与安全", icon: ShieldIcon },
+      { id: "applications", label: "已授权应用", icon: KeyRoundIcon },
     ],
   },
   {
@@ -74,6 +77,8 @@ function SectionContent({ section }: { section: SettingsSection }) {
       return <ProfileSection />
     case "privacy":
       return <PrivacySection />
+    case "applications":
+      return <ApplicationsSection />
     case "voice":
       return <VoiceSection />
     case "notifications":

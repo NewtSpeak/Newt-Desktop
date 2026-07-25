@@ -13,8 +13,16 @@ import {
   secureSet,
 } from "~/lib/secure-storage"
 import { getServerBaseUrl } from "~/lib/server-connection"
+import { parseJsonPreservingLargeInts } from "~/lib/snowflake"
 
 import type { TokenResponse, User } from "./types"
+
+/** 读 body 为 JSON；大整数雪花 ID 保真（避免 JSON.parse 丢精度） */
+async function readResponseJson<T>(response: Response): Promise<T> {
+  const text = await response.text()
+  if (!text) return undefined as T
+  return parseJsonPreservingLargeInts<T>(text)
+}
 
 const API_PREFIX = "/gapi/v1"
 
@@ -422,7 +430,7 @@ async function doRefresh(accountId: string): Promise<RefreshResult> {
       }
       return { status: "transient" }
     }
-    const tokens = (await response.json()) as TokenResponse
+    const tokens = await readResponseJson<TokenResponse>(response)
     const next = getOrCreateSession(accountId)
     next.accessToken = tokens.access_token
     next.accessExpiresAt = new Date(tokens.access_expires_at).getTime()
@@ -495,7 +503,9 @@ function sessionExpired(accountId: string | null) {
 // ---------------------------------------------------------------------------
 
 async function parseError(response: Response): Promise<ApiError> {
-  const body = (await response.json().catch(() => ({}))) as {
+  const body = (await readResponseJson<{
+    error?: { code?: string; message?: string }
+  }>(response).catch(() => ({}))) as {
     error?: { code?: string; message?: string }
   }
   let retryAfterSeconds: number | undefined
@@ -566,7 +576,20 @@ export async function api<T>(
     throw await parseError(response)
   }
   if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  return await readResponseJson<T>(response)
+}
+
+/**
+ * 为 OAuth 授权页提供当前可用的 access token（必要时先 refresh）。
+ * 不发起业务请求；无会话时返回 null。
+ */
+export async function getAccessTokenForOAuth(): Promise<string | null> {
+  const accountId = activeAccountId
+  const session = activeSession()
+  if (!accessTokenUsable(session) && hasRefreshToken(accountId)) {
+    await refreshSession(accountId)
+  }
+  return activeSession()?.accessToken ?? null
 }
 
 /** 无需登录态的请求（signup/login/refresh/logout 等） */
@@ -597,7 +620,7 @@ export async function apiPublic<T>(
     throw await parseError(response)
   }
   if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  return await readResponseJson<T>(response)
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import type { Route } from "./+types/root"
 import "./app.css"
 import { TitlebarControls } from "~/components/titlebar-controls"
 import { TooltipProvider } from "~/components/ui/tooltip"
+import { useDeepLinkNavigation } from "~/hooks/use-deep-link"
 import { initAppearance } from "~/stores/settings"
 
 // react-grab 仅在开发模式的浏览器环境加载
@@ -43,6 +44,8 @@ export default function App() {
   useEffect(() => {
     initAppearance()
   }, [])
+  // Tauri：owlspeak://oauth/* 深链 → 授权页
+  useDeepLinkNavigation()
   return (
     <>
       <Outlet />
@@ -54,8 +57,31 @@ export default function App() {
 
 export function HydrateFallback() {
   return (
-    <main className="flex h-svh items-center justify-center bg-background">
-      <p className="text-sm text-muted-foreground">正在加载 OwlSpeak…</p>
+    <main
+      style={{
+        display: "flex",
+        height: "100vh",
+        alignItems: "center",
+        justifyContent: "center",
+        flexDirection: "column",
+        gap: 12,
+        background: "#0b0b0f",
+        color: "#e8e8ed",
+        fontFamily: '"MiSans VF", "MiSans", system-ui, sans-serif',
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          border: "3px solid #3f3f46",
+          borderTopColor: "#a1a1aa",
+          borderRadius: "50%",
+          animation: "owl-spin 0.8s linear infinite",
+        }}
+      />
+      <p style={{ fontSize: 14, opacity: 0.85 }}>正在加载 OwlSpeak…</p>
+      <style>{`@keyframes owl-spin { to { transform: rotate(360deg) } }`}</style>
     </main>
   )
 }

@@ -26,3 +26,6 @@ tauri-plugin-log = "2"
 # OS 级安全存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-deep-link = "2"
+# 深链在 Windows/Linux 已运行实例上需单实例插件转发参数
+tauri-plugin-single-instance = "2"
