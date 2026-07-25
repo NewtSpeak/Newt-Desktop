@@ -13,7 +13,7 @@
     "dev:tauri": "tauri dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
-    "test:unit": "node --experimental-strip-types --test app/lib/oauth-scope-presets.test.ts",
+    "test:unit": "node --experimental-strip-types --test --experimental-specifier-resolution=node app/lib/oauth-scope-presets.test.ts",
     "test:oauth-e2e": "node scripts/oauth-playwright.mjs",
     "test:oauth-e2e:expect": "node scripts/oauth-e2e.mjs",
     "tauri": "tauri",
