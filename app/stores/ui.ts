@@ -19,6 +19,7 @@ export type GuildAdminSectionId =
   | "bans"
   | "restrictions"
   | "invites"
+  | "bots"
   | "voice-nodes"
   | "voice-packs"
   | "audit-log"

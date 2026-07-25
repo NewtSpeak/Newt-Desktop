@@ -13,6 +13,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   BanIcon,
+  BotIcon,
   GavelIcon,
   LinkIcon,
   MusicIcon,
@@ -34,6 +35,7 @@ import { InvitesSection } from "~/components/guild-settings/invites-section"
 import { RestrictionsSection } from "~/components/guild-settings/restrictions-section"
 import { RolesSection } from "~/components/guild-settings/roles-section"
 import { ExpressionsSection } from "~/components/guild-settings/expressions-section"
+import { BotsSection } from "~/components/guild-settings/bots-section"
 import { VoiceNodesSection } from "~/components/guild-settings/voice-nodes-section"
 import { VoicePacksSection } from "~/components/guild-settings/voice-packs-section"
 import { Button } from "~/components/ui/button"
@@ -66,12 +68,15 @@ import {
 import { ApiError, resolveApiUrl } from "~/lib/api/http"
 import { hasPermission, Permissions } from "~/lib/permissions"
 import { cn, isGuildMediaVideo } from "~/lib/utils"
-import type { GuildBanner, GuildMember } from "~/lib/api/types"
+import type { Channel, GuildBanner, GuildMember } from "~/lib/api/types"
 import { useAuthStore } from "~/stores/auth"
+import { useChannelsStore } from "~/stores/channels"
 import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { memberGuildPermissions, useRolesStore } from "~/stores/roles"
 import { useUIStore } from "~/stores/ui"
+
+const EMPTY_CHANNELS: Channel[] = []
 
 // Zustand selector 必须返回稳定引用（避免 ?? [] 每次新建导致无限重渲染）
 const EMPTY_MEMBERS: GuildMember[] = []
@@ -154,6 +159,7 @@ type AdminSection =
   | "bans"
   | "restrictions"
   | "invites"
+  | "bots"
   | "voice-nodes"
   | "voice-packs"
   | "expressions"
@@ -179,7 +185,8 @@ export const ADMIN_PANEL_ENTRY =
   INVITES_ENTRY |
   Permissions.VIEW_AUDIT_LOG |
   Permissions.MODERATE_MEMBERS |
-  Permissions.MANAGE_EXPRESSIONS
+  Permissions.MANAGE_EXPRESSIONS |
+  Permissions.MANAGE_BOTS
 
 const NAV: {
   id: AdminSection
@@ -196,9 +203,11 @@ const NAV: {
   { id: "bans", group: "用户管理", label: "封禁", icon: GavelIcon, required: Permissions.BAN_MEMBERS },
   { id: "restrictions", group: "用户管理", label: "限制", icon: BanIcon, required: Permissions.MODERATE_MEMBERS },
   { id: "invites", group: "用户管理", label: "邀请", icon: LinkIcon, required: INVITES_ENTRY },
+  { id: "bots", group: "集成", label: "机器人", icon: BotIcon, required: Permissions.MANAGE_BOTS },
+  // 操作日志提到安全组最前，醒目展示可撤销管理流水
+  { id: "audit-log", group: "安全", label: "操作日志", icon: ScrollTextIcon, required: Permissions.VIEW_AUDIT_LOG },
   { id: "voice-nodes", group: "语音", label: "语音节点", icon: RadioIcon, required: Permissions.MANAGE_GUILD },
   { id: "voice-packs", group: "语音", label: "入场语音包", icon: MusicIcon, required: Permissions.MANAGE_GUILD },
-  { id: "audit-log", group: "安全", label: "审计日志", icon: ScrollTextIcon, required: Permissions.VIEW_AUDIT_LOG },
   { id: "danger", group: "危险", label: "危险操作", icon: ShieldAlertIcon, required: "owner" },
 ]
 
@@ -415,6 +424,7 @@ export function GuildAdminPanel() {
               <RestrictionsSection guildId={guildId} />
             )}
             {section === "invites" && <InvitesSection guildId={guildId} />}
+            {section === "bots" && <BotsSection guildId={guildId} />}
             {section === "voice-nodes" && (
               <VoiceNodesSection
                 guildId={guildId}
@@ -455,8 +465,15 @@ function OverviewSection({
   canManage: boolean
 }) {
   const guild = useGuildsStore((s) => s.guilds.find((g) => g.id === guildId))
+  const channels = useChannelsStore(
+    (s) => s.byGuild[guildId] ?? EMPTY_CHANNELS,
+  )
   const [name, setName] = useState(guild?.name ?? "")
   const [description, setDescription] = useState(guild?.description ?? "")
+  /** 默认着陆频道；空串 = 无（与 API null 对应） */
+  const [defaultChannelId, setDefaultChannelId] = useState(
+    guild?.default_channel_id ?? "",
+  )
   const [saving, setSaving] = useState(false)
   /** 图标 / 单横幅 / 多 banner 上传中的互斥标记 */
   const [busy, setBusy] = useState<"icon" | "banner" | "banners" | null>(null)
@@ -466,6 +483,38 @@ function OverviewSection({
     const list = guild?.banners ?? EMPTY_BANNERS
     return [...list].sort((a, b) => a.position - b.position)
   }, [guild?.banners])
+
+  const textChannels = useMemo(
+    () =>
+      channels
+        .filter((c) => c.type === "TEXT")
+        .slice()
+        .sort(
+          (a, b) =>
+            (a.position ?? 0) - (b.position ?? 0) ||
+            a.name.localeCompare(b.name),
+        ),
+    [channels],
+  )
+
+  /** 触发器展示文案：始终是可读频道名，不露出 UUID */
+  const defaultChannelLabel = useMemo(() => {
+    if (!defaultChannelId) return "无（回退到第一个文字频道）"
+    const hit = textChannels.find((c) => c.id === defaultChannelId)
+    if (hit) return `#${hit.name}`
+    // 已配置但列表尚未加载 / 频道已删：仍给可读提示，避免显示 raw id
+    return "（已选频道暂不可见或已删除）"
+  }, [defaultChannelId, textChannels])
+
+  // 打开概览时确保有频道列表（默认频道下拉）
+  useEffect(() => {
+    if (!useChannelsStore.getState().byGuild[guildId]) {
+      void useChannelsStore
+        .getState()
+        .fetchChannels(guildId)
+        .catch(() => undefined)
+    }
+  }, [guildId])
 
   // 打开概览时拉一次多 banner（补 limit + 与远端对齐）
   useEffect(() => {
@@ -496,14 +545,23 @@ function OverviewSection({
     if (!dirty && guild) {
       setName(guild.name)
       setDescription(guild.description ?? "")
+      setDefaultChannelId(guild.default_channel_id ?? "")
     }
   }, [guild, dirty])
 
   if (!guild) return null
 
-  const markDirty = (nextName: string, nextDesc: string) => {
+  const savedDefault = guild.default_channel_id ?? ""
+
+  const markDirty = (
+    nextName: string,
+    nextDesc: string,
+    nextDefault: string = defaultChannelId,
+  ) => {
     setDirty(
-      nextName !== guild.name || nextDesc !== (guild.description ?? ""),
+      nextName !== guild.name ||
+        nextDesc !== (guild.description ?? "") ||
+        nextDefault !== savedDefault,
     )
   }
 
@@ -518,6 +576,7 @@ function OverviewSection({
       const updated = await patchGuild(guildId, {
         name: trimmed,
         description: description.trim(),
+        default_channel_id: defaultChannelId.trim() || null,
       })
       useGuildsStore.getState().upsertGuild(updated)
       setDirty(false)
@@ -874,6 +933,53 @@ function OverviewSection({
         />
       </label>
 
+      {/* 默认欢迎频道（docs/design 默认欢迎频道与进服着陆） */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-foreground/60">
+          默认欢迎频道
+        </span>
+        <p className="text-xs text-foreground/50">
+          成员进入本服务器且尚未选择频道时，优先打开此文字频道；未设置则打开侧栏第一个可见文字频道。
+        </p>
+        <Select
+          value={defaultChannelId || "__none__"}
+          onValueChange={(value) => {
+            // Base UI 可能回传 string 或 string[]
+            const raw = Array.isArray(value) ? value[0] : value
+            const next = !raw || raw === "__none__" ? "" : String(raw)
+            setDefaultChannelId(next)
+            markDirty(name, description, next)
+          }}
+          disabled={!canManage}
+        >
+          <SelectTrigger
+            className={cn(
+              // 全宽展示完整频道名；覆盖默认 w-fit / line-clamp，避免截断或只显示 UUID
+              "h-auto min-h-9 w-full max-w-lg items-start whitespace-normal py-2",
+              "*:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:whitespace-normal *:data-[slot=select-value]:break-all",
+            )}
+          >
+            <SelectValue placeholder="无（回退到第一个文字频道）">
+              {defaultChannelLabel}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent
+            align="start"
+            alignItemWithTrigger={false}
+            className="max-w-lg min-w-[var(--anchor-width)]"
+          >
+            <SelectItem value="__none__">
+              无（回退到第一个文字频道）
+            </SelectItem>
+            {textChannels.map((ch) => (
+              <SelectItem key={ch.id} value={ch.id} label={`#${ch.name}`}>
+                #{ch.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* 底部保存条（docs 18 FR-12） */}
       {dirty && (
         <div className="sticky bottom-4 flex items-center justify-between rounded-xl border bg-card px-4 py-3 shadow-lg">
@@ -886,6 +992,7 @@ function OverviewSection({
               onClick={() => {
                 setName(guild.name)
                 setDescription(guild.description ?? "")
+                setDefaultChannelId(guild.default_channel_id ?? "")
                 setDirty(false)
               }}
             >

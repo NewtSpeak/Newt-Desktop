@@ -4,7 +4,7 @@
 //   - 封禁列表：解封
 // 入口：任意用户右键「在管理员视图中打开」→ /guilds/:guildId/moderation?user=
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router"
 import {
   ArrowLeftIcon,
@@ -14,8 +14,10 @@ import {
   MicOffIcon,
   PhoneOffIcon,
   RefreshCwIcon,
+  ScrollTextIcon,
   SearchIcon,
   ShieldIcon,
+  Undo2Icon,
   VolumeXIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -30,6 +32,11 @@ import {
   unbanUser,
   type GuildBan,
 } from "~/lib/api/guilds"
+import {
+  listGuildAuditLogs,
+  undoGuildAuditLog,
+  type AuditLogEntry,
+} from "~/lib/api/audit"
 import { ApiError } from "~/lib/api/http"
 import {
   adminDisconnectVoice,
@@ -48,6 +55,7 @@ import { useChannelsStore } from "~/stores/channels"
 import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { usePresenceStore } from "~/stores/presence"
+import { useUIStore } from "~/stores/ui"
 import { useRolesStore } from "~/stores/roles"
 import { useVoiceStore } from "~/stores/voice"
 import type { GuildMember, VoiceState } from "~/lib/api/types"
@@ -84,13 +92,30 @@ export default function ModerationPage() {
   const [bans, setBans] = useState<GuildBan[] | null>(null)
   const [bansLoading, setBansLoading] = useState(false)
   const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [recentOps, setRecentOps] = useState<AuditLogEntry[]>([])
+  const [opsLoading, setOpsLoading] = useState(false)
+
+  const loadRecentOps = useCallback(async () => {
+    if (!guildId || !caps.isModerator) return
+    setOpsLoading(true)
+    try {
+      const res = await listGuildAuditLogs(guildId, { limit: 8 })
+      setRecentOps(res.items)
+    } catch {
+      // 无 VIEW_AUDIT_LOG 时静默
+      setRecentOps([])
+    } finally {
+      setOpsLoading(false)
+    }
+  }, [guildId, caps.isModerator])
 
   useEffect(() => {
     if (!guildId) return
     void useMembersStore.getState().fetchMembers(guildId).catch(() => undefined)
     void useRolesStore.getState().fetchRoles(guildId).catch(() => undefined)
     void useChannelsStore.getState().fetchChannels(guildId).catch(() => undefined)
-  }, [guildId])
+    void loadRecentOps()
+  }, [guildId, loadRecentOps])
 
   // 高亮用户时默认落在成员页
   useEffect(() => {
@@ -214,6 +239,101 @@ export default function ModerationPage() {
           {caps.systemAdmin ? "系统管理员" : self?.is_owner ? "所有者" : "管理员"}
         </span>
       </header>
+
+      {/* 最近操作时间线（可撤销） */}
+      {(recentOps.length > 0 || opsLoading) && (
+        <section className="shrink-0 border-b bg-muted/20 px-4 py-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <ScrollTextIcon className="size-3.5 text-primary" />
+              最近操作
+              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                可撤销
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+                disabled={opsLoading}
+                onClick={() => void loadRecentOps()}
+              >
+                刷新
+              </button>
+              <button
+                type="button"
+                className="text-[11px] text-primary hover:underline"
+                onClick={() =>
+                  useUIStore.getState().openGuildAdmin(guildId, "audit-log")
+                }
+              >
+                完整操作日志
+              </button>
+            </div>
+          </div>
+          <ol className="flex max-h-36 flex-col gap-1.5 overflow-y-auto">
+            {recentOps.map((op) => {
+              const canUndo =
+                op.reversible === true || op.undo_status === "available"
+              const label =
+                op.action_label && op.action_label !== op.action
+                  ? op.action_label
+                  : op.action
+              return (
+                <li
+                  key={op.id}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border bg-background/80 px-2.5 py-1.5 text-xs",
+                    op.undo_status === "undone" && "opacity-50",
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate font-medium">
+                    {label}
+                    {op.target_summary ? (
+                      <span className="font-normal text-muted-foreground">
+                        {" "}
+                        · {op.target_summary}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {op.actor_username || "系统"}
+                  </span>
+                  {canUndo ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 gap-1 px-1.5 text-[10px]"
+                      disabled={pendingKey === `undo-${op.id}`}
+                      onClick={() =>
+                        void run(`undo-${op.id}`, async () => {
+                          try {
+                            const res = await undoGuildAuditLog(guildId, op.id)
+                            setRecentOps((prev) => {
+                              const next = prev.map((e) =>
+                                e.id === res.original.id ? res.original : e,
+                              )
+                              return [res.undo, ...next].slice(0, 10)
+                            })
+                            toast.success("已撤销")
+                          } catch (error) {
+                            toast.error(errorMessage(error, "撤销失败"))
+                          }
+                        })
+                      }
+                    >
+                      <Undo2Icon className="size-3" />
+                      撤销
+                    </Button>
+                  ) : op.undo_status === "undone" ? (
+                    <span className="text-[10px] text-muted-foreground">已撤销</span>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ol>
+        </section>
+      )}
 
       {/* Tabs */}
       <div className="flex shrink-0 gap-1 border-b px-4 pt-2">
