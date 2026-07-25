@@ -19,12 +19,24 @@ import {
   TIPTAP_PROSE_CLASS,
 } from "~/lib/tiptap/extensions"
 import {
+  findChannelById,
+  resolveChannelLabel,
+} from "~/lib/channel-link"
+import { asSnowflakeId } from "~/lib/snowflake"
+import {
   isTipTapDocEmpty,
   markdownToTipTapDoc,
   tipTapDocToMarkdown,
 } from "~/lib/tiptap/markdown-bridge"
 import { cn } from "~/lib/utils"
 import { useStickersStore } from "~/stores/stickers"
+
+function channelResolveForDoc() {
+  return {
+    label: (id: string) => resolveChannelLabel(id),
+    channelType: (id: string) => findChannelById(id)?.type,
+  }
+}
 
 export type ComposerFormatState = {
   bold: boolean
@@ -157,6 +169,13 @@ export type TipTapComposerHandle = {
   clear: () => void
   focus: () => void
   insertMention: (userId: string, label: string, queryLen: number) => void
+  /** 插入频道 chip，wire `<#channelId>` */
+  insertChannelMention: (
+    channelId: string,
+    label: string,
+    channelType: "TEXT" | "VOICE",
+    queryLen: number,
+  ) => void
   deleteBeforeCaret: (chars: number) => void
   insertEmoji: (emoji: string) => void
   /** 插入自定义小表情节点（docs 17 wire `<e:id:mark>`） */
@@ -170,11 +189,22 @@ export type TipTapComposerHandle = {
   getTextBeforeCaret: () => string
 }
 
+export type ComposerQueryKind = "mention" | "channel"
+
+export type ComposerAtQuery = {
+  kind: ComposerQueryKind
+  start: number
+  query: string
+}
+
 function textBeforeCaret(ed: Editor): string {
   const { from } = ed.state.selection
   try {
     return ed.state.doc.textBetween(0, from, "\n", (node) => {
       if (node.type.name === "mention") return `@${node.attrs.label}`
+      if (node.type.name === "channelMention") {
+        return `#${node.attrs.label || ""}`
+      }
       if (node.type.name === "customEmote") {
         return `<e:${node.attrs.itemId}:${node.attrs.mark}>`
       }
@@ -194,6 +224,25 @@ function matchMentionAtEnd(
   return { start: text.length - query.length - 1, query }
 }
 
+/** `#query` 触发频道链接补全（与 @ 互斥；@ 优先） */
+function matchChannelAtEnd(
+  text: string,
+): { start: number; query: string } | null {
+  // 避免匹配 markdown 标题行首的 # 后空格；要求 # 后直接跟词或为空
+  const match = /(^|[\s([{（【])#([\p{L}\p{N}_-]{0,32})$/u.exec(text)
+  if (!match) return null
+  const query = match[2] ?? ""
+  return { start: text.length - query.length - 1, query }
+}
+
+function matchComposerQueryAtEnd(text: string): ComposerAtQuery | null {
+  const mention = matchMentionAtEnd(text)
+  if (mention) return { kind: "mention", ...mention }
+  const channel = matchChannelAtEnd(text)
+  if (channel) return { kind: "channel", ...channel }
+  return null
+}
+
 export function TipTapComposerEditor({
   channelId,
   channelName,
@@ -209,6 +258,12 @@ export function TipTapComposerEditor({
   resolveMentionLabel,
   leadingActions,
   trailingActions,
+  /** 初始 wire Markdown（消息内联编辑用）；设置后不随 channelId 清空 */
+  initialMarkdown,
+  /** composer=底部输入；inline-edit=消息内联编辑（更矮、可藏工具栏） */
+  variant = "composer",
+  hideToolbar = false,
+  placeholder,
 }: {
   channelId: string
   channelName: string
@@ -217,8 +272,8 @@ export function TipTapComposerEditor({
   onSubmit: () => void
   onEditLast: () => void
   onEscapeReply?: () => void
-  onMentionQuery: (query: { start: number; query: string } | null) => void
-  /** 父级 @ 补全面板是否打开（拦截 Enter 发送 / 方向键） */
+  onMentionQuery: (query: ComposerAtQuery | null) => void
+  /** 父级 @ / # 补全面板是否打开（拦截 Enter 发送 / 方向键） */
   mentionOpen?: boolean
   onPasteFiles?: (files: File[]) => void
   editorRef: React.MutableRefObject<TipTapComposerHandle | null>
@@ -227,17 +282,24 @@ export function TipTapComposerEditor({
   leadingActions?: React.ReactNode
   /** 编辑器右侧（如表情 / 发送） */
   trailingActions?: React.ReactNode
+  initialMarkdown?: string
+  variant?: "composer" | "inline-edit"
+  hideToolbar?: boolean
+  placeholder?: string
 }) {
   const [formatState, setFormatState] =
     useState<ComposerFormatState>(EMPTY_FORMAT)
 
+  const isInlineEdit = variant === "inline-edit"
   const extensions = useMemo(
     () =>
       createOwlExtensions({
         editable: true,
-        placeholder: `给 #${channelName} 发消息`,
+        placeholder:
+          placeholder ??
+          (isInlineEdit ? "编辑消息…" : `给 #${channelName} 发消息`),
       }),
-    [channelName],
+    [channelName, placeholder, isInlineEdit],
   )
 
   const refreshFormat = useCallback((ed: Editor) => {
@@ -255,22 +317,29 @@ export function TipTapComposerEditor({
   const refreshMention = useCallback(
     (ed: Editor) => {
       const text = textBeforeCaret(ed)
-      onMentionQuery(matchMentionAtEnd(text))
+      onMentionQuery(matchComposerQueryAtEnd(text))
     },
     [onMentionQuery],
   )
 
   const editor = useEditor({
     extensions,
-    content: markdownToTipTapDoc(""),
+    content: markdownToTipTapDoc(
+      initialMarkdown ?? "",
+      resolveMentionLabel,
+      channelResolveForDoc(),
+    ),
     editable: !disabled,
     immediatelyRender: false,
     editorProps: {
       attributes: {
         class: cn(
           TIPTAP_PROSE_CLASS,
-          "max-h-56 min-h-[calc(1.5rem*3+0.75rem)] w-full overflow-y-auto bg-transparent px-1 py-1.5 text-sm leading-6",
+          "w-full overflow-y-auto bg-transparent px-1 text-sm leading-6",
           "whitespace-pre-wrap break-words",
+          isInlineEdit
+            ? "max-h-40 min-h-[2.5rem] py-1"
+            : "max-h-56 min-h-[calc(1.5rem*3+0.75rem)] py-1.5",
           // Placeholder（@tiptap/extension-placeholder）
           "[&_p.is-editor-empty:first-child]:before:pointer-events-none",
           "[&_p.is-editor-empty:first-child]:before:float-left",
@@ -280,7 +349,9 @@ export function TipTapComposerEditor({
         ),
         role: "textbox",
         "aria-multiline": "true",
-        "aria-label": `给 #${channelName} 发消息`,
+        "aria-label": isInlineEdit
+          ? "编辑消息"
+          : `给 #${channelName} 发消息`,
       },
       handlePaste: (_view, event) => {
         const files: File[] = []
@@ -322,14 +393,31 @@ export function TipTapComposerEditor({
     },
   })
 
-  // 频道切换清空
+  // 底部 composer：切频道清空。内联编辑带 initialMarkdown 时不因 channelId 清空。
   useEffect(() => {
     if (!editor) return
+    if (initialMarkdown != null) return
     editor.commands.clearContent(true)
     onChange("")
     setFormatState(EMPTY_FORMAT)
     onMentionQuery(null)
   }, [channelId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 内联编辑：编辑器就绪后载入原文（含已有 <#channelId> chip）
+  useEffect(() => {
+    if (!editor) return
+    if (initialMarkdown == null) return
+    const doc = markdownToTipTapDoc(
+      initialMarkdown,
+      resolveMentionLabel,
+      channelResolveForDoc(),
+    )
+    editor.commands.setContent(doc)
+    onChange(tipTapDocToMarkdown(editor.getJSON()))
+    requestAnimationFrame(() => editor.commands.focus("end"))
+    // 仅挂载时灌入一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor])
 
   useEffect(() => {
     if (!editor) return
@@ -343,10 +431,19 @@ export function TipTapComposerEditor({
       resolveAvatar: undefined,
       selfId: undefined,
     }
+    editor.storage.channelMention = {
+      resolveLabel: (id) => resolveChannelLabel(id),
+      resolveType: (id) => findChannelById(id)?.type,
+      onOpen: undefined,
+    }
     // 从 stickers store 解析小表情 asset URL（输入框内嵌图）
     editor.storage.customEmote = {
-      resolveAssetUrl: (itemId: string) =>
-        useStickersStore.getState().itemCache[itemId]?.asset_url,
+      resolveAssetUrl: (itemId: string) => {
+        const id = asSnowflakeId(itemId)
+        return id
+          ? useStickersStore.getState().itemCache[id]?.asset_url
+          : undefined
+      },
     }
   }, [editor, resolveMentionLabel])
 
@@ -371,20 +468,21 @@ export function TipTapComposerEditor({
         editor.chain().focus().insertContent(emoji).run()
       },
       insertCustomEmote: (opts) => {
+        // 仅插入行内 atom；itemId 必须是字符串雪花，禁止 Number 丢精度
+        const itemId = asSnowflakeId(opts.itemId)
+        if (!itemId || !opts.mark) return
         editor
           .chain()
           .focus()
-          .insertContent([
-            {
-              type: "customEmote",
-              attrs: {
-                itemId: opts.itemId,
-                mark: opts.mark,
-                assetUrl: opts.assetUrl ?? "",
-                animated: opts.animated ?? false,
-              },
+          .insertContent({
+            type: "customEmote",
+            attrs: {
+              itemId,
+              mark: String(opts.mark),
+              assetUrl: opts.assetUrl ?? "",
+              animated: opts.animated ?? false,
             },
-          ])
+          })
           .run()
       },
       deleteBeforeCaret: (chars: number) => {
@@ -412,6 +510,50 @@ export function TipTapComposerEditor({
             { type: "text", text: " " },
           ])
           .run()
+      },
+      insertChannelMention: (
+        channelId: string,
+        label: string,
+        channelType: "TEXT" | "VOICE",
+        queryLen: number,
+      ) => {
+        const { from } = editor.state.selection
+        const deleteFrom = Math.max(0, from - Math.max(0, queryLen))
+        const ok = editor
+          .chain()
+          .focus()
+          .deleteRange({ from: deleteFrom, to: from })
+          .insertContent([
+            {
+              type: "channelMention",
+              attrs: {
+                id: channelId,
+                label: label || channelId.slice(0, 6),
+                channelType: channelType || "TEXT",
+              },
+            },
+            { type: "text", text: " " },
+          ])
+          .run()
+        if (!ok) {
+          // 回退：直接在光标处插入，避免 deleteRange 边界导致整段失败
+          editor
+            .chain()
+            .focus()
+            .insertContent([
+              {
+                type: "channelMention",
+                attrs: {
+                  id: channelId,
+                  label: label || channelId.slice(0, 6),
+                  channelType: channelType || "TEXT",
+                },
+              },
+              { type: "text", text: " " },
+            ])
+            .run()
+        }
+        onChange?.(tipTapDocToMarkdown(editor.getJSON()))
       },
     }
   }, [editor, editorRef, onChange])
@@ -486,7 +628,11 @@ export function TipTapComposerEditor({
       onSubmit()
       return
     }
-    if (event.key === "ArrowUp" && isTipTapDocEmpty(editor.getJSON())) {
+    if (
+      !isInlineEdit &&
+      event.key === "ArrowUp" &&
+      isTipTapDocEmpty(editor.getJSON())
+    ) {
       event.preventDefault()
       onEditLast()
       return
@@ -499,36 +645,53 @@ export function TipTapComposerEditor({
 
   if (!editor) return null
 
+  const showToolbar = !hideToolbar && !isInlineEdit
+
   return (
     <div className="flex min-w-0 flex-1 flex-col" onKeyDown={handleKeyDown}>
-      <FormatToolbar
-        state={formatState}
-        onInline={(cmd) => {
-          const chain = editor.chain().focus()
-          if (cmd === "bold") chain.toggleBold().run()
-          if (cmd === "italic") chain.toggleItalic().run()
-          if (cmd === "strike") chain.toggleStrike().run()
-          if (cmd === "code") chain.toggleCode().run()
-        }}
-        onBlock={(cmd) => {
-          const chain = editor.chain().focus()
-          if (cmd === "quote") chain.toggleBlockquote().run()
-          if (cmd === "list") chain.toggleBulletList().run()
-          if (cmd === "codeblock") chain.toggleCodeBlock().run()
-        }}
-        onLink={() => {
-          const raw = window.prompt("输入链接地址（http/https）", "https://")
-          if (raw === null) return
-          const href = raw.trim()
-          if (!href || !/^https?:\/\//i.test(href)) return
-          editor.chain().focus().extendMarkRange("link").setLink({ href }).run()
-        }}
-      />
-      <div className="flex min-w-0 items-end gap-1 px-2 py-1.5">
+      {showToolbar && (
+        <FormatToolbar
+          state={formatState}
+          onInline={(cmd) => {
+            const chain = editor.chain().focus()
+            if (cmd === "bold") chain.toggleBold().run()
+            if (cmd === "italic") chain.toggleItalic().run()
+            if (cmd === "strike") chain.toggleStrike().run()
+            if (cmd === "code") chain.toggleCode().run()
+          }}
+          onBlock={(cmd) => {
+            const chain = editor.chain().focus()
+            if (cmd === "quote") chain.toggleBlockquote().run()
+            if (cmd === "list") chain.toggleBulletList().run()
+            if (cmd === "codeblock") chain.toggleCodeBlock().run()
+          }}
+          onLink={() => {
+            const raw = window.prompt("输入链接地址（http/https）", "https://")
+            if (raw === null) return
+            const href = raw.trim()
+            if (!href || !/^https?:\/\//i.test(href)) return
+            editor
+              .chain()
+              .focus()
+              .extendMarkRange("link")
+              .setLink({ href })
+              .run()
+          }}
+        />
+      )}
+      <div
+        className={cn(
+          "flex min-w-0 items-end gap-1",
+          isInlineEdit ? "px-1 py-0.5" : "px-2 py-1.5",
+        )}
+      >
         {leadingActions}
         <EditorContent
           editor={editor}
-          className="min-w-0 min-h-[calc(1.5rem*3+0.75rem)] flex-1"
+          className={cn(
+            "min-w-0 flex-1",
+            isInlineEdit ? "min-h-[2.5rem]" : "min-h-[calc(1.5rem*3+0.75rem)]",
+          )}
         />
         {trailingActions}
       </div>

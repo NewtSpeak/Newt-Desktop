@@ -4,6 +4,7 @@
 import type { JSONContent } from "@tiptap/core"
 
 import { parseMarkdown } from "~/lib/markdown"
+import { asSnowflakeId } from "~/lib/snowflake"
 
 type InlineNode = ReturnType<typeof parseMarkdown>[number] extends infer B
   ? B extends { children: infer C }
@@ -26,6 +27,7 @@ type AnyInline =
   | { kind: "strike"; children: AnyInline[] }
   | { kind: "link"; href: string; label: string }
   | { kind: "mention"; userId: string }
+  | { kind: "channel_mention"; channelId: string }
   | { kind: "custom_emote"; itemId: string; mark: string }
 
 type AnyBlock =
@@ -33,6 +35,16 @@ type AnyBlock =
   | { kind: "codeblock"; lang: string; code: string }
   | { kind: "quote"; lines: AnyInline[][] }
   | { kind: "list"; items: AnyInline[][] }
+  | {
+      kind: "tasklist"
+      items: Array<{ checked: boolean; children: AnyInline[] }>
+    }
+  | {
+      kind: "table"
+      aligns: Array<"left" | "center" | "right" | null>
+      header: AnyInline[][]
+      rows: AnyInline[][][]
+    }
 
 function inlineToTipTap(
   nodes: AnyInline[],
@@ -91,11 +103,21 @@ function inlineToTipTap(
           },
         })
         break
+      case "channel_mention":
+        out.push({
+          type: "channelMention",
+          attrs: {
+            id: node.channelId,
+            label: node.channelId.slice(0, 6),
+            channelType: "TEXT",
+          },
+        })
+        break
       case "custom_emote":
         out.push({
           type: "customEmote",
           attrs: {
-            itemId: node.itemId,
+            itemId: asSnowflakeId(node.itemId),
             mark: node.mark,
             assetUrl: "",
             animated: false,
@@ -107,38 +129,41 @@ function inlineToTipTap(
   return out
 }
 
+export type ChannelMentionResolve = {
+  label?: (channelId: string) => string
+  channelType?: (channelId: string) => string | undefined
+}
+
 /** wire Markdown → TipTap doc JSON */
 export function markdownToTipTapDoc(
   content: string,
   resolveMentionLabel?: (userId: string) => string,
+  resolveChannel?: ChannelMentionResolve,
 ): JSONContent {
   const blocks = parseMarkdown(content) as AnyBlock[]
   const contentNodes: JSONContent[] = []
 
   const mapInline = (nodes: AnyInline[]) => {
-    const mapped = nodes.map((n) => {
-      if (n.kind === "mention" && resolveMentionLabel) {
-        return n
-      }
-      return n
-    })
-    // 回填 mention label
-    const withLabels = mapped.map((n) => {
-      if (n.kind === "mention") {
-        return {
-          ...n,
-          // label 在 inlineToTipTap 里用 attrs；这里改写
-        }
-      }
-      return n
-    })
-    const result = inlineToTipTap(withLabels)
+    const result = inlineToTipTap(nodes)
     if (resolveMentionLabel) {
       for (const item of result) {
         if (item.type === "mention" && item.attrs?.id) {
           item.attrs.label =
             resolveMentionLabel(String(item.attrs.id)) ||
             String(item.attrs.id).slice(0, 6)
+        }
+      }
+    }
+    if (resolveChannel) {
+      for (const item of result) {
+        if (item.type === "channelMention" && item.attrs?.id) {
+          const id = String(item.attrs.id)
+          item.attrs.label =
+            resolveChannel.label?.(id) || id.slice(0, 6)
+          const t = resolveChannel.channelType?.(id)
+          if (t === "TEXT" || t === "VOICE" || t === "CATEGORY") {
+            item.attrs.channelType = t
+          }
         }
       }
     }
@@ -194,6 +219,65 @@ export function markdownToTipTapDoc(
           })),
         })
         break
+      case "tasklist":
+        contentNodes.push({
+          type: "taskList",
+          content: block.items.map((item) => {
+            const children = mapInline(item.children)
+            return {
+              type: "taskItem",
+              attrs: { checked: item.checked },
+              content: [
+                {
+                  type: "paragraph",
+                  content: children.length ? children : undefined,
+                },
+              ],
+            }
+          }),
+        })
+        break
+      case "table": {
+        const cellParagraph = (inlines: AnyInline[]): JSONContent => {
+          const children = mapInline(inlines)
+          return {
+            type: "paragraph",
+            content: children.length ? children : undefined,
+          }
+        }
+        const makeCell = (
+          type: "tableHeader" | "tableCell",
+          inlines: AnyInline[],
+          _align: "left" | "center" | "right" | null,
+        ): JSONContent => ({
+          type,
+          // 仅 schema 已声明字段，避免未知 attrs 导致整表 setContent 失败
+          attrs: {
+            colspan: 1,
+            rowspan: 1,
+            colwidth: null,
+          },
+          content: [cellParagraph(inlines)],
+        })
+
+        const headerRow: JSONContent = {
+          type: "tableRow",
+          content: block.header.map((cell, i) =>
+            makeCell("tableHeader", cell, block.aligns[i] ?? null),
+          ),
+        }
+        const bodyRows: JSONContent[] = block.rows.map((row) => ({
+          type: "tableRow",
+          content: row.map((cell, i) =>
+            makeCell("tableCell", cell, block.aligns[i] ?? null),
+          ),
+        }))
+        contentNodes.push({
+          type: "table",
+          content: [headerRow, ...bodyRows],
+        })
+        break
+      }
     }
   }
 
@@ -212,6 +296,81 @@ function escapeLinkLabel(text: string): string {
   return text.replace(/[\[\]]/g, "\\$&")
 }
 
+function escapeTableCellText(text: string): string {
+  return text.replace(/\|/g, "\\|").replace(/\n/g, " ")
+}
+
+function cellInnerMarkdown(cell: JSONContent | undefined): string {
+  if (!cell?.content?.length) return ""
+  const parts: string[] = []
+  for (const child of cell.content) {
+    if (child.type === "paragraph") {
+      parts.push(serializeInline(child.content))
+    } else {
+      parts.push(serializeBlock(child))
+    }
+  }
+  return escapeTableCellText(parts.join(" ").trim())
+}
+
+function alignMarker(align: unknown, minDashes = 3): string {
+  const dashes = "-".repeat(Math.max(3, minDashes))
+  if (align === "center") return `:${dashes}:`
+  if (align === "right") return `${dashes}:`
+  if (align === "left") return `:${dashes}`
+  return dashes
+}
+
+function serializeTable(node: JSONContent): string {
+  const rows = (node.content ?? []).filter((r) => r.type === "tableRow")
+  if (rows.length === 0) return ""
+
+  const matrix: string[][] = []
+  const aligns: Array<string | null> = []
+
+  for (const row of rows) {
+    const cells = (row.content ?? []).filter(
+      (c) => c.type === "tableHeader" || c.type === "tableCell",
+    )
+    const texts = cells.map((c) => cellInnerMarkdown(c))
+    matrix.push(texts)
+    if (aligns.length === 0) {
+      for (const c of cells) {
+        const a = c.attrs?.align
+        aligns.push(
+          a === "left" || a === "center" || a === "right" ? a : null,
+        )
+      }
+    }
+  }
+
+  const colCount = Math.max(
+    aligns.length,
+    ...matrix.map((r) => r.length),
+    1,
+  )
+  while (aligns.length < colCount) aligns.push(null)
+  for (const row of matrix) {
+    while (row.length < colCount) row.push("")
+  }
+
+  const fmt = (cells: string[]) =>
+    `| ${cells.map((c) => (c === "" ? " " : c)).join(" | ")} |`
+
+  const sep = fmt(
+    aligns.map((a, i) => {
+      const sample = matrix[0]?.[i] ?? ""
+      return alignMarker(a, Math.max(3, Math.min(12, sample.length || 3)))
+    }),
+  )
+
+  const lines = [fmt(matrix[0] ?? Array(colCount).fill("")), sep]
+  for (let i = 1; i < matrix.length; i++) {
+    lines.push(fmt(matrix[i]!))
+  }
+  return lines.join("\n")
+}
+
 function serializeInline(nodes: JSONContent[] | undefined): string {
   if (!nodes?.length) return ""
   let out = ""
@@ -225,8 +384,13 @@ function serializeInline(nodes: JSONContent[] | undefined): string {
       if (id) out += `<@${id}>`
       continue
     }
+    if (node.type === "channelMention") {
+      const id = String(node.attrs?.id ?? "")
+      if (id) out += `<#${id}>`
+      continue
+    }
     if (node.type === "customEmote") {
-      const itemId = String(node.attrs?.itemId ?? "")
+      const itemId = asSnowflakeId(node.attrs?.itemId)
       const mark = String(node.attrs?.mark ?? "")
       if (itemId && mark) out += `<e:${itemId}:${mark}>`
       continue
@@ -296,6 +460,25 @@ function serializeBlock(node: JSONContent): string {
       }
       return items.join("\n")
     }
+    case "taskList": {
+      const items: string[] = []
+      for (const li of node.content ?? []) {
+        if (li.type !== "taskItem") continue
+        const checked = Boolean(li.attrs?.checked)
+        const mark = checked ? "x" : " "
+        const parts: string[] = []
+        for (const child of li.content ?? []) {
+          if (child.type === "paragraph") {
+            parts.push(serializeInline(child.content))
+          } else {
+            parts.push(serializeBlock(child))
+          }
+        }
+        const body = parts.join("\n").trimEnd()
+        items.push(body ? `- [${mark}] ${body}` : `- [${mark}]`)
+      }
+      return items.join("\n")
+    }
     case "orderedList": {
       const items: string[] = []
       let i = 1
@@ -314,6 +497,8 @@ function serializeBlock(node: JSONContent): string {
       }
       return items.join("\n")
     }
+    case "table":
+      return serializeTable(node)
     case "hardBreak":
       return "\n"
     default:

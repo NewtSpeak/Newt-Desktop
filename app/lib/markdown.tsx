@@ -1,7 +1,9 @@
 // 消息正文的有限 Markdown 解析（docs 05 FR-14/15）。
 //
 // 白名单：粗体 ** / 斜体 * / 删除线 ~~ / 行内代码 ` / 代码块 ``` /
-// 链接（仅 http/https 可点）/ 引用 > / 无序列表 - * / @提及 <@用户ID>。
+// 链接（仅 http/https 可点）/ 引用 > / 无序列表 - * /
+// 检查清单 - [ ] / - [x] / GFM 表格 | ... | /
+// @提及 <@用户ID> / 频道提及 <#频道ID>。
 // 轻量解析器供 TipTap bridge 与工具函数使用；UI 渲染见 TipTapMarkdown。
 
 // ---------------------------------------------------------------------------
@@ -16,14 +18,97 @@ type InlineNode =
   | { kind: "strike"; children: InlineNode[] }
   | { kind: "link"; href: string; label: string }
   | { kind: "mention"; userId: string }
+  /** 频道提及 wire：`<#频道ID>` */
+  | { kind: "channel_mention"; channelId: string }
   /** 自定义小表情 wire：`<e:item_id:mark>`（docs 17） */
   | { kind: "custom_emote"; itemId: string; mark: string }
+
+type TaskListItem = {
+  checked: boolean
+  children: InlineNode[]
+}
+
+/** GFM 表格列对齐 */
+export type TableAlign = "left" | "center" | "right" | null
+
+type TableBlock = {
+  kind: "table"
+  /** 每列对齐；长度 = 列数 */
+  aligns: TableAlign[]
+  /** 表头单元格（行内节点） */
+  header: InlineNode[][]
+  /** 数据行 */
+  rows: InlineNode[][][]
+}
 
 type BlockNode =
   | { kind: "paragraph"; children: InlineNode[] }
   | { kind: "codeblock"; lang: string; code: string }
   | { kind: "quote"; lines: InlineNode[][] }
   | { kind: "list"; items: InlineNode[][] }
+  | { kind: "tasklist"; items: TaskListItem[] }
+  | TableBlock
+
+/** `- [ ] text` / `- [x] text` / `* [X] text` */
+const TASK_LIST_ITEM_RE = /^[-*]\s+\[([ xX])\](?:\s+(.*))?$/
+
+/** 粗略判断是否像表格行（至少一列竖线） */
+function looksLikeTableRow(line: string): boolean {
+  const t = line.trim()
+  if (!t.includes("|")) return false
+  // 避免把单独的 `|` 或代码/普通句中偶发竖线当成表
+  return /^\|?.+\|.+\|?$/.test(t) || /^\|(.+\|)+$/.test(t)
+}
+
+/** 拆分表格行单元格；支持单元格内 `\|` 转义 */
+function splitTableCells(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith("|")) s = s.slice(1)
+  if (s.endsWith("|")) s = s.slice(0, -1)
+
+  const cells: string[] = []
+  let cur = ""
+  let escaped = false
+  for (const ch of s) {
+    if (escaped) {
+      cur += ch
+      escaped = false
+      continue
+    }
+    if (ch === "\\") {
+      escaped = true
+      continue
+    }
+    if (ch === "|") {
+      cells.push(cur.trim())
+      cur = ""
+      continue
+    }
+    cur += ch
+  }
+  if (escaped) cur += "\\"
+  cells.push(cur.trim())
+  return cells
+}
+
+/** `| --- | :---: | ---: |` → 对齐数组；非法则 null */
+function parseTableAlignRow(line: string): TableAlign[] | null {
+  if (!looksLikeTableRow(line)) return null
+  const cells = splitTableCells(line)
+  if (cells.length === 0) return null
+  const aligns: TableAlign[] = []
+  for (const raw of cells) {
+    const c = raw.replace(/\s/g, "")
+    if (!c || !/^:?-+:?$/.test(c)) return null
+    const left = c.startsWith(":")
+    const right = c.endsWith(":")
+    if (left && right) aligns.push("center")
+    else if (right) aligns.push("right")
+    else if (left) aligns.push("left")
+    else aligns.push(null)
+  }
+  return aligns
+}
 
 // ---------------------------------------------------------------------------
 // 行内解析
@@ -31,6 +116,8 @@ type BlockNode =
 
 /** 提及占位（wire format）：<@用户ID>；服务端用户 ID 为 UUID */
 const MENTION_RE = /<@([0-9a-zA-Z-]{1,36})>/
+/** 频道提及（wire）：<#频道ID> */
+const CHANNEL_MENTION_RE = /<#([0-9a-zA-Z-]{1,36})>/
 /** 自定义小表情（docs 17）：<e:item_id:mark> */
 const CUSTOM_EMOTE_RE = /<e:(\d+):([a-zA-Z0-9_]+)>/
 const BARE_URL_RE = /https?:\/\/[^\s<>]+/
@@ -114,6 +201,16 @@ function findEarliest(text: string): InlineMatch | null {
       index: mentionMatch.index,
       length: mentionMatch[0].length,
       node: { kind: "mention", userId: mentionMatch[1] },
+    })
+  }
+
+  // # 频道提及 <#channelId>
+  const channelMentionMatch = CHANNEL_MENTION_RE.exec(text)
+  if (channelMentionMatch) {
+    consider({
+      index: channelMentionMatch.index,
+      length: channelMentionMatch[0].length,
+      node: { kind: "channel_mention", channelId: channelMentionMatch[1]! },
     })
   }
 
@@ -235,10 +332,59 @@ export function parseMarkdown(content: string): BlockNode[] {
       continue
     }
 
+    // GFM 表格：表头 + 分隔行 |---| + 数据行
+    if (
+      looksLikeTableRow(line) &&
+      index + 1 < lines.length &&
+      parseTableAlignRow(lines[index + 1])
+    ) {
+      const headerCells = splitTableCells(line)
+      const alignsRaw = parseTableAlignRow(lines[index + 1])!
+      const colCount = Math.max(headerCells.length, alignsRaw.length)
+      const aligns: TableAlign[] = Array.from({ length: colCount }, (_, i) =>
+        i < alignsRaw.length ? alignsRaw[i]! : null,
+      )
+      const padRow = (cells: string[]): InlineNode[][] =>
+        Array.from({ length: colCount }, (_, i) =>
+          parseInline(i < cells.length ? cells[i]! : ""),
+        )
+
+      const header = padRow(headerCells)
+      const rows: InlineNode[][][] = []
+      let cursor = index + 2
+      while (cursor < lines.length && looksLikeTableRow(lines[cursor])) {
+        // 下一行若是新表的分隔行则停止（极少见）
+        if (parseTableAlignRow(lines[cursor])) break
+        rows.push(padRow(splitTableCells(lines[cursor]!)))
+        cursor++
+      }
+      blocks.push({ kind: "table", aligns, header, rows })
+      index = cursor
+      continue
+    }
+
+    // 检查清单 - [ ] / - [x]（必须先于普通无序列表，避免 [x] 被当纯文本）
+    if (TASK_LIST_ITEM_RE.test(line)) {
+      const items: TaskListItem[] = []
+      while (index < lines.length) {
+        const taskMatch = TASK_LIST_ITEM_RE.exec(lines[index])
+        if (!taskMatch) break
+        items.push({
+          checked: taskMatch[1]!.toLowerCase() === "x",
+          children: parseInline(taskMatch[2] ?? ""),
+        })
+        index++
+      }
+      blocks.push({ kind: "tasklist", items })
+      continue
+    }
+
     // 无序列表 - / *
     if (/^[-*]\s+/.test(line)) {
       const items: InlineNode[][] = []
       while (index < lines.length && /^[-*]\s+/.test(lines[index])) {
+        // 若中途出现检查清单项，结束当前普通列表，留给下一轮 tasklist
+        if (TASK_LIST_ITEM_RE.test(lines[index])) break
         items.push(parseInline(lines[index].replace(/^[-*]\s+/, "")))
         index++
       }
