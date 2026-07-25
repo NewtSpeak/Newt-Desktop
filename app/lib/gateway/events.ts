@@ -24,6 +24,12 @@ export const GatewayEvents = {
   MessageDelete: "MESSAGE_DELETE",
   MessageReactionAdd: "MESSAGE_REACTION_ADD",
   MessageReactionRemove: "MESSAGE_REACTION_REMOVE",
+  /** bot 流式消息：占位创建（messageView，stream_status=STREAMING） */
+  MessageStreamStart: "MESSAGE_STREAM_START",
+  /** bot 流式消息：增量分片 {id, channel_id, guild_id, delta, seq} */
+  MessageStreamDelta: "MESSAGE_STREAM_DELTA",
+  /** bot 流式消息：终态 messageView（同时会补发 MESSAGE_UPDATE） */
+  MessageStreamEnd: "MESSAGE_STREAM_END",
   TypingStart: "TYPING_START",
 
   VoiceStateUpdate: "VOICE_STATE_UPDATE",
@@ -97,6 +103,22 @@ export type GatewayEventName =
 
 export type MessageCreatePayload = Message
 export type MessageUpdatePayload = Message
+
+/** MESSAGE_STREAM_START / MESSAGE_STREAM_END：完整 messageView */
+export type MessageStreamStartPayload = Message
+export type MessageStreamEndPayload = Message
+
+/**
+ * MESSAGE_STREAM_DELTA：按 seq 从 1 递增拼接 delta。
+ * 客户端应忽略重复/过期 seq；缺口可用 REST getMessage 纠偏。
+ */
+export type MessageStreamDeltaPayload = {
+  id: string
+  channel_id: string
+  guild_id: string
+  delta: string
+  seq: number
+}
 
 export type MessageDeletePayload = {
   id: string
@@ -385,6 +407,9 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.MessageDelete]: MessageDeletePayload
   [GatewayEvents.MessageReactionAdd]: MessageReactionPayload
   [GatewayEvents.MessageReactionRemove]: MessageReactionPayload
+  [GatewayEvents.MessageStreamStart]: MessageStreamStartPayload
+  [GatewayEvents.MessageStreamDelta]: MessageStreamDeltaPayload
+  [GatewayEvents.MessageStreamEnd]: MessageStreamEndPayload
   [GatewayEvents.TypingStart]: TypingStartPayload
   [GatewayEvents.VoiceStateUpdate]: VoiceStateUpdatePayload
   [GatewayEvents.VoiceServerUpdate]: VoiceServerUpdatePayload

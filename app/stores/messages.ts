@@ -20,11 +20,22 @@ import {
 } from "~/lib/api/messages"
 import { ApiError, isNotFound } from "~/lib/api/http"
 import type { Message, ReactionSummary } from "~/lib/api/types"
+import {
+  applyStreamDeltasBatch,
+  mergeReconciledStreamMessage,
+  shouldReconcileStreamGap,
+} from "~/lib/message-stream"
+import {
+  forEachStreamBatch,
+  StreamDeltaBatcher,
+  toSeqDeltas,
+} from "~/lib/stream-delta-batcher"
 import { compareSnowflake } from "~/lib/snowflake"
 import { countIdsAfterLastRead, useReadStatesStore } from "./read-states"
 import type {
   MessageDeletePayload,
   MessageReactionPayload,
+  MessageStreamDeltaPayload,
   TypingStartPayload,
 } from "~/lib/gateway/events"
 import { useAuthStore } from "./auth"
@@ -40,6 +51,12 @@ const CACHE_LIMIT = 200
 const TYPING_TTL_MS = 10_000
 /** 断线补缺口的单次上限；补拉打满说明缺口过大，直接清空重拉 */
 const GAP_FILL_LIMIT = 100
+/** 流式缺片 / 未见占位时 REST 纠偏防抖 */
+const STREAM_RECONCILE_DEBOUNCE_MS = 400
+/** 同一消息纠偏最小间隔，避免刷爆 getMessage */
+const STREAM_RECONCILE_COOLDOWN_MS = 2_000
+/** 私信预览随流式正文更新的节流间隔 */
+const STREAM_PREVIEW_THROTTLE_MS = 500
 
 /** 占位反应者 ID 前缀：REST 只给 count/me 时补齐计数，不含真实用户 */
 const UNKNOWN_REACTOR_PREFIX = "__reactor:"
@@ -71,6 +88,21 @@ export type ReactionEntry = {
 /** 客户端消息 = 服务端 messageView，reactions 归一为本地 userIds 结构 */
 export type ChatMessage = Omit<Message, "reactions"> & {
   reactions: ReactionEntry[]
+  /**
+   * 已应用的最大 MESSAGE_STREAM_DELTA.seq（仅本地；REST 不返回）。
+   * 用于去重与乱序缓冲。
+   */
+  streamSeq?: number
+  /**
+   * 乱序到达的 delta 暂存（seq → delta）；连上后按序拼入 content。
+   * 仅 STREAMING 期间使用。
+   */
+  streamPendingDeltas?: Record<number, string>
+  /**
+   * 最近一次流式活动（START/DELTA/REST 纠偏）的本地时间戳 ms。
+   * 用于 UI「生成较慢 / 可能已中断」判定。
+   */
+  streamLastActivityAt?: number
 }
 
 export type PendingAttachmentMeta = {
@@ -174,6 +206,20 @@ type MessagesState = {
   applyReactionAdd: (payload: MessageReactionPayload) => void
   applyReactionRemove: (payload: MessageReactionPayload) => void
   applyTypingStart: (payload: TypingStartPayload) => void
+  /** bot 流式：占位消息创建（等同 create，保留 stream_status） */
+  applyMessageStreamStart: (message: Message) => void
+  /** bot 流式：按 seq 拼接 delta（内部 rAF 批处理） */
+  applyMessageStreamDelta: (payload: MessageStreamDeltaPayload) => void
+  /** bot 流式：终态覆盖（无本地记录时 upsert） */
+  applyMessageStreamEnd: (message: Message) => void
+  /**
+   * 手动 / 自动 REST 纠偏：拉取单条消息覆盖本地正文与 stream_status。
+   * 用于乱序空洞过大或用户点击「刷新」。
+   */
+  reconcileStreamMessage: (
+    channelId: string,
+    messageId: string
+  ) => Promise<void>
 
   reset: () => void
 }
@@ -256,11 +302,159 @@ function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
   } = raw
   // 部分 Gateway payload（如管理员临场发言）可能省略 attachments；
   // 缺字段时保留本地已有列表，否则回落空数组，避免渲染层读 .length 崩溃。
+  const streaming = raw.stream_status === "STREAMING"
   return {
     ...rest,
+    // omitempty 终态不带 stream_status：显式清掉本地 STREAMING
+    stream_status: streaming ? "STREAMING" : raw.stream_status || undefined,
     attachments: rawAttachments ?? previous?.attachments ?? [],
     reactions: hydrateReactions(raw, previous),
+    // 终态 / 非流式：丢弃本地 seq 与乱序缓冲
+    streamSeq: streaming ? previous?.streamSeq : undefined,
+    streamPendingDeltas: streaming ? previous?.streamPendingDeltas : undefined,
+    // 保留本地活动戳（delta 写入）；首见 STREAMING 不伪造 now，idle 回退 created_at
+    streamLastActivityAt: streaming
+      ? previous?.streamLastActivityAt
+      : undefined,
   }
+}
+
+// ---------------------------------------------------------------------------
+// 流式 delta 批处理 + REST 纠偏调度（模块级，跨 store action 共享）
+// ---------------------------------------------------------------------------
+
+const streamReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const streamReconcileCooldownUntil = new Map<string, number>()
+const streamPreviewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function streamReconcileKey(channelId: string, messageId: string): string {
+  return `${channelId}\u0000${messageId}`
+}
+
+function scheduleStreamReconcile(channelId: string, messageId: string) {
+  const key = streamReconcileKey(channelId, messageId)
+  const cooldownUntil = streamReconcileCooldownUntil.get(key) ?? 0
+  if (Date.now() < cooldownUntil) return
+  if (streamReconcileTimers.has(key)) return
+  const timer = setTimeout(() => {
+    streamReconcileTimers.delete(key)
+    streamReconcileCooldownUntil.set(key, Date.now() + STREAM_RECONCILE_COOLDOWN_MS)
+    void useMessagesStore
+      .getState()
+      .reconcileStreamMessage(channelId, messageId)
+      .catch(() => undefined)
+  }, STREAM_RECONCILE_DEBOUNCE_MS)
+  streamReconcileTimers.set(key, timer)
+}
+
+/** 私信侧栏预览：流式正文节流更新（避免每 token 写 private-channels） */
+function scheduleStreamPreview(channelId: string, messageId: string) {
+  const key = streamReconcileKey(channelId, messageId)
+  if (streamPreviewTimers.has(key)) return
+  const timer = setTimeout(() => {
+    streamPreviewTimers.delete(key)
+    const message = useMessagesStore
+      .getState()
+      .byChannel[channelId]?.messages.find((item) => item.id === messageId)
+    if (!message) return
+    void import("./private-channels").then(
+      ({ isDmGuildId, usePrivateChannelsStore }) => {
+        if (!isDmGuildId(message.guild_id)) return
+        usePrivateChannelsStore.getState().noteMessage(channelId, {
+          id: String(message.id),
+          author_id: message.author_id,
+          content: message.content ?? "",
+          type: message.type,
+          created_at: message.created_at,
+        })
+      }
+    )
+  }, STREAM_PREVIEW_THROTTLE_MS)
+  streamPreviewTimers.set(key, timer)
+}
+
+function clearStreamReconcileSchedules() {
+  for (const timer of streamReconcileTimers.values()) clearTimeout(timer)
+  streamReconcileTimers.clear()
+  streamReconcileCooldownUntil.clear()
+  for (const timer of streamPreviewTimers.values()) clearTimeout(timer)
+  streamPreviewTimers.clear()
+}
+
+/** 将批处理队列一次性写入 store（单次 set，减少重渲） */
+function flushStreamDeltaBatches(
+  batches: Map<
+    string,
+    Array<{
+      channelId: string
+      messageId: string
+      seq: number
+      delta: string
+    }>
+  >
+) {
+  const now = Date.now()
+  const needReconcile: Array<{ channelId: string; messageId: string }> = []
+  const needPreview: Array<{ channelId: string; messageId: string }> = []
+
+  useMessagesStore.setState((state) => {
+    let byChannel = state.byChannel
+    let changed = false
+
+    forEachStreamBatch(batches, (channelId, messageId, items) => {
+      const channel = byChannel[channelId] ?? EMPTY_CHANNEL
+      const index = channel.messages.findIndex((item) => item.id === messageId)
+      if (index === -1) {
+        // 本地尚无占位：防抖拉 REST（START 丢失 / 晚到）
+        needReconcile.push({ channelId, messageId })
+        return
+      }
+      const previous = channel.messages[index]
+      // 已收束仍收到迟到 delta：忽略
+      if (previous.stream_status !== "STREAMING") return
+
+      const next = applyStreamDeltasBatch(previous, toSeqDeltas(items), now)
+      if (!next) return
+
+      if (byChannel === state.byChannel) {
+        byChannel = { ...state.byChannel }
+      }
+      // 同一 channel 多次更新时基于最新 byChannel 切片
+      const live = byChannel[channelId] ?? channel
+      const messages = live.messages.slice()
+      const liveIndex = messages.findIndex((item) => item.id === messageId)
+      if (liveIndex === -1) return
+      messages[liveIndex] = next
+      byChannel[channelId] = { ...live, messages }
+      changed = true
+
+      needPreview.push({ channelId, messageId })
+      if (shouldReconcileStreamGap(next)) {
+        needReconcile.push({ channelId, messageId })
+      }
+    })
+
+    if (!changed) return state
+    return { byChannel }
+  })
+
+  for (const item of needPreview) {
+    scheduleStreamPreview(item.channelId, item.messageId)
+  }
+  for (const item of needReconcile) {
+    scheduleStreamReconcile(item.channelId, item.messageId)
+  }
+}
+
+const streamDeltaBatcher = new StreamDeltaBatcher(flushStreamDeltaBatches)
+
+/** REST 纠偏：normalize 服务端视图 + 与本地竞态安全合并 */
+function mergeReconciledStream(
+  previous: ChatMessage | undefined,
+  remote: Message
+): ChatMessage {
+  const base = normalize(remote, previous)
+  return mergeReconciledStreamMessage(previous, base)
 }
 
 /** 合并进有序数组：按 ID 去重（保留新数据、合并 reactions），恒升序 */
@@ -768,9 +962,41 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
     },
 
     applyMessageUpdate: (message) => {
-      updateMessage(message.channel_id, message.id, (previous) =>
-        normalize(message, previous)
-      )
+      // 流式终态会补发 MESSAGE_UPDATE；若本地从未处理 START（旧客户端/乱序），
+      // 仅 update 会静默丢消息——改为不存在时 upsert。
+      set((state) => {
+        const channel = channelState(state, message.channel_id)
+        const index = channel.messages.findIndex(
+          (item) => item.id === message.id
+        )
+        if (index === -1) {
+          const messages = mergeSorted(channel.messages, [message])
+          let reachedStart = channel.reachedStart
+          let nextMessages = messages
+          if (nextMessages.length > CACHE_LIMIT) {
+            nextMessages = nextMessages.slice(-CACHE_LIMIT)
+            reachedStart = false
+          }
+          return {
+            byChannel: {
+              ...state.byChannel,
+              [message.channel_id]: {
+                ...channel,
+                messages: nextMessages,
+                reachedStart,
+              },
+            },
+          }
+        }
+        const messages = channel.messages.slice()
+        messages[index] = normalize(message, messages[index])
+        return {
+          byChannel: {
+            ...state.byChannel,
+            [message.channel_id]: { ...channel, messages },
+          },
+        }
+      })
     },
 
     applyMessageDelete: (payload) => {
@@ -853,7 +1079,101 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       }))
     },
 
-    reset: () =>
-      set({ byChannel: {}, pendingByChannel: {}, typingByChannel: {} }),
+    // 流式占位：与 CREATE 同路径（按 id 幂等插入）；normalize 会打 streamLastActivityAt。
+    applyMessageStreamStart: (message) => {
+      get().applyMessageCreate({
+        ...message,
+        stream_status: message.stream_status || "STREAMING",
+      })
+    },
+
+    applyMessageStreamDelta: (payload) => {
+      const seq = Number(payload.seq)
+      const delta = payload.delta ?? ""
+      if (!Number.isFinite(seq) || seq < 1 || delta === "") return
+      streamDeltaBatcher.enqueue({
+        channelId: payload.channel_id,
+        messageId: payload.id,
+        seq,
+        delta,
+      })
+    },
+
+    applyMessageStreamEnd: (message) => {
+      // 先冲刷未写出的 delta，再覆盖终态，避免末尾丢字
+      streamDeltaBatcher.flushNow()
+      get().applyMessageUpdate({
+        ...message,
+        stream_status: "",
+      })
+    },
+
+    reconcileStreamMessage: async (channelId, messageId) => {
+      // 请求前冲刷：尽量带上已到本地的 delta
+      streamDeltaBatcher.flushNow()
+      try {
+        const remote = await getMessage(channelId, messageId)
+        // 请求返回后再冲刷一次：合并往返期间到达的 delta，再与 REST 竞态合并
+        streamDeltaBatcher.flushNow()
+        const previous = get().byChannel[channelId]?.messages.find(
+          (item) => item.id === messageId
+        )
+        const merged = mergeReconciledStream(previous, remote)
+        set((state) => {
+          const channel = channelState(state, channelId)
+          const index = channel.messages.findIndex(
+            (item) => item.id === messageId
+          )
+          if (index === -1) {
+            let nextMessages = mergeSorted(channel.messages, [remote])
+            nextMessages = nextMessages.map((item) =>
+              item.id === messageId
+                ? mergeReconciledStream(undefined, remote)
+                : item
+            )
+            let reachedStart = channel.reachedStart
+            if (nextMessages.length > CACHE_LIMIT) {
+              nextMessages = nextMessages.slice(-CACHE_LIMIT)
+              reachedStart = false
+            }
+            return {
+              byChannel: {
+                ...state.byChannel,
+                [channelId]: {
+                  ...channel,
+                  messages: nextMessages,
+                  reachedStart,
+                },
+              },
+            }
+          }
+          const messages = channel.messages.slice()
+          messages[index] = merged
+          return {
+            byChannel: {
+              ...state.byChannel,
+              [channelId]: { ...channel, messages },
+            },
+          }
+        })
+        // 纠偏后刷新私信预览（终态或累计正文）
+        scheduleStreamPreview(channelId, messageId)
+      } catch (error) {
+        // 404：消息已删或不存在，静默
+        if (
+          isNotFound(error) ||
+          (error instanceof ApiError && error.status === 404)
+        ) {
+          return
+        }
+        throw error
+      }
+    },
+
+    reset: () => {
+      streamDeltaBatcher.clear()
+      clearStreamReconcileSchedules()
+      set({ byChannel: {}, pendingByChannel: {}, typingByChannel: {} })
+    },
   }
 })

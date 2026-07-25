@@ -2,18 +2,27 @@
 // 右键菜单（复制/回复/编辑/撤回/反应/复制 ID）、反应胶囊、内联编辑态、
 // 回复引用摘要、(已编辑) 标记、本人被提及高亮。
 
-import { memo, useEffect, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   AtSignIcon,
   CopyIcon,
   CornerUpLeftIcon,
   CrownIcon,
   HashIcon,
+  HistoryIcon,
   LinkIcon,
   PencilIcon,
   ReplyIcon,
   SmilePlusIcon,
   Trash2Icon,
+  Volume2Icon,
 } from "lucide-react"
 
 import { AdminMemberMenuSection } from "~/components/admin/admin-member-menu"
@@ -37,6 +46,8 @@ import {
   isGroupDmSystemMessage,
   MESSAGE_TYPE_STICKER,
   MESSAGE_TYPE_SYSTEM_ADMIN,
+  type Channel,
+  type GuildMember,
 } from "~/lib/api/types"
 import { ApiError } from "~/lib/api/http"
 import { copyText } from "~/lib/clipboard"
@@ -45,23 +56,55 @@ import {
   type MentionResolver,
 } from "~/lib/markdown"
 import { memberRoleBadges, resolveMemberNameStyle } from "~/lib/name-style"
+import { hasPermission, Permissions } from "~/lib/permissions"
 import {
   customReactionKey,
   isCustomReactionKey,
   parseCustomReactionItemId,
 } from "~/lib/stickers/format"
 import { RoleBadgePills, StyledDisplayName } from "~/components/styled-name"
-import { resolveProfileAssetUrl } from "~/lib/user-display"
+import {
+  memberDisplayName,
+  nameInitials,
+  resolveProfileAssetUrl,
+} from "~/lib/user-display"
 import { useAuthStore } from "~/stores/auth"
+import { useChannelsStore } from "~/stores/channels"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
-import { useRolesStore } from "~/stores/roles"
+import {
+  memberGuildPermissions,
+  useRolesStore,
+} from "~/stores/roles"
 import { useStickersStore } from "~/stores/stickers"
 import { cn } from "~/lib/utils"
 import { MessageAttachments } from "./attachments"
+import {
+  TipTapComposerEditor,
+  type ComposerAtQuery,
+  type TipTapComposerHandle,
+} from "./composer-tiptap"
 import { CustomEmoteImg, StickerMessageBody } from "./custom-emote"
+import { EditHistoryDialog } from "./edit-history-dialog"
 import { EmojiPickerPopover, type ExpressionPick } from "./emoji-picker"
+import { streamIdleLevel } from "~/lib/message-stream"
+import { MessageCard } from "./message-card"
 import { MessageContent } from "./message-content"
+
+/** AS.5：作者 / MANAGE_MESSAGES / 系统管理员可看完整编辑历史 */
+function canViewMessageEditHistory(opts: {
+  isOwn: boolean
+  systemAdmin: boolean
+  guildPerms: bigint
+  editCount: number
+}): boolean {
+  if ((opts.editCount ?? 0) <= 0) return false
+  if (opts.systemAdmin || opts.isOwn) return true
+  return (
+    hasPermission(opts.guildPerms, Permissions.MANAGE_MESSAGES) ||
+    hasPermission(opts.guildPerms, Permissions.ADMINISTRATOR)
+  )
+}
 
 // ---------------------------------------------------------------------------
 // 时间格式
@@ -305,36 +348,131 @@ function ReactionPills({
 }
 
 // ---------------------------------------------------------------------------
-// 内联编辑框
+// 内联编辑框（TipTap：支持 # 频道链接 / @ 提及，与底部 Composer 一致）
 // ---------------------------------------------------------------------------
+
+function filterEditMembers(
+  members: GuildMember[],
+  query: string,
+): GuildMember[] {
+  const lowered = query.toLowerCase()
+  return members
+    .filter((member) => {
+      const name = memberDisplayName(member).toLowerCase()
+      return (
+        name.includes(lowered) ||
+        member.username.toLowerCase().includes(lowered) ||
+        (member.nickname ?? "").toLowerCase().includes(lowered) ||
+        (member.display_name ?? "").toLowerCase().includes(lowered)
+      )
+    })
+    .slice(0, 8)
+}
+
+function filterEditChannels(channels: Channel[], query: string): Channel[] {
+  const lowered = query.toLowerCase()
+  return channels
+    .filter((ch) => ch.type === "TEXT" || ch.type === "VOICE")
+    .filter((ch) => !lowered || ch.name.toLowerCase().includes(lowered))
+    .slice(0, 8)
+}
 
 function InlineEditor({
   channelId,
+  guildId,
   message,
+  resolveName,
   onDone,
 }: {
   channelId: string
+  guildId?: string
   message: ChatMessage
+  resolveName: MentionResolver
   onDone: () => void
 }) {
   const edit = useMessagesStore((state) => state.edit)
+  const gid = guildId ?? message.guild_id ?? ""
+  const members = useMembersStore((s) => s.byGuild[gid]) ?? []
+  const guildChannels = useChannelsStore((s) => s.byGuild[gid]) ?? []
+
   const [value, setValue] = useState(message.content)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const ref = useRef<HTMLTextAreaElement>(null)
+  const [mention, setMention] = useState<ComposerAtQuery | null>(null)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const tipTapRef = useRef<TipTapComposerHandle | null>(null)
 
-  useEffect(() => {
-    const textarea = ref.current
-    if (textarea) {
-      textarea.focus()
-      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-      textarea.style.height = "auto"
-      textarea.style.height = `${textarea.scrollHeight}px`
-    }
+  const mentionCandidates = useMemo(
+    () =>
+      mention?.kind === "mention"
+        ? filterEditMembers(members, mention.query)
+        : [],
+    [mention, members],
+  )
+  const channelCandidates = useMemo(
+    () =>
+      mention?.kind === "channel"
+        ? filterEditChannels(guildChannels, mention.query)
+        : [],
+    [mention, guildChannels],
+  )
+  const activeCount =
+    mention?.kind === "channel"
+      ? channelCandidates.length
+      : mentionCandidates.length
+  const mentionOpen = Boolean(mention && activeCount > 0)
+
+  const onMentionQuery = useCallback((query: ComposerAtQuery | null) => {
+    setMention(query)
+    if (query) setMentionIndex(0)
   }, [])
 
+  const insertMention = useCallback(
+    (member: GuildMember) => {
+      if (!mention || mention.kind !== "mention") return
+      const handle = tipTapRef.current
+      if (!handle) return
+      const queryLen = mention.query.length + 1
+      const already = handle.getMarkdown().includes(`<@${member.user_id}>`)
+      if (already) handle.deleteBeforeCaret(queryLen)
+      else {
+        handle.insertMention(
+          member.user_id,
+          memberDisplayName(member) || member.username,
+          queryLen,
+        )
+      }
+      setMention(null)
+      requestAnimationFrame(() => handle.focus())
+    },
+    [mention],
+  )
+
+  const insertChannelMention = useCallback(
+    (channel: Channel) => {
+      if (!mention || mention.kind !== "channel") return
+      if (channel.type !== "TEXT" && channel.type !== "VOICE") return
+      const handle = tipTapRef.current
+      if (!handle) return
+      const queryLen = mention.query.length + 1
+      const already = handle.getMarkdown().includes(`<#${channel.id}>`)
+      if (already) handle.deleteBeforeCaret(queryLen)
+      else {
+        handle.insertChannelMention(
+          channel.id,
+          channel.name,
+          channel.type,
+          queryLen,
+        )
+      }
+      setMention(null)
+      requestAnimationFrame(() => handle.focus())
+    },
+    [mention],
+  )
+
   const save = async () => {
-    const content = value.trim()
+    const content = (tipTapRef.current?.getMarkdown() ?? value).trim()
     if (content === "" && (message.attachments?.length ?? 0) === 0) return
     if (content === message.content) {
       onDone()
@@ -351,37 +489,448 @@ function InlineEditor({
     }
   }
 
+  const onKeyDownCapture = (event: React.KeyboardEvent) => {
+    if (!mention || activeCount === 0) return
+    if (event.key === "ArrowDown") {
+      event.preventDefault()
+      event.stopPropagation()
+      setMentionIndex((i) => (i + 1) % activeCount)
+      return
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault()
+      event.stopPropagation()
+      setMentionIndex((i) => (i - 1 + activeCount) % activeCount)
+      return
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault()
+      event.stopPropagation()
+      if (mention.kind === "channel") {
+        const ch = channelCandidates[mentionIndex]
+        if (ch) insertChannelMention(ch)
+      } else {
+        const m = mentionCandidates[mentionIndex]
+        if (m) insertMention(m)
+      }
+      return
+    }
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      setMention(null)
+    }
+  }
+
   return (
-    <div className="mt-0.5">
-      <textarea
-        ref={ref}
-        value={value}
-        disabled={saving}
-        onChange={(event) => {
-          setValue(event.target.value)
-          event.target.style.height = "auto"
-          event.target.style.height = `${event.target.scrollHeight}px`
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault()
-            void save()
-          } else if (event.key === "Escape") {
-            event.preventDefault()
+    <div className="relative mt-0.5" onKeyDownCapture={onKeyDownCapture}>
+      {mention?.kind === "mention" && mentionCandidates.length > 0 && (
+        <div className="absolute bottom-full left-0 z-30 mb-1 w-72 rounded-lg border bg-popover p-1 shadow-lg">
+          <p className="px-2 py-1 text-xs text-muted-foreground select-none">
+            成员
+          </p>
+          {mentionCandidates.map((member, index) => {
+            const name = memberDisplayName(member)
+            const avatar = resolveProfileAssetUrl(member.avatar_url)
+            return (
+              <button
+                key={member.user_id}
+                type="button"
+                onMouseEnter={() => setMentionIndex(index)}
+                onClick={() => insertMention(member)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  index === mentionIndex && "bg-muted",
+                )}
+              >
+                {avatar ? (
+                  <img
+                    src={avatar}
+                    alt=""
+                    className="size-6 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">
+                    {nameInitials(name)}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {name}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {mention?.kind === "channel" && channelCandidates.length > 0 && (
+        <div className="absolute bottom-full left-0 z-30 mb-1 w-72 rounded-lg border bg-popover p-1 shadow-lg">
+          <p className="px-2 py-1 text-xs text-muted-foreground select-none">
+            链接到频道
+          </p>
+          {channelCandidates.map((channel, index) => {
+            const isVoice = channel.type === "VOICE"
+            return (
+              <button
+                key={channel.id}
+                type="button"
+                onMouseEnter={() => setMentionIndex(index)}
+                onClick={() => insertChannelMention(channel)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  index === mentionIndex && "bg-muted",
+                )}
+              >
+                {isVoice ? (
+                  <Volume2Icon className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <HashIcon className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {channel.name}
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {isVoice ? "语音" : "文字"}
+                  {channel.locked ? " · 上锁" : ""}
+                </span>
+              </button>
+            )
+          })}
+          <p className="px-2 pt-1 pb-0.5 text-[10px] text-muted-foreground/80 select-none">
+            回车链接 · Esc 保持纯文本 #
+          </p>
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-lg border bg-muted/40">
+        <TipTapComposerEditor
+          channelId={channelId}
+          channelName=""
+          variant="inline-edit"
+          hideToolbar
+          initialMarkdown={message.content}
+          disabled={saving}
+          onChange={setValue}
+          onSubmit={() => void save()}
+          onEditLast={() => undefined}
+          onEscapeReply={() => {
+            if (mentionOpen) {
+              setMention(null)
+              return
+            }
             onDone()
-          }
-        }}
-        rows={1}
-        maxLength={4000}
-        className="w-full resize-none rounded-lg border bg-muted/40 px-3 py-2 text-sm outline-none focus:border-ring"
-        aria-label="编辑消息"
-      />
-      <p className="mt-0.5 text-xs text-muted-foreground">
-        Esc <span className="text-foreground/70">取消</span> · Enter{" "}
-        <span className="text-foreground/70">保存</span>
-        {error && <span className="ml-2 text-destructive">{error}</span>}
-      </p>
+          }}
+          onMentionQuery={onMentionQuery}
+          mentionOpen={mentionOpen}
+          editorRef={tipTapRef}
+          resolveMentionLabel={resolveName}
+          placeholder="编辑消息… 输入 # 可链接频道"
+        />
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={saving}
+          title="Esc"
+          onClick={() => {
+            setMention(null)
+            onDone()
+          }}
+          className={cn(
+            "inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium",
+            "text-muted-foreground transition-colors",
+            "hover:bg-muted hover:text-foreground",
+            "disabled:pointer-events-none disabled:opacity-50",
+          )}
+        >
+          取消
+          <kbd className="ml-1.5 rounded bg-muted px-1 py-px text-[10px] font-normal text-muted-foreground">
+            Esc
+          </kbd>
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          title="Enter"
+          onClick={() => void save()}
+          className={cn(
+            "inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium",
+            "bg-primary text-primary-foreground transition-colors",
+            "hover:bg-primary/90",
+            "disabled:pointer-events-none disabled:opacity-50",
+          )}
+        >
+          {saving ? "保存中…" : "保存"}
+          {!saving && (
+            <kbd className="ml-1.5 rounded bg-primary-foreground/15 px-1 py-px text-[10px] font-normal">
+              Enter
+            </kbd>
+          )}
+        </button>
+        <span className="text-[11px] text-muted-foreground select-none">
+          输入 <span className="font-medium text-foreground/70">#</span>{" "}
+          可链接频道
+        </span>
+        {error && (
+          <span className="text-xs text-destructive" role="alert">
+            {error}
+          </span>
+        )}
+      </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 消息流正文（信息流 / 撤回预览共用，保证渲染完全一致）
+// ---------------------------------------------------------------------------
+
+function MessageStreamBody({
+  message,
+  resolveName,
+  resolveAvatarUrl,
+  selfId,
+  guildId,
+  /** 撤回预览等场景可隐藏「(已编辑)」角标 */
+  showEdited = true,
+}: {
+  message: ChatMessage
+  resolveName: MentionResolver
+  resolveAvatarUrl?: (userId: string) => string | undefined
+  selfId?: string
+  guildId?: string
+  showEdited?: boolean
+}) {
+  const gId = guildId ?? message.guild_id
+  const streaming = message.stream_status === "STREAMING"
+  const hasContent = Boolean(message.content?.trim())
+  const hasCard = message.card != null && message.card !== ""
+  const stickers = message.sticker_items ?? []
+  const showStickers =
+    message.type === MESSAGE_TYPE_STICKER || stickers.length > 0
+  const hasAttachments = (message.attachments?.length ?? 0) > 0
+  const reconcileStreamMessage = useMessagesStore(
+    (state) => state.reconcileStreamMessage
+  )
+  const [refreshing, setRefreshing] = useState(false)
+  // 流式空闲检测：每 5s 重算 slow/stale，避免每条 delta 都挂 interval
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!streaming) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 5_000)
+    return () => window.clearInterval(timer)
+  }, [streaming, message.streamLastActivityAt])
+
+  const idleLevel = useMemo(
+    () => streamIdleLevel(message, now),
+    [message, now]
+  )
+
+  const onRefreshStream = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      await reconcileStreamMessage(message.channel_id, message.id)
+    } catch {
+      // 失败静默；用户可再点
+    } finally {
+      setRefreshing(false)
+    }
+  }, [
+    refreshing,
+    reconcileStreamMessage,
+    message.channel_id,
+    message.id,
+  ])
+
+  return (
+    <div
+      className="min-w-0"
+      data-stream-status={streaming ? "STREAMING" : undefined}
+      data-stream-idle={streaming ? idleLevel : undefined}
+    >
+      <div
+        className="text-sm"
+        // 流式生成中：礼貌播报正文增长，避免 assertive 打断用户
+        aria-live={streaming ? "polite" : undefined}
+        aria-busy={streaming && idleLevel === "active" ? true : undefined}
+        aria-relevant={streaming ? "additions text" : undefined}
+      >
+        {hasContent ? (
+          <span className="inline-block w-full align-top">
+            <MessageContent
+              content={message.content}
+              resolveMention={resolveName}
+              resolveMentionAvatar={resolveAvatarUrl}
+              selfId={selfId}
+              guildId={gId}
+            />
+            {streaming && idleLevel === "active" ? (
+              <span
+                className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 animate-pulse rounded-sm bg-foreground/70 align-baseline"
+                aria-hidden
+                title="生成中"
+              />
+            ) : null}
+          </span>
+        ) : streaming && idleLevel === "active" ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-muted-foreground"
+            role="status"
+          >
+            <span
+              className="inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-foreground/50"
+              aria-hidden
+            />
+            生成中…
+          </span>
+        ) : null}
+        {showStickers
+          ? stickers.map((ref) => (
+              <StickerMessageBody
+                key={ref.item_id}
+                itemId={ref.item_id}
+                packId={ref.pack_id}
+                mark={ref.mark}
+                assetUrl={ref.asset_url}
+                onOpenPack={(packId, itemId) =>
+                  useStickersStore.getState().openPackPreview(packId, {
+                    itemId,
+                    guildId: gId,
+                  })
+                }
+              />
+            ))
+          : null}
+        {showEdited && !streaming && message.edit_count > 0 ? (
+          <span
+            className="ml-1 align-baseline text-[10px] text-muted-foreground select-none tabular-nums"
+            title={`已编辑 ×${message.edit_count}${message.edited_at ? `，最后编辑 ${fullTime(message.edited_at)}` : ""}`}
+          >
+            (已编辑)
+          </span>
+        ) : null}
+      </div>
+      {streaming && idleLevel !== "active" ? (
+        <div
+          className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground"
+          role="status"
+        >
+          <span>
+            {idleLevel === "stale"
+              ? "生成可能已中断"
+              : "生成较慢，仍在等待…"}
+          </span>
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+            disabled={refreshing}
+            aria-label="从服务器刷新流式消息内容"
+            onClick={() => void onRefreshStream()}
+          >
+            {refreshing ? "刷新中…" : "刷新内容"}
+          </button>
+        </div>
+      ) : null}
+      {hasCard ? <MessageCard card={message.card} /> : null}
+      <MessageAttachments attachments={message.attachments} />
+      {!hasContent &&
+      !streaming &&
+      !hasCard &&
+      !showStickers &&
+      !hasAttachments ? (
+        <span className="text-sm text-muted-foreground">（无内容）</span>
+      ) : null}
+    </div>
+  )
+}
+
+/** 撤回确认：预览区与信息流正文同组件，无描边/边框 */
+function DeleteMessageConfirmDialog({
+  open,
+  onOpenChange,
+  message,
+  isOwn,
+  error,
+  onConfirm,
+  resolveName,
+  resolveAvatarUrl,
+  selfId,
+  guildId,
+  displayName,
+  authorStyle,
+  authorBadges,
+  systemAdmin,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  message: ChatMessage
+  isOwn: boolean
+  error: string | null
+  onConfirm: () => void
+  resolveName: MentionResolver
+  resolveAvatarUrl?: (userId: string) => string | undefined
+  selfId?: string
+  guildId?: string
+  displayName: string
+  authorStyle?: ReturnType<typeof resolveMemberNameStyle> | null
+  authorBadges?: ReturnType<typeof memberRoleBadges>
+  systemAdmin?: boolean
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>撤回消息</DialogTitle>
+          <DialogDescription>
+            确定要撤回这条消息吗？撤回后所有人将无法再看到，此操作无法撤销。
+            {!isOwn && (
+              <span className="mt-1 block text-amber-600 dark:text-amber-400">
+                你正在撤回他人消息，该操作将被记录。
+              </span>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        {/* 与信息流一致：无 border / outline / ring，仅可滚动 */}
+        <div className="max-h-56 min-w-0 overflow-y-auto outline-none ring-0">
+          <p className="mb-0.5 flex min-w-0 items-center gap-1.5 leading-5">
+            <StyledDisplayName
+              name={displayName}
+              style={systemAdmin ? null : authorStyle ?? null}
+              className="truncate text-sm font-semibold"
+            />
+            {systemAdmin ? (
+              <SystemAdminBadge />
+            ) : authorBadges && authorBadges.length > 0 ? (
+              <RoleBadgePills badges={authorBadges} />
+            ) : null}
+            <span
+              className="shrink-0 text-xs text-muted-foreground"
+              title={fullTime(message.created_at)}
+            >
+              {groupTime(message.created_at)}
+            </span>
+          </p>
+          <MessageStreamBody
+            message={message}
+            resolveName={resolveName}
+            resolveAvatarUrl={resolveAvatarUrl}
+            selfId={selfId}
+            guildId={guildId}
+          />
+        </div>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+          <Button variant="destructive" onClick={onConfirm}>
+            撤回消息
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -394,6 +943,13 @@ function HoverActions({
   channelId,
   guildId,
   isOwn,
+  displayName,
+  authorStyle,
+  authorBadges,
+  systemAdmin,
+  resolveName,
+  resolveAvatarUrl,
+  selfId,
   onReply,
   onEdit,
 }: {
@@ -401,6 +957,13 @@ function HoverActions({
   channelId: string
   guildId?: string
   isOwn: boolean
+  displayName: string
+  authorStyle?: ReturnType<typeof resolveMemberNameStyle> | null
+  authorBadges?: ReturnType<typeof memberRoleBadges>
+  systemAdmin?: boolean
+  resolveName: MentionResolver
+  resolveAvatarUrl?: (userId: string) => string | undefined
+  selfId?: string
   onReply: () => void
   onEdit: () => void
 }) {
@@ -493,42 +1056,22 @@ function HoverActions({
         </button>
       </div>
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>撤回消息</DialogTitle>
-            <DialogDescription>
-              确定要撤回这条消息吗？撤回后所有人将无法再看到，此操作无法撤销。
-              {!isOwn && (
-                <span className="mt-1 block text-amber-600 dark:text-amber-400">
-                  你正在撤回他人消息，该操作将被记录。
-                </span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-32 overflow-y-auto rounded-lg border bg-muted/40 px-3 py-2 text-sm">
-            <span className="font-medium">{message.author_username}：</span>
-            {message.content ? (
-              <span className="break-words whitespace-pre-wrap">
-                {message.content}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">[附件消息]</span>
-            )}
-          </div>
-          {deleteError && (
-            <p className="text-sm text-destructive">{deleteError}</p>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
-              取消
-            </Button>
-            <Button variant="destructive" onClick={() => void doDelete()}>
-              撤回消息
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteMessageConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        message={message}
+        isOwn={isOwn}
+        error={deleteError}
+        onConfirm={() => void doDelete()}
+        resolveName={resolveName}
+        resolveAvatarUrl={resolveAvatarUrl}
+        selfId={selfId}
+        guildId={guildId}
+        displayName={displayName}
+        authorStyle={authorStyle}
+        authorBadges={authorBadges}
+        systemAdmin={systemAdmin}
+      />
     </>
   )
 }
@@ -691,6 +1234,7 @@ export const MessageRow = memo(function MessageRow({
   const systemAdmin = isSystemAdminMessage(message.type)
   const groupSystem = isGroupDmSystemMessage(message.type)
   const selfUser = useAuthStore((state) => state.user)
+  const viewerIsSystemAdmin = Boolean(selfUser?.system_admin)
   const displayName =
     resolveName(message.author_id) ||
     message.author_username ||
@@ -701,14 +1245,30 @@ export const MessageRow = memo(function MessageRow({
   const toggleReaction = useMessagesStore((state) => state.toggleReaction)
   const [ctxDeleteOpen, setCtxDeleteOpen] = useState(false)
   const [ctxDeleteError, setCtxDeleteError] = useState<string | null>(null)
+  const [editHistoryOpen, setEditHistoryOpen] = useState(false)
   const authorMember = useMembersStore((state) =>
     guildId
       ? state.byGuild[guildId]?.find((m) => m.user_id === message.author_id)
       : undefined
   )
+  const selfMember = useMembersStore((state) =>
+    guildId && selfId
+      ? state.byGuild[guildId]?.find((m) => m.user_id === selfId)
+      : undefined
+  )
   const roles = useRolesStore((state) =>
     guildId ? state.byGuild[guildId] : undefined
   )
+  const selfGuildPerms = useMemo(
+    () => memberGuildPermissions(selfMember, roles),
+    [selfMember, roles],
+  )
+  const showEditHistory = canViewMessageEditHistory({
+    isOwn,
+    systemAdmin: viewerIsSystemAdmin,
+    guildPerms: selfGuildPerms,
+    editCount: message.edit_count ?? 0,
+  })
   // 临场发言不套角色色/角色徽章，统一皇冠 + 固定中文徽章
   const authorStyle = systemAdmin
     ? null
@@ -795,6 +1355,14 @@ export const MessageRow = memo(function MessageRow({
               ) : (
                 <RoleBadgePills badges={authorBadges} />
               )}
+              {message.author_is_bot ? (
+                <span
+                  className="shrink-0 rounded bg-primary/15 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-primary"
+                  title="机器人"
+                >
+                  BOT
+                </span>
+              ) : null}
               <span
                 className="shrink-0 text-xs text-muted-foreground"
                 title={fullTime(message.created_at)}
@@ -806,50 +1374,20 @@ export const MessageRow = memo(function MessageRow({
           {editing ? (
             <InlineEditor
               channelId={channelId}
+              guildId={guildId ?? message.guild_id}
               message={message}
+              resolveName={resolveName}
               onDone={onStopEdit}
             />
           ) : (
-            <div className="text-sm">
-              {message.content && (
-                <span className="inline-block w-full align-top">
-                  <MessageContent
-                    content={message.content}
-                    resolveMention={resolveName}
-                    resolveMentionAvatar={resolveAvatarUrl}
-                    selfId={selfId}
-                    guildId={guildId ?? message.guild_id}
-                  />
-                </span>
-              )}
-              {(message.type === MESSAGE_TYPE_STICKER ||
-                (message.sticker_items?.length ?? 0) > 0) &&
-                message.sticker_items?.map((ref) => (
-                  <StickerMessageBody
-                    key={ref.item_id}
-                    itemId={ref.item_id}
-                    packId={ref.pack_id}
-                    mark={ref.mark}
-                    assetUrl={ref.asset_url}
-                    onOpenPack={(packId, itemId) =>
-                      useStickersStore.getState().openPackPreview(packId, {
-                        itemId,
-                        guildId: guildId ?? message.guild_id,
-                      })
-                    }
-                  />
-                ))}
-              {message.edit_count > 0 && (
-                <span
-                  className="ml-1 align-baseline text-[10px] text-muted-foreground select-none tabular-nums"
-                  title={`已编辑 ×${message.edit_count}${message.edited_at ? `，最后编辑 ${fullTime(message.edited_at)}` : ""}`}
-                >
-                  (已编辑)
-                </span>
-              )}
-            </div>
+            <MessageStreamBody
+              message={message}
+              resolveName={resolveName}
+              resolveAvatarUrl={resolveAvatarUrl}
+              selfId={selfId}
+              guildId={guildId ?? message.guild_id}
+            />
           )}
-          <MessageAttachments attachments={message.attachments} />
           <ReactionPills
             message={message}
             channelId={channelId}
@@ -864,6 +1402,13 @@ export const MessageRow = memo(function MessageRow({
           channelId={channelId}
           guildId={guildId ?? message.guild_id}
           isOwn={isOwn}
+          displayName={displayName}
+          authorStyle={authorStyle}
+          authorBadges={authorBadges}
+          systemAdmin={systemAdmin}
+          resolveName={resolveName}
+          resolveAvatarUrl={resolveAvatarUrl}
+          selfId={selfId}
           onReply={() => onReply(message)}
           onEdit={() => onStartEdit(message.id)}
         />
@@ -896,6 +1441,15 @@ export const MessageRow = memo(function MessageRow({
               编辑消息
             </ContextMenuItem>
           )}
+          {showEditHistory ? (
+            <ContextMenuItem onClick={() => setEditHistoryOpen(true)}>
+              <HistoryIcon />
+              查看编辑历史
+              <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                ×{message.edit_count}
+              </span>
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem
             onClick={() =>
               void toggleReaction(channelId, message.id, "👍").catch(
@@ -952,42 +1506,35 @@ export const MessageRow = memo(function MessageRow({
         </ContextMenuContent>
       </ContextMenu>
 
-      <Dialog open={ctxDeleteOpen} onOpenChange={setCtxDeleteOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>撤回消息</DialogTitle>
-            <DialogDescription>
-              确定要撤回这条消息吗？撤回后所有人将无法再看到，此操作无法撤销。
-              {!isOwn && (
-                <span className="mt-1 block text-amber-600 dark:text-amber-400">
-                  你正在撤回他人消息，该操作将被记录。
-                </span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-32 overflow-y-auto rounded-lg border bg-muted/40 px-3 py-2 text-sm">
-            <span className="font-medium">{message.author_username}：</span>
-            {message.content ? (
-              <span className="break-words whitespace-pre-wrap">
-                {message.content}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">[附件消息]</span>
-            )}
-          </div>
-          {ctxDeleteError && (
-            <p className="text-sm text-destructive">{ctxDeleteError}</p>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCtxDeleteOpen(false)}>
-              取消
-            </Button>
-            <Button variant="destructive" onClick={() => void doDelete()}>
-              撤回消息
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteMessageConfirmDialog
+        open={ctxDeleteOpen}
+        onOpenChange={setCtxDeleteOpen}
+        message={message}
+        isOwn={isOwn}
+        error={ctxDeleteError}
+        onConfirm={() => void doDelete()}
+        resolveName={resolveName}
+        resolveAvatarUrl={resolveAvatarUrl}
+        selfId={selfId}
+        guildId={guildId ?? message.guild_id}
+        displayName={displayName}
+        authorStyle={authorStyle}
+        authorBadges={authorBadges}
+        systemAdmin={systemAdmin}
+      />
+
+      {showEditHistory ? (
+        <EditHistoryDialog
+          open={editHistoryOpen}
+          onOpenChange={setEditHistoryOpen}
+          channelId={channelId}
+          message={message}
+          resolveName={resolveName}
+          resolveAvatarUrl={resolveAvatarUrl}
+          selfId={selfId}
+          guildId={guildId ?? message.guild_id}
+        />
+      ) : null}
     </>
   )
 })

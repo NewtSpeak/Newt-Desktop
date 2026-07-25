@@ -88,6 +88,11 @@ export type Guild = {
   /** 多 banner 列表（position 升序）；列表/READY/GUILD_UPDATE 可携带 */
   banners?: GuildBanner[]
   /**
+   * 默认着陆文字频道 id（进服且未选频道时优先打开）。
+   * null/缺省 = 未配置，客户端回退到侧栏第一个可见 TEXT 频道。
+   */
+  default_channel_id?: string | null
+  /**
    * 归属账号 id（客户端多账号字段，非服务端返回）。
    * 用于 API 鉴权上下文与频道列表身份头像。
    */
@@ -315,6 +320,8 @@ export type Message = {
   channel_id: string
   author_id: string
   author_username: string
+  /** 作者是否为机器人（messageView 透出，BOT 徽标） */
+  author_is_bot?: boolean
   type: MessageType
   content: string
   reply_to_id?: string
@@ -329,6 +336,17 @@ export type Message = {
   mention_everyone?: boolean
   /** 表情反应聚合；列表/单条拉取时服务端始终返回（可为空数组） */
   reactions?: ReactionSummary[]
+  /**
+   * 流式消息状态（bot 专项）：
+   * - `"STREAMING"`：生成中，正文随 MESSAGE_STREAM_DELTA 增长
+   * - 缺省 / 空串：普通消息或已收束
+   */
+  stream_status?: "" | "STREAMING" | string
+  /**
+   * 卡片载荷（bot 专项）：服务端 JSON 对象原样透传（≤8KB）。
+   * 一期仅保留字段；渲染 schema 由客户端后续约定。
+   */
+  card?: unknown
   edit_count: number
   edited_at?: string
   nonce?: string

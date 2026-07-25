@@ -136,6 +136,8 @@ function MessageList({
     lastId: string | null
     scrollHeight: number
     pendingCount: number
+    /** 末条 content 长度：流式增长时 id 不变，用于贴底跟随 */
+    lastContentLen: number
   } | null>(null)
   const [newCount, setNewCount] = useState(0)
   const [flashingId, setFlashingId] = useState<string | null>(null)
@@ -187,13 +189,17 @@ function MessageList({
     const el = containerRef.current
     if (!el) return
     const firstId = messages[0]?.id ?? null
-    const lastId = messages[messages.length - 1]?.id ?? null
+    const last = messages[messages.length - 1]
+    const lastId = last?.id ?? null
+    // 末条正文长度：流式 delta 增长时 id 不变，需据此贴底
+    const lastContentLen = last?.content?.length ?? 0
     const previous = snapshotRef.current
     snapshotRef.current = {
       firstId,
       lastId,
       scrollHeight: el.scrollHeight,
       pendingCount: pendingList.length,
+      lastContentLen,
     }
 
     if (!previous) {
@@ -227,6 +233,17 @@ function MessageList({
           : 1
         setNewCount((count) => count + Math.max(1, appendedCount))
       }
+      return
+    }
+    // 同一条末消息内容增长（AI 流式）：贴底时跟随滚到底，上翻时不打扰
+    if (
+      stickRef.current &&
+      lastId !== null &&
+      lastId === previous.lastId &&
+      (lastContentLen !== previous.lastContentLen ||
+        el.scrollHeight !== previous.scrollHeight)
+    ) {
+      scrollToBottom()
     }
   }, [messages, pendingList.length])
 

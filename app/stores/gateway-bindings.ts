@@ -13,7 +13,7 @@
 
 import { toast } from "sonner"
 
-import type { VoiceState } from "~/lib/api/types"
+import type { Message, VoiceState } from "~/lib/api/types"
 import { gateway } from "~/lib/gateway/client"
 import { GatewayEvents } from "~/lib/gateway/events"
 import { maybeNotifyMessage } from "~/lib/notifications"
@@ -236,8 +236,8 @@ export function bindGatewayToStores() {
   })
 
   // 消息域事件 → messages store + 未读记账 + 系统通知管线
-  gateway.subscribe(GatewayEvents.MessageCreate, (payload) => {
-    useMessagesStore.getState().applyMessageCreate(payload)
+  // 新消息副作用（CREATE 与流式 START 共用）：未读 +1、私信预览、系统通知一次。
+  const noteIncomingMessage = (payload: Message) => {
     const selfId = useAuthStore.getState().user?.id
     // 私信：本地更新预览 + 轻量 refresh 兜底（对方 unhide / 新会话）
     if (isDmGuildId(payload.guild_id)) {
@@ -263,6 +263,32 @@ export function bindGatewayToStores() {
     //（累加路径与「保底 1」在临场/乱序场景下可能漂移；缓存条数是权威值）。
     reconcileUnreadFromMessageCache(payload.channel_id)
     maybeNotifyMessage(payload, mentioned)
+  }
+
+  gateway.subscribe(GatewayEvents.MessageCreate, (payload) => {
+    useMessagesStore.getState().applyMessageCreate(payload)
+    noteIncomingMessage(payload)
+  })
+  // bot 流式：START 计未读/通知一次；DELTA 只拼正文；END 覆盖终态（不重复未读）
+  gateway.subscribe(GatewayEvents.MessageStreamStart, (payload) => {
+    useMessagesStore.getState().applyMessageStreamStart(payload)
+    noteIncomingMessage(payload)
+  })
+  gateway.subscribe(GatewayEvents.MessageStreamDelta, (payload) => {
+    useMessagesStore.getState().applyMessageStreamDelta(payload)
+  })
+  gateway.subscribe(GatewayEvents.MessageStreamEnd, (payload) => {
+    useMessagesStore.getState().applyMessageStreamEnd(payload)
+    // 私信预览更新终态正文（未读已在 START 计过，此处不 noteMessageCreate）
+    if (isDmGuildId(payload.guild_id)) {
+      usePrivateChannelsStore.getState().noteMessage(payload.channel_id, {
+        id: String(payload.id),
+        author_id: payload.author_id,
+        content: payload.content ?? "",
+        type: payload.type,
+        created_at: payload.created_at,
+      })
+    }
   })
   gateway.subscribe(GatewayEvents.MessageUpdate, (payload) => {
     useMessagesStore.getState().applyMessageUpdate(payload)
