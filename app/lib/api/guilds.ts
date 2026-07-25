@@ -31,14 +31,25 @@ export const patchGuild = (
   patch: {
     name?: string
     description?: string
+    /**
+     * 默认着陆文字频道。
+     * 后端用 *string：JSON null/omit = 不改；空串 "" = 清空；uuid = 设置。
+     * 客户端传 null 时序列化为 ""，避免「清空不生效」。
+     */
+    default_channel_id?: string | null
     restriction_badge_visible?: boolean
     restriction_reason_required?: boolean
   },
-) =>
-  api<Guild>(`/guilds/${guildId}`, {
+) => {
+  const body: Record<string, unknown> = { ...patch }
+  if ("default_channel_id" in patch) {
+    body.default_channel_id = patch.default_channel_id ?? ""
+  }
+  return api<Guild>(`/guilds/${guildId}`, {
     method: "PATCH",
-    body: JSON.stringify(patch),
+    body: JSON.stringify(body),
   })
+}
 
 /** 上传服务器图标（multipart 字段 file，PNG/JPEG/WebP/GIF/MP4，需 MANAGE_GUILD）→ GUILD_UPDATE 广播 */
 export const uploadGuildIcon = async (guildId: string, file: File) => {
