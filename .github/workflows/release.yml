@@ -194,23 +194,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p collected
-          # shellcheck disable=SC2086
-          shopt -s nullglob globstar
-          for f in ${{ matrix.bundle_glob }}; do
-            if [[ -f "$f" ]]; then
-              # 仅保留安装包常见类型
-              case "$f" in
-                *.dmg|*.app.tar.gz|*.msi|*.exe|*.nsis.zip|*.deb|*.AppImage|*.rpm|*.updater*)
-                  cp -v "$f" collected/
-                  ;;
-              esac
-            fi
-          done
-          # 若过滤后为空，尽量收集 bundle 目录下所有非目录文件
-          if [[ -z "$(ls -A collected 2>/dev/null || true)" ]]; then
-            for f in ${{ matrix.bundle_glob }}; do
-              [[ -f "$f" ]] && cp -v "$f" collected/ || true
-            done
+          # macOS 自带 bash 3.2 不支持 globstar，统一用 find 递归收集
+          BUNDLE_DIR="${{ matrix.bundle_glob }}"
+          BUNDLE_DIR="${BUNDLE_DIR%/\*\*}"
+          if [[ -d "$BUNDLE_DIR" ]]; then
+            # 仅保留安装包常见类型
+            find "$BUNDLE_DIR" -type f \( \
+              -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' -o -name '*.exe' \
+              -o -name '*.nsis.zip' -o -name '*.deb' -o -name '*.AppImage' \
+              -o -name '*.rpm' -o -name '*.updater*' \) -exec cp -v {} collected/ \;
+          fi
+          # 若过滤后为空，尽量收集 bundle 目录下所有文件
+          if [[ -z "$(ls -A collected 2>/dev/null || true)" && -d "$BUNDLE_DIR" ]]; then
+            find "$BUNDLE_DIR" -type f -exec cp -v {} collected/ \;
           fi
           ls -lah collected || true
           # 规范化前缀，便于中心仓识别
