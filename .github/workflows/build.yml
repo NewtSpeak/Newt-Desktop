@@ -36,6 +36,10 @@ jobs:
             rust_targets: ""
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
+    env:
+      # src-tauri/.cargo/config.toml 把 target-dir 重定向到了仓库外（本地开发防 dll 锁）；
+      # CI 用环境变量强制回到 src-tauri/target，否则 artifact 收集不到产物
+      CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
     steps:
       - name: Checkout
         uses: actions/checkout@v4
