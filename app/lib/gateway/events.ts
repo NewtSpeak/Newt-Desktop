@@ -30,6 +30,11 @@ export const GatewayEvents = {
   MessageStreamDelta: "MESSAGE_STREAM_DELTA",
   /** bot 流式消息：终态 messageView（同时会补发 MESSAGE_UPDATE） */
   MessageStreamEnd: "MESSAGE_STREAM_END",
+  /**
+   * bot 交互按钮回执（定向推给点击者，设计文档 2026-07-26）：
+   * 状态推进 ACKED / RESPONDED / EXPIRED，客户端据此收敛按钮 pending 态。
+   */
+  InteractionAck: "INTERACTION_ACK",
   TypingStart: "TYPING_START",
 
   VoiceStateUpdate: "VOICE_STATE_UPDATE",
@@ -98,6 +103,10 @@ export const GatewayEvents = {
   CosmeticInventoryUpdate: "COSMETIC_INVENTORY_UPDATE",
   CosmeticLoadoutUpdate: "COSMETIC_LOADOUT_UPDATE",
   CosmeticPointsUpdate: "COSMETIC_POINTS_UPDATE",
+
+  // 活跃度（定向本人）
+  ActivityUpdate: "ACTIVITY_UPDATE",
+  ActivityLevelUp: "ACTIVITY_LEVEL_UP",
 } as const
 
 export type GatewayEventName =
@@ -118,6 +127,19 @@ export type MessageStreamEndPayload = Message
  * MESSAGE_STREAM_DELTA：按 seq 从 1 递增拼接 delta。
  * 客户端应忽略重复/过期 seq；缺口可用 REST getMessage 纠偏。
  */
+/**
+ * INTERACTION_ACK：按钮交互状态推进（定向点击者）。
+ * ACKED = bot 已确认（defer）；RESPONDED = bot 已回应（reply/update_message）；
+ * EXPIRED = 15 分钟无回应，服务端 GC 判定过期。
+ */
+export type InteractionAckPayload = {
+  interaction_id: string
+  message_id: string
+  custom_id: string
+  status: "ACKED" | "RESPONDED" | "EXPIRED"
+  event_at: string
+}
+
 export type MessageStreamDeltaPayload = {
   id: string
   channel_id: string
@@ -406,6 +428,35 @@ export type UserSettingsUpdatePayload = {
   event_at: string
 }
 
+/** ACTIVITY_UPDATE：本人今日活跃计数增量刷新（约 30s 一次） */
+export type ActivityUpdatePayload = {
+  day: string
+  msg_count: number
+  voice_minutes: number
+  reaction_count: number
+  login_count: number
+  score_estimate: number
+  total_score: number
+  level: number
+}
+
+/** ACTIVITY_LEVEL_UP：活跃度等级提升 */
+export type ActivityLevelUpPayload = {
+  level: number
+  previous: number
+  total_score: number
+}
+
+/**
+ * COSMETIC_POINTS_UPDATE：积分余额变更；
+ * reason === "activity_daily" 表示每日活跃奖励（delta 为本次发放量）。
+ */
+export type CosmeticPointsUpdatePayload = {
+  balance: number
+  delta?: number
+  reason?: string
+}
+
 /** 事件名 → payload 的映射（subscribe 的类型入口） */
 export type GatewayEventPayloadMap = {
   [GatewayEvents.MessageCreate]: MessageCreatePayload
@@ -416,6 +467,7 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.MessageStreamStart]: MessageStreamStartPayload
   [GatewayEvents.MessageStreamDelta]: MessageStreamDeltaPayload
   [GatewayEvents.MessageStreamEnd]: MessageStreamEndPayload
+  [GatewayEvents.InteractionAck]: InteractionAckPayload
   [GatewayEvents.TypingStart]: TypingStartPayload
   [GatewayEvents.VoiceStateUpdate]: VoiceStateUpdatePayload
   [GatewayEvents.VoiceServerUpdate]: VoiceServerUpdatePayload
@@ -455,6 +507,8 @@ export type GatewayEventPayloadMap = {
   [GatewayEvents.RelationshipRemove]: RelationshipEventPayload
   [GatewayEvents.NotificationCreate]: NotificationEventPayload
   [GatewayEvents.NotificationDelete]: NotificationEventPayload
+  [GatewayEvents.ActivityUpdate]: ActivityUpdatePayload
+  [GatewayEvents.ActivityLevelUp]: ActivityLevelUpPayload
 }
 
 export type RelationshipEventPayload = {

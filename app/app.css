@@ -33,6 +33,8 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -75,6 +77,23 @@
     --badge-slide-ease: cubic-bezier(0.22, 1, 0.36, 1);
     --badge-pop-ease: cubic-bezier(0.34, 1.36, 0.64, 1);
     --badge-close-ease: cubic-bezier(0.4, 0, 0.2, 1);
+    /* transitions-dev number pop-in（动态数字更新时带模糊上滑重入） */
+    --digit-dur: 500ms;
+    --digit-distance: 8px;
+    --digit-stagger: 70ms;
+    --digit-blur: 2px;
+    --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1);
+    --digit-dir-x: 0;
+    --digit-dir-y: 1;
+    /* transitions-dev text states swap（原位文字状态切换） */
+    --text-swap-dur: 200ms;
+    --text-swap-translate-y: 8px;
+    --text-swap-blur: 2px;
+    --text-swap-ease: ease-out;
+    /* 列表条目入场（CSS stagger，行内 --stagger-index 传序号） */
+    --page-slide-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    /* 进度条推进曲线（可中断的 CSS 过渡，实时事件到达平滑续走） */
+    --progress-ease: cubic-bezier(0.22, 1, 0.36, 1);
     --background: oklch(1 0 0);
     --foreground: oklch(0.141 0.005 285.823);
     --card: oklch(1 0 0);
@@ -90,6 +109,9 @@
     --accent: oklch(0.21 0.006 285.885);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.577 0.245 27.325);
+    /* success：确认类交互按钮（bot 卡片 style=success 等） */
+    --success: oklch(0.627 0.194 149.214);
+    --success-foreground: oklch(0.985 0 0);
     --border: oklch(0.92 0.004 286.32);
     --input: oklch(0.92 0.004 286.32);
     --ring: oklch(0.705 0.015 286.067);
@@ -125,6 +147,8 @@
     --accent: oklch(0.92 0.004 286.32);
     --accent-foreground: oklch(0.21 0.006 285.885);
     --destructive: oklch(0.704 0.191 22.216);
+    --success: oklch(0.723 0.219 149.579);
+    --success-foreground: oklch(0.266 0.065 152.934);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.552 0.016 285.938);
@@ -150,6 +174,15 @@
   body {
     @apply bg-background text-foreground font-sans;
     font-family: var(--font-sans);
+    /* macOS 上更干净的字体渲染 */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    }
+  h1, h2, h3 {
+    text-wrap: balance;
+    }
+  p {
+    text-wrap: pretty;
     }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;
@@ -540,6 +573,82 @@
   animation: t-badge-pop var(--badge-pop-dur) var(--badge-pop-ease) both;
 }
 
+/* ---- 通用微动效（number pop-in / text swap / 列表 stagger / 等级脉冲）---- */
+
+/* transitions-dev number pop-in：key 重挂即重放（数字更新带模糊上滑） */
+@keyframes owl-digit-in {
+  from {
+    opacity: 0;
+    translate: calc(var(--digit-distance) * var(--digit-dir-x))
+      calc(var(--digit-distance) * var(--digit-dir-y));
+    filter: blur(var(--digit-blur));
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    filter: blur(0);
+  }
+}
+.t-number-pop {
+  display: inline-block;
+  animation: owl-digit-in var(--digit-dur) var(--digit-ease) both;
+}
+
+/* transitions-dev text states swap：原位文字切换（key 重挂即重放） */
+@keyframes owl-text-in {
+  from {
+    opacity: 0;
+    translate: 0 var(--text-swap-translate-y);
+    filter: blur(var(--text-swap-blur));
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    filter: blur(0);
+  }
+}
+.t-text-swap {
+  display: inline-block;
+  animation: owl-text-in var(--text-swap-dur) var(--text-swap-ease) both;
+}
+
+/* 列表条目入场：行内 style 传 --stagger-index 实现 CSS stagger */
+@keyframes owl-item-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    filter: blur(0);
+  }
+}
+.anim-item {
+  animation: owl-item-in 320ms var(--page-slide-ease) both;
+  animation-delay: calc(var(--stagger-index, 0) * 40ms);
+}
+
+/* 等级徽章升级脉冲（spring 感回弹 + 模糊消散） */
+@keyframes owl-level-pop {
+  0% {
+    scale: 1;
+    filter: blur(0);
+  }
+  35% {
+    scale: 1.12;
+    filter: blur(0.5px);
+  }
+  100% {
+    scale: 1;
+    filter: blur(0);
+  }
+}
+.level-pop {
+  animation: owl-level-pop 450ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-modal-overlay,
   .settings-modal-panel {
@@ -553,6 +662,79 @@
     animation: none !important;
     transition: none !important;
   }
+  .t-number-pop,
+  .t-text-swap,
+  .anim-item,
+  .level-pop {
+    animation: none !important;
+  }
+  .t-card-check,
+  .t-card-shake {
+    animation: none !important;
+  }
+  .ephemeral-enter {
+    animation: ephemeral-enter-fade 120ms ease-out both !important;
+  }
+}
+
+/* ---- bot 卡片交互按钮（设计文档 2026-07-26） ---- */
+
+/* pending→acked/responded：spinner 原位换 check 的弹性 pop（对齐 --badge-pop-ease 风格） */
+@keyframes t-card-check-pop {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+.t-card-check {
+  animation: t-card-check-pop 200ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* 点击失败：±2px 微 shake，260ms 一次 */
+@keyframes t-card-shake {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  25% {
+    translate: -2px 0;
+  }
+  50% {
+    translate: 2px 0;
+  }
+  75% {
+    translate: -2px 0;
+  }
+}
+.t-card-shake {
+  animation: t-card-shake 260ms ease-in-out both;
+}
+
+/* ephemeral 消息实时入场（仅新到达的行挂载，历史加载不挂） */
+@keyframes ephemeral-enter-rise {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@keyframes ephemeral-enter-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ephemeral-enter {
+  animation: ephemeral-enter-rise 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* 用户名/角色 icon 渐变流动（RoleNameStyle.animated；duration 可由行内覆盖 = speed） */

@@ -19,7 +19,11 @@ import {
   removeReaction,
 } from "~/lib/api/messages"
 import { ApiError, isNotFound } from "~/lib/api/http"
-import type { Message, ReactionSummary } from "~/lib/api/types"
+import {
+  isEphemeralMessage,
+  type Message,
+  type ReactionSummary,
+} from "~/lib/api/types"
 import {
   applyStreamDeltasBatch,
   mergeReconciledStreamMessage,
@@ -67,9 +71,12 @@ function syncUnreadCountFromCache(channelId: string) {
     useMessagesStore.getState().byChannel[channelId]?.messages ?? []
   if (messages.length === 0) return
   const lastRead = useReadStatesStore.getState().lastReadByChannel[channelId]
+  // ephemeral 不计未读（与服务端 last_message_id 排除口径一致）
   const count = countIdsAfterLastRead(
     lastRead,
-    messages.map((message) => message.id)
+    messages
+      .filter((message) => !isEphemeralMessage(message))
+      .map((message) => message.id)
   )
   // 取 max：在线事件已累加的值若更大（缓存被 CACHE_LIMIT 截断）则保留
   const tracked =
@@ -307,6 +314,8 @@ function normalize(raw: Message, previous?: ChatMessage): ChatMessage {
     ...rest,
     // omitempty 终态不带 stream_status：显式清掉本地 STREAMING
     stream_status: streaming ? "STREAMING" : raw.stream_status || undefined,
+    // omitempty：更新事件省略 visible_to 时保留本地值（防 ephemeral 标记被冲掉）
+    visible_to: raw.visible_to ?? previous?.visible_to,
     attachments: rawAttachments ?? previous?.attachments ?? [],
     reactions: hydrateReactions(raw, previous),
     // 终态 / 非流式：丢弃本地 seq 与乱序缓冲
@@ -617,11 +626,13 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
       patchChannel(channelId, { loadingInitial: true, locked: false })
       try {
         const page = await listMessages(channelId, { limit: PAGE_SIZE })
-        // 未读判定需要频道最新消息 ID（服务端降序返回，page[0] 最新）
-        if (page.length > 0) {
+        // 未读判定需要频道最新消息 ID（服务端降序返回，取最新的非 ephemeral，
+        // 与服务端 last_message_id 排除口径一致，防本地 latest 指针超前漂移）
+        const latestPublic = page.find((message) => !isEphemeralMessage(message))
+        if (latestPublic) {
           useReadStatesStore
             .getState()
-            .noteLatestMessage(channelId, page[0].guild_id, page[0].id)
+            .noteLatestMessage(channelId, latestPublic.guild_id, latestPublic.id)
         }
         set((state) => {
           const current = channelState(state, channelId)
@@ -775,9 +786,18 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
           return get().loadInitial(channelId)
         }
         if (page.length > 0) {
-          useReadStatesStore
-            .getState()
-            .noteLatestMessage(channelId, page[0].guild_id, page[0].id)
+          const latestPublic = page.find(
+            (message) => !isEphemeralMessage(message)
+          )
+          if (latestPublic) {
+            useReadStatesStore
+              .getState()
+              .noteLatestMessage(
+                channelId,
+                latestPublic.guild_id,
+                latestPublic.id
+              )
+          }
           set((state) => {
             const current = channelState(state, channelId)
             return {
@@ -1173,6 +1193,10 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
     reset: () => {
       streamDeltaBatcher.clear()
       clearStreamReconcileSchedules()
+      // 按钮交互 pending 态随消息缓存一并清理（登出/切账号）
+      void import("./interactions").then(({ useInteractionsStore }) => {
+        useInteractionsStore.getState().reset()
+      })
       set({ byChannel: {}, pendingByChannel: {}, typingByChannel: {} })
     },
   }

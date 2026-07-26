@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 |------|------|
 | **文档编号** | Owl-Desktop-PRD-23 |
-| **版本** | v1.0 |
+| **版本** | v1.1 |
 | **日期** | 2026-07-26 |
 | **状态** | 已实现（Desktop 客户端已接入） |
 | **对标** | Discord 无原生「AI 打字机流式」协议；本能力为 Owl 扩展（Bot 开放平面） |
@@ -313,23 +313,31 @@ START 与普通 `MESSAGE_CREATE` 共用 `noteIncomingMessage` 路径。
 
 ## 6. 消息卡片（card）
 
-### 6.1 服务端
+### 6.1 服务端（v1.1 更新）
 
-- 不校验字段名，只要求 **JSON 对象 ≤8KB**  
+- 要求 **JSON 对象 ≤16KB**（v1.0 为 8KB）  
+- **`buttons` 键自 v1.1 起由服务端解析并强校验**（互斥/上限/字符集/可见性裁剪，
+  详见 [设计文档 2026-07-26-Bot交互按钮与Ephemeral消息](../../docs/design/2026-07-26-Bot交互按钮与Ephemeral消息.md)）；
+  其余键继续原样透传，渲染 schema 仍由客户端约定  
 - 可出现在普通 `sendMessage` / `sendCard`，或流式 `end({ card })`
 
-### 6.2 推荐 schema（客户端约定）
+### 6.2 推荐 schema（v1.1：交互按钮）
 
 ```json
 {
-  "title": "部署完成",
-  "description": "版本 v1.4.2 已发布到生产环境",
+  "title": "部署审批",
+  "description": "版本 v1.4.2 等待批准",
   "color": "#22c55e",
   "fields": [
     { "name": "耗时", "value": "42s", "inline": true },
     { "name": "环境", "value": "prod", "inline": true }
   ],
-  "buttons": [{ "label": "查看日志", "url": "https://example.com/logs" }],
+  "buttons": [
+    { "label": "查看日志", "url": "https://example.com/logs" },
+    { "label": "批准", "custom_id": "deploy:approve:42", "style": "success", "size": "md" },
+    { "label": "拒绝", "custom_id": "deploy:reject:42", "style": "danger",
+      "visible_to": { "roles": ["<role_uuid>"] } }
+  ],
   "footer": "CI Bot",
   "thumbnail": "https://example.com/thumb.png",
   "image": "https://example.com/wide.png"
@@ -342,19 +350,33 @@ START 与普通 `MESSAGE_CREATE` 共用 `noteIncomingMessage` 路径。
 | `description` | string | 次要说明（预格式换行） |
 | `color` | `#RGB` / `#RRGGBB` / `#RRGGBBAA` | 左侧色条；非法则主题色 |
 | `fields[]` | `{name,value,inline?}` | inline 网格 / 块级列表 |
-| `buttons[]` | `{label,url}` | 外链按钮 |
+| `buttons[]` | 见下表 | 外链 / 交互按钮，row 分行（缺省每行 5 个自动折行），≤25 个 |
 | `footer` | string | 底部弱文案 |
 | `thumbnail` | url | 右侧小图 |
 | `image` | url | 底部大图 |
 
-### 6.3 安全
+`buttons[]` 元素（服务端强校验，违规整卡 `400 INVALID_CARD`）：
 
-实现：`app/lib/bot-card.ts` + `message-card.tsx`
+| 键 | 规则 | 渲染 |
+|----|------|------|
+| `label` | 必填 1–40 字符 | 按钮文案（客户端按码位截断） |
+| `url` / `custom_id` | **互斥且必居其一**；url 仅 http(s)；custom_id `[A-Za-z0-9_\-:.]{1,64}` 消息内唯一 | url → `<a>` 外链（outline 样式 + 外链图标）；custom_id → 交互按钮（点击回调） |
+| `style` | `primary`/`secondary`(默认)/`success`/`danger` | 对应 ui/button 的 default/secondary/success/destructive；url 按钮忽略 style |
+| `size` | `xs`/`sm`(默认)/`md`/`lg` | 对应 h-6 / h-8 / h-9 / h-10 |
+| `disabled` | bool | 置灰不可点（服务端同样拒绝点击） |
+| `row` | 0–4 可选 | 显式分行；无 row 按声明顺序每行 5 个自动折行 |
+| `visible_to` | `{users:[uuid]≤20, roles:[uuid]≤10}` | 服务端按接收者裁剪并**剥除该键**——客户端永远收不到不该看的按钮 |
+
+### 6.3 安全（v1.1 更新）
+
+实现：`app/lib/bot-card.ts` + `message-card.tsx` + `message-card-button.tsx`
 
 | 规则 | 行为 |
 |------|------|
 | 文本字段 | React 文本节点（默认转义，无 `dangerouslySetInnerHTML`） |
 | `buttons.url` / 图片 URL | 仅 `http:` / `https:`；拒绝 `javascript:` 等 |
+| `url` 与 `custom_id` 双有/双无 | 客户端丢弃该按钮（防御旧数据；服务端发送期已拒绝） |
+| 按钮可见性 | 服务端裁剪为最终防线：点击伪造 `custom_id` 一律 404，不泄露隐藏按钮存在性 |
 | 非法/空对象 | 不渲染卡片 |
 | 支持 | 对象或 JSON **字符串**（部分路径透传） |
 
@@ -482,7 +504,8 @@ go test ./internal/botapi/ -count=1 -run BotFullFlow
 | 项 | 状态 |
 |----|------|
 | 用户（人类）自己流式发送消息 | ❌ 非目标（仅 bot 作者可 append） |
-| 服务端解释 card schema | ❌ 非目标 |
+| 服务端解释 card schema | ⚠️ v1.1 起**部分解除**：`buttons` 键由服务端解析/校验/按接收者裁剪（见 §6.1）；其余键仍不解释 |
+| ephemeral 流式消息 | ❌ 一期非目标（DELTA 为频道广播，定向裁剪留待二期） |
 | 流式路径 mentions 解析 | ❌ 服务端未做；后续若产品需要再补 |
 | 半截 Markdown 完美渲染 | 可接受生成中偶发不完整 |
 | 多流式并行 aria-live 降噪 | 体验优化，非正确性阻塞 |
@@ -494,6 +517,7 @@ go test ./internal/botapi/ -count=1 -run BotFullFlow
 | 日期 | 版本 | 说明 |
 |------|------|------|
 | 2026-07-26 | v1.0 | 首版：协议 + Desktop 实现 + 卡片 + 验收结论 |
+| 2026-07-26 | v1.1 | 交互按钮（custom_id/style/size/row/visible_to 服务端裁剪）、card 上限 16KB、ephemeral 消息接入（详见设计文档 2026-07-26-Bot交互按钮与Ephemeral消息） |
 
 ---
 

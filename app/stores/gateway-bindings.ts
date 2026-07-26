@@ -13,7 +13,7 @@
 
 import { toast } from "sonner"
 
-import type { Message, VoiceState } from "~/lib/api/types"
+import { isEphemeralMessage, type Message, type VoiceState } from "~/lib/api/types"
 import { gateway } from "~/lib/gateway/client"
 import { GatewayEvents } from "~/lib/gateway/events"
 import { maybeNotifyMessage } from "~/lib/notifications"
@@ -26,6 +26,7 @@ import {
   handleStageInstanceNotify,
 } from "~/lib/voice/stage-notify"
 import { handleVoicePackPlay } from "~/lib/voice/voice-pack"
+import { useActivityStore } from "./activity"
 import { useAuthStore } from "./auth"
 import { useChannelUnlocksStore } from "./channel-unlocks"
 import { useChannelsStore } from "./channels"
@@ -73,9 +74,12 @@ export function reconcileUnreadFromMessageCache(channelId: string) {
   }
   const messages = useMessagesStore.getState().byChannel[channelId]?.messages ?? []
   if (messages.length === 0) return
+  // ephemeral 不计未读（服务端 last_message_id 已排除，缓存统计需同口径过滤）
   const fromCache = countIdsAfterLastRead(
     lastRead,
-    messages.map((message) => message.id),
+    messages
+      .filter((message) => !isEphemeralMessage(message))
+      .map((message) => message.id),
   )
   // 临场/他人多条：缓存统计为权威下限；与 tracked 取 max 防止截断少计
   const next = Math.max(tracked, fromCache)
@@ -242,6 +246,10 @@ export function bindGatewayToStores() {
   // 消息域事件 → messages store + 未读记账 + 系统通知管线
   // 新消息副作用（CREATE 与流式 START 共用）：未读 +1、私信预览、系统通知一次。
   const noteIncomingMessage = (payload: Message) => {
+    // ephemeral（仅本人可见的定向消息）：不计未读、不进私信预览、不发系统通知——
+    // 它是交互的即时反馈（用户在场），且服务端 last_message_id 已排除，
+    // 计入会造成本地未读游标与服务端漂移（设计文档 2026-07-26）。
+    if (isEphemeralMessage(payload)) return
     const selfId = useAuthStore.getState().user?.id
     // 私信：本地更新预览 + 轻量 refresh 兜底（对方 unhide / 新会话）
     if (isDmGuildId(payload.guild_id)) {
@@ -308,6 +316,12 @@ export function bindGatewayToStores() {
   })
   gateway.subscribe(GatewayEvents.TypingStart, (payload) => {
     useMessagesStore.getState().applyTypingStart(payload)
+  })
+  // bot 交互按钮回执（定向本人）：推进按钮 pending → 终态
+  gateway.subscribe(GatewayEvents.InteractionAck, (payload) => {
+    void import("./interactions").then(({ useInteractionsStore }) => {
+      useInteractionsStore.getState().applyAck(payload)
+    })
   })
 
   // 贴图与表情包（docs 17）：库/包/条目/服 ban 变更时失效可用集合缓存
@@ -577,10 +591,27 @@ export function bindGatewayToStores() {
     }
   })
   gateway.subscribe(GatewayEvents.CosmeticPointsUpdate, (payload) => {
-    const bal = (payload as { balance?: number }).balance
-    if (typeof bal === "number") {
-      useCosmeticsStore.getState().setPoints(bal)
+    const p = payload as {
+      balance?: number
+      delta?: number
+      reason?: string
     }
+    if (typeof p.balance === "number") {
+      useCosmeticsStore.getState().setPoints(p.balance)
+    }
+    // 每日活跃奖励发放提示
+    if (p.reason === "activity_daily" && typeof p.delta === "number" && p.delta > 0) {
+      toast.success(`每日活跃奖励 +${p.delta} 积分`)
+    }
+  })
+
+  // 活跃度（定向本人）：约 30s 一次增量刷新 + 升级提示
+  gateway.subscribe(GatewayEvents.ActivityUpdate, (payload) => {
+    useActivityStore.getState().applyRealtime(payload)
+  })
+  gateway.subscribe(GatewayEvents.ActivityLevelUp, (payload) => {
+    useActivityStore.getState().applyLevelUp(payload)
+    toast.success(`🎉 活跃度等级提升至 Lv.${payload.level}`)
   })
 
   // 尚未实现具体 handler 的事件：空壳注册（console.debug）。

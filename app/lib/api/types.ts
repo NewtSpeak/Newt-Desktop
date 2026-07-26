@@ -54,6 +54,8 @@ export type PublicUserProfile = {
   bio: string
   /** 已装备装扮（full 模式含全部槽位；slot -> 装备视图） */
   cosmetics?: Record<string, EquippedSlot>
+  /** 活跃度等级（0 = 无记录） */
+  activity_level?: number
 }
 
 export type TokenResponse = {
@@ -371,15 +373,29 @@ export type Message = {
    */
   stream_status?: "" | "STREAMING" | string
   /**
-   * 卡片载荷（bot 专项）：服务端 JSON 对象原样透传（≤8KB）。
-   * 一期仅保留字段；渲染 schema 由客户端后续约定。
+   * 卡片载荷（bot 专项）：服务端 JSON 对象透传（≤16KB）。
+   * buttons 键由服务端解析校验并按接收者裁剪（设计文档 2026-07-26），
+   * 其余键渲染 schema 由客户端约定（lib/bot-card.ts）。
    */
   card?: unknown
+  /**
+   * ephemeral 定向可见名单（bot 专项，设计文档 2026-07-26）：
+   * 非空 = 仅名单用户 + 作者可见（服务端已过滤，能收到即代表本人可见）。
+   * 此类消息不计未读、不可回复/反应、刷新后仍在（历史按 viewer 过滤）。
+   */
+  visible_to?: string[]
   edit_count: number
   edited_at?: string
   nonce?: string
   created_at: string
   deleted_at?: string
+}
+
+/** 是否为 ephemeral（仅指定用户可见）消息 */
+export function isEphemeralMessage(
+  message: Pick<Message, "visible_to">
+): boolean {
+  return Array.isArray(message.visible_to) && message.visible_to.length > 0
 }
 
 // ---------------------------------------------------------------------------

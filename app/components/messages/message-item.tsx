@@ -15,6 +15,7 @@ import {
   CopyIcon,
   CornerUpLeftIcon,
   CrownIcon,
+  EyeIcon,
   HashIcon,
   HistoryIcon,
   LinkIcon,
@@ -43,6 +44,7 @@ import {
 } from "~/components/ui/dialog"
 import { Button } from "~/components/ui/button"
 import {
+  isEphemeralMessage,
   isGroupDmSystemMessage,
   MESSAGE_TYPE_STICKER,
   MESSAGE_TYPE_SYSTEM_ADMIN,
@@ -695,6 +697,8 @@ function MessageStreamBody({
   guildId,
   /** 撤回预览等场景可隐藏「(已编辑)」角标 */
   showEdited = true,
+  /** 撤回预览 / 编辑历史等只读场景禁用卡片交互按钮 */
+  interactiveCard = true,
 }: {
   message: ChatMessage
   resolveName: MentionResolver
@@ -702,8 +706,10 @@ function MessageStreamBody({
   selfId?: string
   guildId?: string
   showEdited?: boolean
+  interactiveCard?: boolean
 }) {
   const gId = guildId ?? message.guild_id
+  const ephemeral = isEphemeralMessage(message)
   const streaming = message.stream_status === "STREAMING"
   const hasContent = Boolean(message.content?.trim())
   const hasCard = message.card != null && message.card !== ""
@@ -835,8 +841,26 @@ function MessageStreamBody({
           </button>
         </div>
       ) : null}
-      {hasCard ? <MessageCard card={message.card} /> : null}
+      {hasCard ? (
+        <MessageCard
+          card={message.card}
+          messageId={message.id}
+          channelId={message.channel_id}
+          interactive={interactiveCard}
+        />
+      ) : null}
       <MessageAttachments attachments={message.attachments} />
+      {ephemeral ? (
+        <p className="mt-1.5">
+          <span
+            className="inline-flex select-none items-center gap-1 rounded-full border border-primary/25 bg-primary/8 px-2 py-0.5 text-[11px] text-primary"
+            title="这条消息只有你能看到，其他成员不可见，也不会产生未读提醒"
+          >
+            <EyeIcon className="size-3" aria-hidden />
+            仅你可见
+          </span>
+        </p>
+      ) : null}
       {!hasContent &&
       !streaming &&
       !hasCard &&
@@ -920,6 +944,7 @@ function DeleteMessageConfirmDialog({
             resolveAvatarUrl={resolveAvatarUrl}
             selfId={selfId}
             guildId={guildId}
+            interactiveCard={false}
           />
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -954,6 +979,7 @@ function HoverActions({
   selfId,
   onReply,
   onEdit,
+  ephemeral = false,
 }: {
   message: ChatMessage
   channelId: string
@@ -968,6 +994,8 @@ function HoverActions({
   selfId?: string
   onReply: () => void
   onEdit: () => void
+  /** ephemeral 消息：不可回复/反应（服务端拒绝，操作入口一并隐藏） */
+  ephemeral?: boolean
 }) {
   const toggleReaction = useMessagesStore((state) => state.toggleReaction)
   const remove = useMessagesStore((state) => state.remove)
@@ -1006,30 +1034,34 @@ function HoverActions({
           pickerOpen && "flex"
         )}
       >
-        <EmojiPickerPopover
-          open={pickerOpen}
-          onOpenChange={setPickerOpen}
-          guildId={guildId}
-          mode="reaction"
-          onPick={(emoji) =>
-            void toggleReaction(channelId, message.id, emoji).catch(
-              () => undefined,
-            )
-          }
-          onExpressionPick={applyReactionPick}
-        >
-          <button type="button" aria-label="添加反应" className={iconButton}>
-            <SmilePlusIcon className="size-4" />
+        {!ephemeral && (
+          <EmojiPickerPopover
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            guildId={guildId}
+            mode="reaction"
+            onPick={(emoji) =>
+              void toggleReaction(channelId, message.id, emoji).catch(
+                () => undefined,
+              )
+            }
+            onExpressionPick={applyReactionPick}
+          >
+            <button type="button" aria-label="添加反应" className={iconButton}>
+              <SmilePlusIcon className="size-4" />
+            </button>
+          </EmojiPickerPopover>
+        )}
+        {!ephemeral && (
+          <button
+            type="button"
+            aria-label="回复"
+            className={iconButton}
+            onClick={onReply}
+          >
+            <CornerUpLeftIcon className="size-4" />
           </button>
-        </EmojiPickerPopover>
-        <button
-          type="button"
-          aria-label="回复"
-          className={iconButton}
-          onClick={onReply}
-        >
-          <CornerUpLeftIcon className="size-4" />
-        </button>
+        )}
         {isOwn && (
           <button
             type="button"
@@ -1233,6 +1265,10 @@ export const MessageRow = memo(function MessageRow({
   const isOwn = selfId !== undefined && message.author_id === selfId
   const mentioned =
     selfId !== undefined && contentMentionsUser(message.content, selfId)
+  const ephemeral = isEphemeralMessage(message)
+  // 实时到达的 ephemeral 行才做入场动效（历史加载/切频道重挂不动）
+  const ephemeralFresh =
+    ephemeral && Date.now() - new Date(message.created_at).getTime() < 5_000
   const systemAdmin = isSystemAdminMessage(message.type)
   const groupSystem = isGroupDmSystemMessage(message.type)
   const selfUser = useAuthStore((state) => state.user)
@@ -1321,8 +1357,11 @@ export const MessageRow = memo(function MessageRow({
         "group/message relative px-4 py-0.5 transition-colors hover:bg-muted/40",
         showHeader && "mt-2.5",
         mentioned && "bg-amber-500/10 hover:bg-amber-500/15",
+        ephemeral && "bg-primary/[0.03]",
+        ephemeralFresh && "ephemeral-enter",
         flashing && "animate-pulse bg-primary/15"
       )}
+      data-ephemeral={ephemeral || undefined}
     >
       {message.reply_to_id && (
         <ReplyPreview
@@ -1422,6 +1461,7 @@ export const MessageRow = memo(function MessageRow({
           selfId={selfId}
           onReply={() => onReply(message)}
           onEdit={() => onStartEdit(message.id)}
+          ephemeral={ephemeral}
         />
       )}
     </div>
@@ -1442,10 +1482,12 @@ export const MessageRow = memo(function MessageRow({
               复制文本
             </ContextMenuItem>
           ) : null}
-          <ContextMenuItem onClick={() => onReply(message)}>
-            <CornerUpLeftIcon />
-            回复
-          </ContextMenuItem>
+          {!ephemeral && (
+            <ContextMenuItem onClick={() => onReply(message)}>
+              <CornerUpLeftIcon />
+              回复
+            </ContextMenuItem>
+          )}
           {isOwn && (
             <ContextMenuItem onClick={() => onStartEdit(message.id)}>
               <PencilIcon />
@@ -1461,16 +1503,18 @@ export const MessageRow = memo(function MessageRow({
               </span>
             </ContextMenuItem>
           ) : null}
-          <ContextMenuItem
-            onClick={() =>
-              void toggleReaction(channelId, message.id, "👍").catch(
-                () => undefined
-              )
-            }
-          >
-            <SmilePlusIcon />
-            添加 👍 反应
-          </ContextMenuItem>
+          {!ephemeral && (
+            <ContextMenuItem
+              onClick={() =>
+                void toggleReaction(channelId, message.id, "👍").catch(
+                  () => undefined
+                )
+              }
+            >
+              <SmilePlusIcon />
+              添加 👍 反应
+            </ContextMenuItem>
+          )}
           <ContextMenuSeparator />
           <ContextMenuItem onClick={() => void copyText("消息 ID", message.id)}>
             <HashIcon />
