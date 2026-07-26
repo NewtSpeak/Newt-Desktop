@@ -70,6 +70,23 @@ function seedPrivateReadStates(channels: PrivateChannel[]) {
   }
 }
 
+/**
+ * 将私信收件人携带的装扮精简投影写入 cosmetics store
+ * （私信列表行/会话头部渲染头像框用；参照 members.ts 的写入模式）。
+ */
+function seedRecipientCosmetics(channels: PrivateChannel[]) {
+  void import("./cosmetics").then(({ useCosmeticsStore }) => {
+    const store = useCosmeticsStore.getState()
+    for (const ch of channels) {
+      for (const r of ch.recipients ?? []) {
+        if (r.cosmetics && Object.keys(r.cosmetics).length > 0) {
+          store.setEquippedForUser(r.id, r.cosmetics)
+        }
+      }
+    }
+  })
+}
+
 /** 1:1 DM 的对端 user id（服务端 recipients 已排除自己） */
 function dmPeerId(ch: PrivateChannel): string | undefined {
   if (ch.type !== "DM") return undefined
@@ -146,12 +163,16 @@ export const usePrivateChannelsStore = create<PrivateChannelsState>()(
       const list = dedupePrivateChannels(channels ?? [])
       set({ channels: list, loaded: true })
       seedPrivateReadStates(list)
+      // READY 注入的收件人可能附带装扮投影，顺手写入缓存
+      seedRecipientCosmetics(list)
     },
 
     refresh: async () => {
       const channels = dedupePrivateChannels(await listPrivateChannels())
       set({ channels, loaded: true })
       seedPrivateReadStates(channels)
+      // REST 刷新的收件人可能附带装扮投影，顺手写入缓存
+      seedRecipientCosmetics(channels)
     },
 
     upsert: (ch) =>
@@ -162,6 +183,8 @@ export const usePrivateChannelsStore = create<PrivateChannelsState>()(
           }
         }
         seedPrivateReadStates([ch])
+        // 单会话 upsert（openDm/建群/邀请/网关推送）同样可能附带装扮投影
+        seedRecipientCosmetics([ch])
         // 新会话置顶，并按 id + 1:1 对端去重
         const next = dedupePrivateChannels([
           ch,

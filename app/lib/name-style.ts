@@ -12,6 +12,8 @@ import type {
 export type ResolvedNameStyle = {
   kind: "solid" | "linear" | "radial" | "none"
   colors: string[]
+  /** 暗色主题独立配色；空则亮暗共用 colors */
+  colorsDark?: string[]
   angle: number
   shape: string
   animated: boolean
@@ -101,9 +103,11 @@ function surfaceToResolved(
     if (!color) {
       return hasDecor(decor) ? { ...emptyResolved(), ...decor } : null
     }
+    const darkColor = normalizeHex(style.colors_dark?.[0])
     return {
       kind: "solid",
       colors: [color],
+      colorsDark: darkColor ? [darkColor] : undefined,
       angle: 90,
       shape: "circle",
       animated: false,
@@ -123,9 +127,13 @@ function surfaceToResolved(
     if (colors.length < 2) {
       return hasDecor(decor) ? { ...emptyResolved(), ...decor } : null
     }
+    const colorsDark = (style.colors_dark ?? [])
+      .map((c) => normalizeHex(c))
+      .filter((c): c is string => Boolean(c))
     return {
       kind: style.type,
       colors,
+      colorsDark: colorsDark.length >= 2 ? colorsDark : undefined,
       angle: style.angle ?? 90,
       shape: style.shape || "circle",
       animated: Boolean(style.animated),
@@ -261,8 +269,16 @@ export function resolveRoleIconResolved(
   return empty
 }
 
-/** 文字 CSS（渐变用 background-clip:text）+ 装饰 */
-export function nameStyleToCSS(style: ResolvedNameStyle): CSSProperties {
+/** 按亮暗主题选用色标：暗色主题优先 colorsDark，缺省共用 colors */
+function themeColors(style: ResolvedNameStyle, dark: boolean): string[] {
+  return dark && style.colorsDark?.length ? style.colorsDark : style.colors
+}
+
+/** 文字 CSS（渐变用 background-clip:text）+ 装饰；dark 为当前是否暗色主题 */
+export function nameStyleToCSS(
+  style: ResolvedNameStyle,
+  dark = false,
+): CSSProperties {
   const decor: CSSProperties = {}
   if (style.bold) decor.fontWeight = 700
   if (style.italic) decor.fontStyle = "italic"
@@ -277,12 +293,13 @@ export function nameStyleToCSS(style: ResolvedNameStyle): CSSProperties {
   if (style.kind === "none" || style.colors.length === 0) {
     return decor
   }
+  const colors = themeColors(style, dark)
   if (style.kind === "solid") {
-    return { ...decor, color: style.colors[0] }
+    return { ...decor, color: colors[0] }
   }
   const stops = style.animated
-    ? [...style.colors, style.colors[0]].join(", ")
-    : style.colors.join(", ")
+    ? [...colors, colors[0]].join(", ")
+    : colors.join(", ")
   const gradient =
     style.kind === "linear"
       ? `linear-gradient(${style.angle}deg, ${stops})`
@@ -301,15 +318,19 @@ export function nameStyleToCSS(style: ResolvedNameStyle): CSSProperties {
   }
 }
 
-/** 色点/icon 填充 CSS（背景渐变，非文字 clip） */
-export function iconStyleToFillCSS(style: ResolvedNameStyle): CSSProperties {
+/** 色点/icon 填充 CSS（背景渐变，非文字 clip）；dark 为当前是否暗色主题 */
+export function iconStyleToFillCSS(
+  style: ResolvedNameStyle,
+  dark = false,
+): CSSProperties {
   if (style.kind === "none" || style.colors.length === 0) return {}
+  const colors = themeColors(style, dark)
   if (style.kind === "solid") {
-    return { backgroundColor: style.colors[0] }
+    return { backgroundColor: colors[0] }
   }
   const stops = style.animated
-    ? [...style.colors, style.colors[0]].join(", ")
-    : style.colors.join(", ")
+    ? [...colors, colors[0]].join(", ")
+    : colors.join(", ")
   const gradient =
     style.kind === "linear"
       ? `linear-gradient(${style.angle}deg, ${stops})`

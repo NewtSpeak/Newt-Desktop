@@ -24,6 +24,7 @@ import { Toaster } from "~/components/ui/sonner"
 import { useAuthBootstrap } from "~/hooks/use-auth-bootstrap"
 import { useAuthStore } from "~/stores/auth"
 import { isFriendsLocation } from "~/lib/friends-route"
+import { isShopLocation } from "~/lib/shop-route"
 import { isStickersLocation } from "~/lib/stickers-route"
 import {
   dragWindowOnMouseDown,
@@ -192,16 +193,19 @@ function SelectedGuildTitleBar() {
   const isDm = selectedGuildId === "@me"
   const isFriends = isFriendsLocation(location)
   const isStickers = isStickersLocation(location)
-  const isHome = !selectedGuildId && !isFriends && !isStickers
+  const isShop = isShopLocation(location)
+  const isHome = !selectedGuildId && !isFriends && !isStickers && !isShop
   const title = isFriends
     ? "好友"
     : isStickers
       ? "贴图库"
-      : isHome
-        ? "私信"
-        : isDm
+      : isShop
+        ? "装扮商城"
+        : isHome
           ? "私信"
-          : guild?.name
+          : isDm
+            ? "私信"
+            : guild?.name
 
   return (
     <div
@@ -210,7 +214,7 @@ function SelectedGuildTitleBar() {
     >
       {title ? (
         <div className="flex max-w-md items-center justify-center gap-2">
-          {!isDm && !isHome && !isFriends && !isStickers && hasIcon && guild ? (
+          {!isDm && !isHome && !isFriends && !isStickers && !isShop && hasIcon && guild ? (
             <GuildAvatar
               guild={guild}
               shape="circle"

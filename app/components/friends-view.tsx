@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { presenceDotClass } from "~/components/nav-user"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
@@ -43,6 +44,7 @@ import {
   resolveProfileAssetUrl,
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useGuildsStore } from "~/stores/guilds"
 import { usePrivateChannelsStore } from "~/stores/private-channels"
 import { usePresenceStore } from "~/stores/presence"
@@ -102,6 +104,11 @@ function FriendCard({
   onOpenDm?: (userId: string) => void
 }) {
   const presence = usePresenceStore((s) => s.statusByUser[rel.user.id])
+  // 头像框：只订阅单槽引用（关系响应附带的装扮已写入 cosmetics store 缓存），
+  // 无缓存则无框降级，不单独发请求
+  const avatarFrame = useCosmeticsStore(
+    (s) => s.equippedByUser[rel.user.id]?.avatar_frame,
+  )
   const name = displayName(rel)
   const av = resolveProfileAssetUrl(rel.user.avatar_url)
   const userId = rel.user.id
@@ -234,19 +241,22 @@ function FriendCard({
 
         <div className="relative z-10 flex items-start gap-3 p-3.5">
           <span className="relative size-12 shrink-0">
-            <Avatar className="size-12 ring-2 ring-background/80 after:border-0">
-              {av ? (
-                <AvatarImage src={av} alt="" className="object-cover" />
-              ) : null}
-              <AvatarFallback className="bg-muted text-sm font-semibold">
-                {nameInitials(name)}
-              </AvatarFallback>
-            </Avatar>
+            {/* 好友头像套装扮头像框；在线点在框之上（z-[3] > 框 z-[2]） */}
+            <AvatarWithFrame frame={avatarFrame} sizeClass="size-12">
+              <Avatar className="size-12 ring-2 ring-background/80 after:border-0">
+                {av ? (
+                  <AvatarImage src={av} alt="" className="object-cover" />
+                ) : null}
+                <AvatarFallback className="bg-muted text-sm font-semibold">
+                  {nameInitials(name)}
+                </AvatarFallback>
+              </Avatar>
+            </AvatarWithFrame>
             {/* 在线状态仅用头像角标圆点表示（不透明色） */}
             {variant !== "blocked" ? (
               <span
                 className={cn(
-                  "absolute -right-0.5 -bottom-0.5 size-3.5 rounded-full",
+                  "absolute -right-0.5 -bottom-0.5 z-[3] size-3.5 rounded-full",
                   "ring-[2.5px] ring-card",
                   presenceDotClass(presence),
                 )}

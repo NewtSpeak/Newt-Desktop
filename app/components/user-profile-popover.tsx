@@ -230,15 +230,17 @@ export function UserProfilePopover({
         side={side}
         sideOffset={8}
         align="start"
-        className="w-64 gap-0 overflow-hidden rounded-2xl p-0 shadow-xl"
+        // 弹层做成透明外壳并留出内边距：外挂边框（上/下悬出、左右各超 5%）
+        // 全部落在弹层盒内，不依赖任何祖先的溢出行为；卡片视觉（底色/描边/阴影）在 chrome 上
+        className="w-72 gap-0 rounded-none bg-transparent px-4 py-6 shadow-none ring-0"
       >
-        {/* 装扮：资料卡边框 + 内特效（compact 档），打开时播放特效音频 */}
+        {/* 装扮：资料卡边框 + 内特效（compact 档），打开时播放特效音频；固定 9:16 竖版 */}
         <ProfileCardChrome
           border={profileBorder}
           effect={profileEffect}
           size="compact"
           playAudio={open}
-          className="rounded-2xl"
+          className="aspect-[9/16] rounded-2xl bg-popover shadow-xl ring-1 ring-foreground/5 dark:ring-foreground/10"
         >
         <div className="relative">
           {banner ? (
@@ -350,10 +352,11 @@ export function UserProfilePopover({
             </DropdownMenu>
           </div>
 
-          <div className="absolute -bottom-7 left-3">
+          {/* left-6：向右让出外挂边框的悬出区，避免头像被边框素材遮挡 */}
+          <div className="absolute -bottom-7 left-6">
             <span className="relative block size-14">
               <AvatarWithFrame frame={avatarFrame} sizeClass="size-14">
-                <Avatar className="size-14 rounded-full ring-4 ring-popover after:rounded-full after:border-0">
+                <Avatar className="size-14 rounded-full after:rounded-full after:border-0">
                   {resolvedAvatar ? (
                     <AvatarImage
                       src={resolvedAvatar}

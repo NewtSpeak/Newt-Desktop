@@ -25,6 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog"
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Composer } from "~/components/messages/composer"
 import { presenceDotClass } from "~/components/nav-user"
 import { ApiError } from "~/lib/api/http"
@@ -36,6 +37,7 @@ import { VoiceChannelView } from "~/components/voice/voice-channel-view"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelUnlocksStore } from "~/stores/channel-unlocks"
 import { useChannelsStore } from "~/stores/channels"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
@@ -346,6 +348,10 @@ export default function ChannelPage() {
   const dmPeerPresence = usePresenceStore((s) =>
     dmPeer?.id ? s.statusByUser[dmPeer.id] : undefined
   )
+  // DM 头部对方头像框：只订阅单槽引用；无缓存则无框降级，不单独发请求
+  const dmPeerAvatarFrame = useCosmeticsStore((s) =>
+    dmPeer?.id ? s.equippedByUser[dmPeer.id]?.avatar_frame : undefined
+  )
 
   const onStopEditCallback = useCallback(
     () => setEditingId(null),
@@ -536,21 +542,24 @@ export default function ChannelPage() {
             </span>
           ) : (
             <span className="relative size-8 shrink-0">
-              <Avatar className="size-8 after:border-0">
-                {dmPeerAvatar ? (
-                  <AvatarImage
-                    src={dmPeerAvatar}
-                    alt=""
-                    className="object-cover"
-                  />
-                ) : null}
-                <AvatarFallback className="text-[11px] font-medium">
-                  {nameInitials(channelName)}
-                </AvatarFallback>
-              </Avatar>
+              {/* DM 头部对方头像套装扮头像框；在线点 z-[3] 压在框（z-[2]）之上 */}
+              <AvatarWithFrame frame={dmPeerAvatarFrame} sizeClass="size-8">
+                <Avatar className="size-8 after:border-0">
+                  {dmPeerAvatar ? (
+                    <AvatarImage
+                      src={dmPeerAvatar}
+                      alt=""
+                      className="object-cover"
+                    />
+                  ) : null}
+                  <AvatarFallback className="text-[11px] font-medium">
+                    {nameInitials(channelName)}
+                  </AvatarFallback>
+                </Avatar>
+              </AvatarWithFrame>
               <span
                 className={cn(
-                  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-card",
+                  "absolute -right-0.5 -bottom-0.5 z-[3] size-2.5 rounded-full ring-2 ring-card",
                   presenceDotClass(dmPeerPresence)
                 )}
               />

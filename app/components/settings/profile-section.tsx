@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import { ImageIcon, Loader2Icon, Trash2Icon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -23,6 +24,7 @@ import {
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { GroupLabel, SectionTitle, SettingRow } from "./section"
 
 const MAX_AVATAR_BYTES = 8 << 20
@@ -59,6 +61,8 @@ export function ProfileSection() {
 
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const bannerInputRef = useRef<HTMLInputElement>(null)
+  // 自己的头像框走本人 loadout（放在 early return 之前，保证 hooks 顺序稳定）
+  const avatarFrame = useCosmeticsStore((state) => state.loadout.avatar_frame)
 
   // 外部 USER_UPDATE / 重登 同步到表单（避免覆盖用户正在编辑的内容）
   useEffect(() => {
@@ -193,12 +197,15 @@ export function ProfileSection() {
         </div>
         <div className="relative px-4 pb-4">
           <div className="-mt-10 mb-3">
-            <Avatar className="size-20 rounded-full ring-4 ring-card">
-              {avatarSrc && <AvatarImage src={avatarSrc} alt={previewName} />}
-              <AvatarFallback className="rounded-full text-xl">
-                {nameInitials(previewName)}
-              </AvatarFallback>
-            </Avatar>
+            {/* 资料预览头像：套上自己已装备的头像框（与他人看到的效果一致） */}
+            <AvatarWithFrame frame={avatarFrame} sizeClass="size-20">
+              <Avatar className="size-20 rounded-full ring-4 ring-card">
+                {avatarSrc && <AvatarImage src={avatarSrc} alt={previewName} />}
+                <AvatarFallback className="rounded-full text-xl">
+                  {nameInitials(previewName)}
+                </AvatarFallback>
+              </Avatar>
+            </AvatarWithFrame>
           </div>
           <p className="truncate text-lg font-semibold leading-tight">{previewName}</p>
           <p className="truncate text-sm text-muted-foreground">@{user.username}</p>

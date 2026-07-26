@@ -67,6 +67,7 @@ function surfaceToResolved(
     return {
       kind: "solid",
       colors: [style.colors[0]!],
+      colorsDark: style.colors_dark?.length ? [...style.colors_dark] : undefined,
       angle: 90,
       shape: "circle",
       animated: false,
@@ -78,6 +79,10 @@ function surfaceToResolved(
   return {
     kind: style.type,
     colors: style.colors,
+    colorsDark:
+      style.colors_dark && style.colors_dark.length >= 2
+        ? [...style.colors_dark]
+        : undefined,
     angle: style.angle ?? 90,
     shape: style.shape || "circle",
     animated: Boolean(style.animated),
@@ -200,6 +205,9 @@ function patchSurface(
   return {
     type,
     colors,
+    colors_dark: base.colors_dark?.length
+      ? ensureColors(type, base.colors_dark)
+      : undefined,
     angle: type === "linear" ? (base.angle ?? 90) : undefined,
     shape: type === "radial" ? (base.shape ?? "circle") : undefined,
     animated: type === "solid" ? undefined : base.animated,
@@ -210,6 +218,72 @@ function patchSurface(
           ? (base.speed ?? DEFAULT_SPEED)
           : undefined,
   }
+}
+
+/** 色标列表（亮/暗两组共用）：取色器 chip + 增删 */
+function ColorListEditor({
+  type,
+  colors,
+  onChange,
+  disabled,
+  ariaPrefix,
+}: {
+  type: RoleStyleType
+  colors: string[]
+  onChange: (next: string[]) => void
+  disabled?: boolean
+  ariaPrefix: string
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {colors.map((color, index) => (
+        <span
+          key={index}
+          className="relative inline-flex items-center gap-1 rounded-lg border p-1"
+        >
+          <input
+            type="color"
+            aria-label={`${ariaPrefix}颜色 ${index + 1}`}
+            value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#7dd3fc"}
+            disabled={disabled}
+            onChange={(event) => {
+              if (disabled) return
+              const next = [...colors]
+              next[index] = event.target.value
+              onChange(next)
+            }}
+            className="size-7 cursor-pointer rounded-md border-0 bg-transparent p-0 disabled:cursor-not-allowed"
+          />
+          <code className="font-mono text-[10px] text-muted-foreground">
+            {color}
+          </code>
+          {type !== "solid" && colors.length > 2 && (
+            <button
+              type="button"
+              aria-label={`删除${ariaPrefix}颜色 ${index + 1}`}
+              disabled={disabled}
+              onClick={() => onChange(colors.filter((_, i) => i !== index))}
+              className="grid size-4 place-items-center rounded-full transition-[background-color] hover:bg-foreground/10 disabled:pointer-events-none"
+            >
+              <XIcon className="size-3" />
+            </button>
+          )}
+        </span>
+      ))}
+      {type !== "solid" && colors.length < 8 && (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={disabled}
+          onClick={() => onChange([...colors, "#f0abfc"])}
+        >
+          <PlusIcon />
+          加一色
+        </Button>
+      )}
+    </div>
+  )
 }
 
 function SurfaceStyleFields({
@@ -263,64 +337,51 @@ function SurfaceStyleFields({
             颜色（
             {value.type === "solid" ? "1 个" : "2–8 个，多色渐变"}）
           </Label>
-          <div className="flex flex-wrap items-center gap-2">
-            {colors.map((color, index) => (
-              <span
-                key={index}
-                className="relative inline-flex items-center gap-1 rounded-lg border p-1"
-              >
-                <input
-                  type="color"
-                  aria-label={`颜色 ${index + 1}`}
-                  value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#7dd3fc"}
-                  disabled={disabled}
-                  onChange={(event) => {
-                    if (disabled) return
-                    const next = [...colors]
-                    next[index] = event.target.value
-                    onChange({ ...value, colors: next })
-                  }}
-                  className="size-7 cursor-pointer rounded-md border-0 bg-transparent p-0 disabled:cursor-not-allowed"
-                />
-                <code className="font-mono text-[10px] text-muted-foreground">
-                  {color}
-                </code>
-                {value.type !== "solid" && colors.length > 2 && (
-                  <button
-                    type="button"
-                    aria-label={`删除颜色 ${index + 1}`}
-                    disabled={disabled}
-                    onClick={() =>
-                      onChange({
-                        ...value,
-                        colors: colors.filter((_, i) => i !== index),
-                      })
-                    }
-                    className="grid size-4 place-items-center rounded-full transition-[background-color] hover:bg-foreground/10 disabled:pointer-events-none"
-                  >
-                    <XIcon className="size-3" />
-                  </button>
-                )}
-              </span>
-            ))}
-            {value.type !== "solid" && colors.length < 8 && (
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                disabled={disabled}
-                onClick={() =>
-                  onChange({
-                    ...value,
-                    colors: [...colors, "#f0abfc"],
-                  })
-                }
-              >
-                <PlusIcon />
-                加一色
-              </Button>
-            )}
-          </div>
+          <ColorListEditor
+            type={value.type}
+            colors={colors}
+            disabled={disabled}
+            ariaPrefix={labelPrefix}
+            onChange={(next) => onChange({ ...value, colors: next })}
+          />
+        </div>
+      )}
+
+      {value.type !== "" && (
+        <div className="flex flex-col gap-2 rounded-lg border border-dashed p-2.5">
+          <label className="flex items-center gap-2.5 text-sm">
+            <Switch
+              checked={Boolean(value.colors_dark?.length)}
+              disabled={disabled}
+              onCheckedChange={(next) =>
+                onChange({
+                  ...value,
+                  colors_dark: next
+                    ? ensureColors(value.type, value.colors ?? [])
+                    : undefined,
+                })
+              }
+              aria-label={`${labelPrefix}暗色模式独立配色`}
+            />
+            暗色模式独立配色
+          </label>
+          <p className="text-[11px] text-muted-foreground">
+            开启后暗色主题使用下方颜色，亮色主题仍用上方颜色；关闭则亮暗共用同一组。
+          </p>
+          {value.colors_dark?.length ? (
+            <ColorListEditor
+              type={value.type}
+              colors={value.colors_dark}
+              disabled={disabled}
+              ariaPrefix={`${labelPrefix}暗色`}
+              onChange={(next) =>
+                onChange({
+                  ...value,
+                  colors_dark: next.length ? next : undefined,
+                })
+              }
+            />
+          ) : null}
         </div>
       )}
 
@@ -478,6 +539,7 @@ export function RoleStyleEditor({
   const textSurface: RoleStyleSurface = {
     type: value.type,
     colors: value.colors,
+    colors_dark: value.colors_dark,
     angle: value.angle,
     shape: value.shape,
     animated: value.animated,
@@ -508,6 +570,7 @@ export function RoleStyleEditor({
       ...value,
       type: next.type,
       colors: next.colors,
+      colors_dark: next.colors_dark,
       angle: next.angle,
       shape: next.shape,
       animated: next.animated,

@@ -217,6 +217,8 @@ export type GuildMember = {
 export type RoleSurfaceStyle = {
   type?: "solid" | "linear" | "radial" | ""
   colors?: string[]
+  /** 暗色主题独立配色（数量规则同 colors）；空则亮暗共用 colors */
+  colors_dark?: string[]
   angle?: number
   shape?: "circle" | "ellipse" | string
   animated?: boolean

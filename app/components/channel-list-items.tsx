@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner"
 
 import { AdminMemberMenuSection } from "~/components/admin/admin-member-menu"
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { GuildSettingsContextMenuItems } from "~/components/guild-settings-menu-items"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
@@ -82,6 +83,7 @@ import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelUnlocksStore } from "~/stores/channel-unlocks"
 import { useChannelsStore } from "~/stores/channels"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useMembersStore } from "~/stores/members"
 import { usePresenceStore } from "~/stores/presence"
 import {
@@ -710,6 +712,13 @@ function VoiceParticipantRow({
 
   const presence = usePresenceStore((s) => s.statusByUser[state.user_id])
 
+  // 头像框：本人走 loadout，他人复用成员进服时缓存的 equippedByUser（零新增请求）
+  const avatarFrame = useCosmeticsStore((s) =>
+    state.user_id === selfId
+      ? s.loadout.avatar_frame
+      : s.equippedByUser[state.user_id]?.avatar_frame,
+  )
+
   const isSelf = state.user_id === selfId
   const speaking = isSelf ? selfSpeaking || remoteSpeaking : remoteSpeaking
   const name = voiceParticipantDisplayName(state, member, selfUser)
@@ -720,28 +729,32 @@ function VoiceParticipantRow({
       <ContextMenuTrigger className="block w-full">
         <div className="group flex h-8 items-center gap-2 rounded-md py-1 pr-1 pl-7 text-sm text-muted-foreground hover:bg-muted/50">
           <span className="relative shrink-0">
-            <Avatar
-              className={cn(
-                "size-6 after:border-0",
-                // 无头像时去掉描边环，仅用底色块
-                !avatarSrc && "after:hidden",
-                speaking && "ring-2 ring-emerald-500",
-              )}
-            >
-              {avatarSrc ? (
-                <AvatarImage
-                  src={avatarSrc}
-                  alt={name}
-                  className="object-cover"
-                />
-              ) : null}
-              <AvatarFallback className="bg-muted text-[10px] text-muted-foreground">
-                {nameInitials(name)}
-              </AvatarFallback>
-            </Avatar>
+            {/* 语音参与者小头像套装扮头像框（size-6，达到接框下限） */}
+            <AvatarWithFrame frame={avatarFrame} sizeClass="size-6">
+              <Avatar
+                className={cn(
+                  "size-6 after:border-0",
+                  // 无头像时去掉描边环，仅用底色块
+                  !avatarSrc && "after:hidden",
+                  speaking && "ring-2 ring-emerald-500",
+                )}
+              >
+                {avatarSrc ? (
+                  <AvatarImage
+                    src={avatarSrc}
+                    alt={name}
+                    className="object-cover"
+                  />
+                ) : null}
+                <AvatarFallback className="bg-muted text-[10px] text-muted-foreground">
+                  {nameInitials(name)}
+                </AvatarFallback>
+              </Avatar>
+            </AvatarWithFrame>
             <span
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-background",
+                // z-[3]：在线点保持压在头像框（z-[2]）之上
+                "absolute -right-0.5 -bottom-0.5 z-[3] size-2 rounded-full ring-2 ring-background",
                 presenceDotClass(presence)
               )}
             />

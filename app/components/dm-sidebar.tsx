@@ -9,6 +9,7 @@ import {
   LogOutIcon,
   PlusIcon,
   SearchIcon,
+  SparklesIcon,
   StickerIcon,
   UserPlusIcon,
   UsersIcon,
@@ -16,8 +17,10 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { presenceDotClass } from "~/components/nav-user"
 import { FRIENDS_PATH, isFriendsLocation } from "~/lib/friends-route"
+import { SHOP_PATH, isShopLocation } from "~/lib/shop-route"
 import { STICKERS_PATH, isStickersLocation } from "~/lib/stickers-route"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
@@ -49,6 +52,7 @@ import {
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import {
   dmDisplayName,
   sortPrivateChannels,
@@ -89,6 +93,10 @@ function DmRow({
   const peer = peerOf(ch, selfId)
   const peerPresence = usePresenceStore((s) =>
     peer?.id ? s.statusByUser[peer.id] : undefined,
+  )
+  // 对方头像框：只订阅单槽引用；无缓存则无框降级，不单独发请求
+  const peerAvatarFrame = useCosmeticsStore((s) =>
+    peer?.id ? s.equippedByUser[peer.id]?.avatar_frame : undefined,
   )
   const title = dmDisplayName(ch, selfId)
   const avatarSrc =
@@ -138,24 +146,28 @@ function DmRow({
               <UsersIcon className="size-4" />
             </span>
           ) : (
-            <Avatar className="size-9 after:border-0">
-              {avatarSrc ? (
-                <AvatarImage
-                  src={avatarSrc}
-                  alt=""
-                  className="object-cover"
-                />
-              ) : null}
-              <AvatarFallback className="text-xs font-medium">
-                {nameInitials(title)}
-              </AvatarFallback>
-            </Avatar>
+            /* 1:1 私信：对方头像套装扮头像框（群聊为群图标不套） */
+            <AvatarWithFrame frame={peerAvatarFrame} sizeClass="size-9">
+              <Avatar className="size-9 after:border-0">
+                {avatarSrc ? (
+                  <AvatarImage
+                    src={avatarSrc}
+                    alt=""
+                    className="object-cover"
+                  />
+                ) : null}
+                <AvatarFallback className="text-xs font-medium">
+                  {nameInitials(title)}
+                </AvatarFallback>
+              </Avatar>
+            </AvatarWithFrame>
           )}
           {ch.type !== "GROUP_DM" ? (
             <span
               title={peerPresence ? "在线状态" : "离线"}
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-card",
+                // z-[3]：在线点保持压在头像框（z-[2]）之上
+                "absolute -right-0.5 -bottom-0.5 z-[3] size-2.5 rounded-full ring-2 ring-card",
                 presenceDotClass(peerPresence),
               )}
             />
@@ -313,6 +325,11 @@ export function DmSidebar() {
     navigate(STICKERS_PATH)
   }
 
+  const openShop = () => {
+    useUIStore.getState().selectGuild(null)
+    navigate(SHOP_PATH)
+  }
+
   /** 关闭会话后回到私信落地页（非好友页） */
   const openDmHome = () => {
     useUIStore.getState().selectGuild(null)
@@ -362,6 +379,7 @@ export function DmSidebar() {
 
   const friendsActive = isFriendsLocation(location)
   const stickersActive = isStickersLocation(location)
+  const shopActive = isShopLocation(location)
 
   return (
     <aside
@@ -437,6 +455,31 @@ export function DmSidebar() {
                 {formatUnreadBadge(pendingCount)}
               </span>
             ) : null}
+          </button>
+
+          {/* 装扮商城入口 */}
+          <button
+            type="button"
+            onClick={openShop}
+            className={cn(
+              "mb-1 flex min-h-12 w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px]",
+              "transition-[background-color] duration-150 ease-out",
+              shopActive
+                ? "bg-muted font-semibold text-foreground"
+                : "font-medium text-foreground hover:bg-muted/70",
+            )}
+          >
+            <span
+              className={cn(
+                "flex size-9 items-center justify-center rounded-full",
+                shopActive
+                  ? "bg-primary/15 text-primary"
+                  : "bg-black/[0.06] text-muted-foreground dark:bg-white/10",
+              )}
+            >
+              <SparklesIcon className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1">装扮商城</span>
           </button>
 
           {/* 贴图库入口 */}

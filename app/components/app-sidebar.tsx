@@ -34,6 +34,7 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 
 import { isFriendsLocation } from "~/lib/friends-route"
+import { isShopLocation } from "~/lib/shop-route"
 import { isStickersLocation } from "~/lib/stickers-route"
 import { cn } from "~/lib/utils"
 import { useGuildsStore } from "~/stores/guilds"
@@ -72,6 +73,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [addOpen, setAddOpen] = React.useState(false)
   const isFriendsRoute = isFriendsLocation(location)
   const isStickersRoute = isStickersLocation(location)
+  const isShopRoute = isShopLocation(location)
 
   // 服务器栏个人排序（docs 17 FR-23）：guildOrder 优先，未收录的按加入时间排末尾
   const guildOrder = useSettingsStore((state) => state.guildOrder)
@@ -137,6 +139,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               isActive={
                 !isFriendsRoute &&
                 !isStickersRoute &&
+                !isShopRoute &&
                 (selectedGuildId == null || selectedGuildId === "@me")
               }
               onClick={goHome}

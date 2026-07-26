@@ -2,6 +2,7 @@
 
 import type { CSSProperties } from "react"
 
+import { useIsDark } from "~/hooks/use-is-dark"
 import { cn } from "~/lib/utils"
 import {
   iconStyleToFillCSS,
@@ -22,6 +23,7 @@ export function StyledDisplayName({
   className?: string
   prefix?: string
 }) {
+  const dark = useIsDark()
   const resolved = style ?? {
     kind: "none" as const,
     colors: [],
@@ -30,7 +32,7 @@ export function StyledDisplayName({
     animated: false,
     speed: 4,
   }
-  const css = nameStyleToCSS(resolved)
+  const css = nameStyleToCSS(resolved, dark)
   const isGradient = resolved.kind === "linear" || resolved.kind === "radial"
 
   return (
@@ -62,6 +64,7 @@ export function RoleStyleDot({
   title?: string
   fallbackColor?: string
 }) {
+  const dark = useIsDark()
   const resolved = style ?? {
     kind: "none" as const,
     colors: [],
@@ -70,7 +73,7 @@ export function RoleStyleDot({
     animated: false,
     speed: 4,
   }
-  const fill = iconStyleToFillCSS(resolved)
+  const fill = iconStyleToFillCSS(resolved, dark)
   const isGradient = resolved.kind === "linear" || resolved.kind === "radial"
   const css: CSSProperties =
     fill.backgroundImage || fill.backgroundColor
@@ -101,8 +104,9 @@ export function RoleBadgePill({
   badge: MemberRoleBadgeView
   className?: string
 }) {
+  const dark = useIsDark()
   const fill = badge.badgeBackground
-    ? iconStyleToFillCSS(badge.badgeBackground)
+    ? iconStyleToFillCSS(badge.badgeBackground, dark)
     : {}
   const hasGradient = Boolean(fill.backgroundImage || fill.backgroundColor)
   const bgImageUrl = badge.badgeBackgroundImageUrl

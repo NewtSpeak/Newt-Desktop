@@ -15,6 +15,7 @@ import {
   notifySavedCredentialsChanged,
   SavedCredentialsPanel,
 } from "~/components/saved-credentials-panel"
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import { Checkbox } from "~/components/ui/checkbox"
@@ -52,6 +53,7 @@ import {
   useAuthStore,
   type AccountSummary,
 } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useUIStore } from "~/stores/ui"
 
 type Step = "list" | "invite" | "login" | "signup"
@@ -108,6 +110,8 @@ export function SwitchAccountDialog({
   const activeAccountId = useAuthStore((s) => s.activeAccountId)
   const gatewayStatus = useUIStore((s) => s.gatewayStatus)
   const canLogoutActive = gatewayStatus === "connected"
+  // 头像框：cosmetics store 只有当前激活账号的 loadout，其余账号无数据不套框
+  const activeAvatarFrame = useCosmeticsStore((s) => s.loadout.avatar_frame)
 
   const [step, setStep] = React.useState<Step>("list")
   const [busyId, setBusyId] = React.useState<string | null>(null)
@@ -458,18 +462,24 @@ export function SwitchAccountDialog({
                       onClick={() => void handleSwitch(account.id)}
                       className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none hover:opacity-90 disabled:opacity-50"
                     >
-                      <Avatar className="size-9 shrink-0 rounded-lg after:rounded-lg after:border-0">
-                        {avatarSrc ? (
-                          <AvatarImage
-                            src={avatarSrc}
-                            alt={display}
-                            className="rounded-lg object-cover"
-                          />
-                        ) : null}
-                        <AvatarFallback className="rounded-lg text-xs">
-                          {nameInitials(display)}
-                        </AvatarFallback>
-                      </Avatar>
+                      {/* 仅当前激活账号套 loadout 头像框（其他账号无装扮数据） */}
+                      <AvatarWithFrame
+                        frame={isActive ? activeAvatarFrame : undefined}
+                        sizeClass="size-9"
+                      >
+                        <Avatar className="size-9 shrink-0 rounded-lg after:rounded-lg after:border-0">
+                          {avatarSrc ? (
+                            <AvatarImage
+                              src={avatarSrc}
+                              alt={display}
+                              className="rounded-lg object-cover"
+                            />
+                          ) : null}
+                          <AvatarFallback className="rounded-lg text-xs">
+                            {nameInitials(display)}
+                          </AvatarFallback>
+                        </Avatar>
+                      </AvatarWithFrame>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <span className="truncate text-sm font-medium">

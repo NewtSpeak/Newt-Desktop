@@ -183,10 +183,11 @@ function AuthorAvatar({
         aria-hidden
       >
         <span className={cn("absolute inset-0", color)} />
+        {/* block：img 默认 inline 会在基线下留缝，让垫底色块从底部露出 */}
         <img
           src={avatarUrl}
           alt=""
-          className="relative size-9 rounded-full object-cover"
+          className="relative block size-9 rounded-full object-cover"
           draggable={false}
         />
       </span>

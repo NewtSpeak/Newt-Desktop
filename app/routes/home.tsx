@@ -5,6 +5,8 @@
 import { MessageCircleIcon } from "lucide-react"
 import { useSearchParams } from "react-router"
 
+import { CosmeticsInventoryView } from "~/components/cosmetics-inventory-view"
+import { CosmeticsShopView } from "~/components/cosmetics-shop-view"
 import { CreateStickerPackView } from "~/components/create-sticker-pack-view"
 import { FriendsView } from "~/components/friends-view"
 import { ManageStickerPacksView } from "~/components/manage-sticker-packs-view"
@@ -19,6 +21,7 @@ export default function HomePage() {
   const tab = searchParams.get("tab")
   const showFriends = tab === "friends"
   const showStickers = tab === "stickers"
+  const showShop = tab === "shop"
   const stickersView = searchParams.get("view")
   const showCreatePack = showStickers && stickersView === "create"
   const showManagePacks = showStickers && stickersView === "manage"
@@ -26,6 +29,14 @@ export default function HomePage() {
   // 好友页：复用 index 路由，URL 为 /?tab=friends
   if (showFriends) {
     return <FriendsView />
+  }
+
+  // 装扮商城 / 我的装扮：URL 为 /?tab=shop[&view=inventory]
+  if (showShop) {
+    if (searchParams.get("view") === "inventory") {
+      return <CosmeticsInventoryView />
+    }
+    return <CosmeticsShopView />
   }
 
   // 贴图库 / 创建向导 / 管理页

@@ -1,5 +1,6 @@
 // 社交层 API：隐私 / 好友关系 / 通知收件箱（Server-16）。
 
+import type { EquippedSlot } from "./cosmetics"
 import { api, qs } from "./http"
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,8 @@ export type RelationshipUser = {
   banner_url?: string
   /** 主题色（无横幅时的卡片底色回退） */
   accent_color?: string
+  /** 装扮精简投影（头像框 + 铭牌；服务端可选附带，写入 cosmetics store 缓存） */
+  cosmetics?: Record<string, EquippedSlot>
 }
 
 export type Relationship = {

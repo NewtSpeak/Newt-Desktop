@@ -11,6 +11,22 @@ import {
   type Relationship,
 } from "~/lib/api/social"
 
+/**
+ * 将关系列表里用户携带的装扮精简投影写入 cosmetics store
+ * （好友/请求列表、私信侧栏等处渲染头像框用；参照 members.ts 的写入模式）。
+ */
+function seedRelationshipCosmetics(items: Relationship[]) {
+  void import("./cosmetics").then(({ useCosmeticsStore }) => {
+    const store = useCosmeticsStore.getState()
+    for (const rel of items) {
+      const cosmetics = rel.user?.cosmetics
+      if (cosmetics && Object.keys(cosmetics).length > 0) {
+        store.setEquippedForUser(rel.user.id, cosmetics)
+      }
+    }
+  })
+}
+
 type RelationshipsState = {
   items: Relationship[]
   loaded: boolean
@@ -33,11 +49,17 @@ export const useRelationshipsStore = create<RelationshipsState>()((set, get) => 
   items: [],
   loaded: false,
 
-  setFromReady: (items) => set({ items: items ?? [], loaded: true }),
+  setFromReady: (items) => {
+    set({ items: items ?? [], loaded: true })
+    // READY 注入的关系可能附带装扮投影，顺手写入缓存
+    seedRelationshipCosmetics(items ?? [])
+  },
 
   refresh: async () => {
     const items = await listRelationships()
     set({ items, loaded: true })
+    // REST 刷新的关系可能附带装扮投影，顺手写入缓存
+    seedRelationshipCosmetics(items)
   },
 
   upsert: (rel) =>

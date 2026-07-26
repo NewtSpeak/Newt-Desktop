@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -52,6 +53,7 @@ import {
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useGuildsStore } from "~/stores/guilds"
 import { useMembersStore } from "~/stores/members"
 import { usePresenceStore } from "~/stores/presence"
@@ -408,6 +410,7 @@ export default function ModerationPage() {
                       avatarSrc={avatar}
                       online={Boolean(statusByUser[state.user_id])}
                       sub={`# ${channelName}`}
+                      userId={state.user_id}
                     />
                     <div className="flex flex-wrap gap-1 text-[10px]">
                       {state.self_mute && <Badge>自静音</Badge>}
@@ -536,6 +539,7 @@ export default function ModerationPage() {
                       avatarSrc={avatar}
                       online={Boolean(statusByUser[member.user_id])}
                       sub={`@${member.username || member.user_id.slice(0, 8)}`}
+                      userId={member.user_id}
                     />
                     <div className="flex flex-wrap gap-1 text-[10px]">
                       {member.is_owner && <Badge tone="amber">所有者</Badge>}
@@ -770,31 +774,41 @@ function UserChip({
   avatarSrc,
   sub,
   online,
+  userId,
 }: {
   name: string
   avatarSrc?: string
   sub?: string
   online?: boolean
+  /** 传入则机会主义读装扮缓存渲染头像框（无数据则无框降级，不新发请求） */
+  userId?: string
 }) {
+  // 头像框：只订阅单槽引用；仅读 equippedByUser 缓存
+  const avatarFrame = useCosmeticsStore((s) =>
+    userId ? s.equippedByUser[userId]?.avatar_frame : undefined,
+  )
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <span className="relative shrink-0">
-        <Avatar className="size-9 rounded-xl after:rounded-xl after:border-0">
-          {avatarSrc ? (
-            <AvatarImage
-              src={avatarSrc}
-              alt={name}
-              className="rounded-xl object-cover"
-            />
-          ) : null}
-          <AvatarFallback className="rounded-xl text-xs">
-            {nameInitials(name)}
-          </AvatarFallback>
-        </Avatar>
+        <AvatarWithFrame frame={avatarFrame} sizeClass="size-9">
+          <Avatar className="size-9 rounded-xl after:rounded-xl after:border-0">
+            {avatarSrc ? (
+              <AvatarImage
+                src={avatarSrc}
+                alt={name}
+                className="rounded-xl object-cover"
+              />
+            ) : null}
+            <AvatarFallback className="rounded-xl text-xs">
+              {nameInitials(name)}
+            </AvatarFallback>
+          </Avatar>
+        </AvatarWithFrame>
         {online !== undefined && (
           <span
             className={cn(
-              "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-card",
+              // z-[3]：在线点保持压在头像框（z-[2]）之上
+              "absolute -right-0.5 -bottom-0.5 z-[3] size-2.5 rounded-full ring-2 ring-card",
               online ? "bg-emerald-500" : "bg-zinc-500",
             )}
           />

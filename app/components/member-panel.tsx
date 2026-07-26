@@ -426,7 +426,7 @@ function MemberRow({
       <ContextMenu>
         <ContextMenuTrigger
           className={cn(
-            "relative flex w-full items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/70",
+            "relative flex w-full items-center gap-2 overflow-hidden rounded-md px-2 py-0.5 text-left text-sm hover:bg-muted/70",
             online ? "text-foreground/90" : "opacity-50"
           )}
           onClick={(event) => {
@@ -441,9 +441,10 @@ function MemberRow({
           }}
         >
           <NameplateBackground nameplate={nameplate} />
-          <span className="relative z-[1] shrink-0">
-            <AvatarWithFrame frame={avatarFrame} sizeClass="size-7">
-              <Avatar className="size-7 rounded-full after:rounded-full after:border-0">
+          {/* flex：消除 inline 基线偏移，让头像+头像框整体在行内垂直居中 */}
+          <span className="relative z-[1] flex shrink-0 items-center justify-center">
+            <AvatarWithFrame frame={avatarFrame} sizeClass="size-8">
+              <Avatar className="size-8 rounded-full after:rounded-full after:border-0">
                 {avatarSrc && (
                   <AvatarImage
                     src={avatarSrc}
@@ -483,18 +484,20 @@ function MemberRow({
         </ContextMenuTrigger>
 
         <ContextMenuContent
-          className="w-64 overflow-hidden p-0 sm:w-72"
+          // 透明外壳 + 内边距：外挂边框（上/下悬出、左右各超 5%）落在菜单盒内不被裁；
+          // 基类的 overflow-x-hidden/overflow-y-auto 用 overflow-visible 覆盖
+          className="w-72 overflow-visible rounded-none bg-transparent px-4 py-6 shadow-none ring-0 sm:w-80"
           side="left"
           align="start"
           sideOffset={8}
         >
-          {/* —— 精简资料卡：仅展示信息；操作在右上角 —— */}
+          {/* —— 精简资料卡：固定 9:16 竖版（宽度固定、高度按比例），内容不满则底部留空 —— */}
           <ProfileCardChrome
             border={profileBorder}
             effect={profileEffect}
             size="compact"
             playAudio
-            className="relative"
+            className="relative aspect-[9/16] rounded-2xl bg-popover shadow-lg ring-1 ring-foreground/5 dark:ring-foreground/10"
           >
             <div
               className={cn(
@@ -744,8 +747,8 @@ function MemberRow({
             </div>
 
             <div className="relative px-4 pb-4">
-              {/* 圆形头像压在横幅下沿 */}
-              <div className="relative -mt-10 mb-3 size-20">
+              {/* 圆形头像压在横幅下沿；ml-3 右移让出外挂边框的悬出区 */}
+              <div className="relative -mt-10 mb-3 ml-3 size-20">
                 <AvatarWithFrame frame={avatarFrame} sizeClass="size-20">
                   <Avatar className="size-20 rounded-full ring-4 ring-popover after:rounded-full after:border-0">
                     {avatarSrc ? (

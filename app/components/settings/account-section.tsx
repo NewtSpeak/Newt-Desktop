@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -32,6 +33,7 @@ import {
   LOGOUT_OFFLINE_MESSAGE,
   useAuthStore,
 } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useSettingsStore } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
 import { GroupLabel, SectionTitle, SettingRow } from "./section"
@@ -65,6 +67,8 @@ function formatTime(iso: string): string {
 export function AccountSection() {
   const user = useAuthStore((state) => state.user)
   const navigate = useNavigate()
+  // 自己的头像框走本人 loadout（放在 early return 之前，保证 hooks 顺序稳定）
+  const avatarFrame = useCosmeticsStore((state) => state.loadout.avatar_frame)
 
   // 改密
   const [showPassword, setShowPassword] = useState(false)
@@ -234,12 +238,15 @@ export function AccountSection() {
 
       <GroupLabel id="account-info">账号信息</GroupLabel>
       <div className="flex items-center gap-4 rounded-2xl bg-muted/50 p-4">
-        <Avatar className="size-16 rounded-2xl">
-          {avatarSrc && <AvatarImage src={avatarSrc} alt={display} />}
-          <AvatarFallback className="rounded-2xl text-lg">
-            {nameInitials(display)}
-          </AvatarFallback>
-        </Avatar>
+        {/* 账号信息卡头像：套上自己已装备的头像框 */}
+        <AvatarWithFrame frame={avatarFrame} sizeClass="size-16">
+          <Avatar className="size-16 rounded-2xl">
+            {avatarSrc && <AvatarImage src={avatarSrc} alt={display} />}
+            <AvatarFallback className="rounded-2xl text-lg">
+              {nameInitials(display)}
+            </AvatarFallback>
+          </Avatar>
+        </AvatarWithFrame>
         <div className="min-w-0">
           <p className="truncate text-base font-semibold">{display}</p>
           <p className="truncate text-sm text-muted-foreground">@{user.username}</p>

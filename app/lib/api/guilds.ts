@@ -315,6 +315,8 @@ export type RoleStyleType = "" | "solid" | "linear" | "radial"
 export type RoleStyleSurface = {
   type: RoleStyleType
   colors?: string[]
+  /** 暗色主题独立配色；空则亮暗共用 colors */
+  colors_dark?: string[]
   angle?: number
   shape?: "circle" | "ellipse"
   animated?: boolean
@@ -355,6 +357,7 @@ function parseSurface(
   return {
     type,
     colors: obj.colors?.length ? [...obj.colors] : undefined,
+    colors_dark: obj.colors_dark?.length ? [...obj.colors_dark] : undefined,
     angle: obj.angle,
     shape:
       obj.shape === "ellipse" || obj.shape === "circle" ? obj.shape : undefined,
@@ -426,6 +429,7 @@ export function parseRoleStyle(
   return {
     type: base.type,
     colors: base.colors,
+    colors_dark: base.colors_dark,
     angle: base.angle,
     shape: base.shape,
     animated: base.animated,
