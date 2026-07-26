@@ -75,5 +75,10 @@ export const SECTION_TOC: Record<SettingsSection, SettingsTocItem[]> = {
   "cosmetics-inventory": [
     { id: "cosmetics-inventory", label: "库存与装备" },
   ],
+  activity: [
+    { id: "activity-level", label: "等级与加成" },
+    { id: "activity-today", label: "今日活跃" },
+    { id: "activity-history", label: "历史记录" },
+  ],
   about: [{ id: "about-oss", label: "开源信息" }],
 }

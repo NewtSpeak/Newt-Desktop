@@ -8,6 +8,7 @@ import {
   BellIcon,
   ChevronDownIcon,
   CircleUserRoundIcon,
+  FlameIcon,
   IdCardIcon,
   InfoIcon,
   KeyboardIcon,
@@ -24,6 +25,7 @@ import {
 import { cn } from "~/lib/utils"
 import { useSettingsStore, type SettingsSection } from "~/stores/settings"
 import { AboutSection } from "./about-section"
+import { ActivitySection } from "./activity-section"
 import { AccountSection } from "./account-section"
 import { ApplicationsSection } from "./applications-section"
 import { AppearanceSection } from "./appearance-section"
@@ -69,6 +71,7 @@ const NAV: {
     items: [
       { id: "cosmetics-shop", label: "装扮商店", icon: SparklesIcon },
       { id: "cosmetics-inventory", label: "我的装扮", icon: PackageOpenIcon },
+      { id: "activity", label: "活跃度", icon: FlameIcon },
     ],
   },
   {
@@ -104,6 +107,8 @@ function SectionContent({ section }: { section: SettingsSection }) {
       return <CosmeticsShopSection />
     case "cosmetics-inventory":
       return <CosmeticsInventorySection />
+    case "activity":
+      return <ActivitySection />
     case "about":
       return <AboutSection />
     default:

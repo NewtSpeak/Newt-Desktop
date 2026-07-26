@@ -396,6 +396,9 @@ export function UserProfilePopover({
             />
             {presenceLabel(presence)}
             {isFriend ? " · 好友" : isBlocked ? " · 已屏蔽" : null}
+            {profile?.activity_level && profile.activity_level > 0
+              ? ` · Lv.${profile.activity_level}`
+              : null}
             {loading ? " · 加载中…" : null}
           </p>
           {bio ? (

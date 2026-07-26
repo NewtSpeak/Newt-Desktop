@@ -365,7 +365,7 @@ export function CosmeticsShopSection() {
 
       <SettingRow
         label="关于积分"
-        description="积分可由管理员发放。使用服务器内货币兑换积分的入口已预留，当前尚未开放。"
+        description="积分可通过每日活跃自动获得（详见「活跃度」页），也可由管理员发放。使用服务器内货币兑换积分的入口已预留，当前尚未开放。"
       />
     </div>
   )

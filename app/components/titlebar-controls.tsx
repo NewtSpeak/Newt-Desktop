@@ -1,4 +1,4 @@
-// 窗口右上角悬浮控制区：主题、通知铃铛、好友入口（含私信未读）、窗口三键。
+// 窗口右上角悬浮控制区：主题、活跃度速览、通知铃铛、好友入口（含私信未读）、窗口三键。
 
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router"
@@ -12,6 +12,7 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { ActivityQuickButton } from "~/components/activity-quick-popover"
 import { NotificationsInboxButton } from "~/components/notifications-inbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip"
 import { FRIENDS_PATH } from "~/lib/friends-route"
@@ -205,6 +206,7 @@ export function TitlebarControls() {
       onMouseDown={dragWindowOnMouseDown}
     >
       <ThemeToggleButton />
+      <ActivityQuickButton />
       <NotificationsInboxButton />
       <FriendsButton />
       {showWindowControls && (

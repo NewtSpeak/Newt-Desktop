@@ -247,6 +247,7 @@ export type SettingsSection =
   | "stickers"
   | "cosmetics-shop"
   | "cosmetics-inventory"
+  | "activity"
   | "about"
 
 const DEFAULT_VOICE: VoiceSettings = {
