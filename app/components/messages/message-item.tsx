@@ -178,16 +178,21 @@ function AuthorAvatar({
   // 有头像 URL：色块垫底 + 图片覆盖，避免加载瞬间露出文字首字母头像
   if (avatarUrl) {
     return (
+      // block：inline span 会忽略 size-9 并在基线下留缝，垫底色块随 inset-0 撑高露出
       <span
-        className="relative size-9 shrink-0 overflow-hidden rounded-full select-none"
+        className="relative block size-9 shrink-0 overflow-hidden rounded-full select-none"
         aria-hidden
       >
-        <span className={cn("absolute inset-0", color)} />
-        {/* block：img 默认 inline 会在基线下留缝，让垫底色块从底部露出 */}
+        {/* inset-px + 自带圆角：垫底色块永远到不了容器圆周边缘，
+            任何 DPI 舍入/抗锯齿场景都不可能露出色边 */}
+        <span className={cn("absolute inset-px rounded-full", color)} />
+        {/* block：img 默认 inline 会在基线下留缝，让垫底色块从底部露出；
+            不叠自己的 rounded-full——双重圆角裁切的抗锯齿边会让垫底色露出 1px 描边，
+            方形铺满、只由容器裁圆 */}
         <img
           src={avatarUrl}
           alt=""
-          className="relative block size-9 rounded-full object-cover"
+          className="relative block size-9 object-cover"
           draggable={false}
         />
       </span>
