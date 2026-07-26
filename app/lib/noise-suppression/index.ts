@@ -617,10 +617,15 @@ async function importDtlnModule(): Promise<DtlnModule> {
     console.info("[noise-suppression] 动态加载 @sapphi-red/dtln-web (ESM) …")
     dtlnModulePromise = (async () => {
       // vite.config alias 将包名指向 dist/index.mjs，避免 CJS main 的 default 互操作错误
+      // 注意：WebView + 系统代理环境下动态 import 偶发 Failed to fetch，需可恢复
       const mod = await import("@sapphi-red/dtln-web")
       return normalizeDtlnModule(mod as Record<string, unknown>)
     })().catch((error) => {
       dtlnModulePromise = null
+      console.warn(
+        "[noise-suppression] DTLN 模块加载失败，将在使用时回退其它模型",
+        error,
+      )
       throw error
     })
   }

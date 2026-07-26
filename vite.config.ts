@@ -1,10 +1,129 @@
+import { EventEmitter } from "node:events"
+import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { reactRouter } from "@react-router/dev/vite"
 import tailwindcss from "@tailwindcss/vite"
-import { defineConfig } from "vite"
+import { defineConfig, type Plugin } from "vite"
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url))
+const srcTauriDir = path.resolve(rootDir, "src-tauri")
+
+// Windows + 非 ASCII 路径下，chokidar 的 src-tauri glob 有时匹配失败，
+// 仍会 watch 到 Cargo 锁定的 app_lib.dll，触发 EBUSY 把 tauri dev 干崩。
+// 用 path.relative 做目录归属判断，比 glob 稳。
+function isInsideSrcTauri(filePath: string): boolean {
+  const abs = path.resolve(filePath)
+  const rel = path.relative(srcTauriDir, abs)
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+}
+
+/**
+ * React Router 会再 createServer 一个 child compiler，并 **整段覆盖** server 配置：
+ *   server: { watch: command==="build" ? null : undefined, hmr: false, ... }
+ * 主配置里的 server.watch.ignored 对 child 无效；child 仍会 chokidar 扫到
+ * src-tauri/target 里 Cargo 正在锁的 dll，EBUSY 直接把 Node 进程打崩，
+ * 表现就是 `bun run tauri dev` 的 beforeDevCommand 退出。
+ *
+ * 在加载 vite 配置时给 fs.watch 打补丁：对 src-tauri 产物路径直接返回空 watcher，
+ * 其它路径的 EBUSY/EPERM 也吞掉，主 server 与 child compiler 都生效。
+ */
+function installFsWatchGuard(): void {
+  const original = fs.watch
+  if ((original as typeof original & { __owlspeakPatched?: boolean }).__owlspeakPatched) {
+    return
+  }
+
+  const isBenignWatchError = (err: unknown): boolean => {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code
+    return code === "EBUSY" || code === "EPERM" || code === "EACCES"
+  }
+
+  const makeNoopWatcher = (): fs.FSWatcher => {
+    const noop = new EventEmitter() as fs.FSWatcher
+    noop.close = () => {
+      noop.emit("close")
+      return noop
+    }
+    noop.ref = () => noop
+    noop.unref = () => noop
+    return noop
+  }
+
+  const patched = ((
+    filename: fs.PathLike,
+    options?: fs.WatchOptions | string | ((e: string, f: string | null) => void),
+    listener?: (e: string, f: string | null) => void,
+  ): fs.FSWatcher => {
+    const filePath = filename.toString()
+    if (isInsideSrcTauri(filePath)) {
+      return makeNoopWatcher()
+    }
+    try {
+      const watcher =
+        typeof options === "function"
+          ? original(filename, options)
+          : listener
+            ? original(filename, options as fs.WatchOptions | string, listener)
+            : original(filename, options as fs.WatchOptions | string | undefined)
+      watcher.on("error", (err) => {
+        if (isBenignWatchError(err)) return
+        if (watcher.listenerCount("error") <= 1) {
+          console.warn("[vite-watch-guard]", err)
+        }
+      })
+      return watcher
+    } catch (err) {
+      if (isBenignWatchError(err)) return makeNoopWatcher()
+      throw err
+    }
+  }) as typeof fs.watch & { __owlspeakPatched?: boolean }
+
+  patched.__owlspeakPatched = true
+  fs.watch = patched
+}
+
+installFsWatchGuard()
+
+/** 主 dev server：主动 unwatch src-tauri，并兜底吞掉 watcher EBUSY */
+function tauriWatchGuardPlugin(): Plugin {
+  return {
+    name: "owlspeak:tauri-watch-guard",
+    configureServer(server) {
+      server.watcher.unwatch(srcTauriDir)
+      server.watcher.unwatch(path.join(srcTauriDir, "**"))
+      server.watcher.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EBUSY" || err.code === "EPERM" || err.code === "EACCES") return
+        console.warn("[vite-watch-guard]", err)
+      })
+    },
+  }
+}
+
+/**
+ * Chrome/Chromium DevTools 会自动探测
+ * `/.well-known/appspecific/com.chrome.devtools.json`。
+ * React Router 框架模式没有匹配路由时会抛
+ * “No route matches URL”，把 dev 控制台刷红。
+ * 在进入 RR 处理器之前直接 204 短路。
+ */
+function chromeDevtoolsJsonPlugin(): Plugin {
+  return {
+    name: "owlspeak:chrome-devtools-json",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const pathname = (req.url ?? "").split("?")[0] ?? ""
+        if (pathname === "/.well-known/appspecific/com.chrome.devtools.json") {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        next()
+      })
+    },
+  }
+}
+
 /** 强制走 ESM 产物，避免 main→index.js(CJS) 触发 default 互操作错误 */
 const dtlnWebEsm = path.resolve(
   rootDir,
@@ -84,6 +203,8 @@ const OPTIMIZE_INCLUDE = [
 ]
 
 export default defineConfig({
+  // Tauri 会自己清屏打印 Rust 编译日志；关掉 Vite 清屏避免两边抢输出
+  clearScreen: false,
   resolve: {
     tsconfigPaths: true,
     alias: {
@@ -92,7 +213,12 @@ export default defineConfig({
       "@sapphi-red/dtln-web": dtlnWebEsm,
     },
   },
-  plugins: [tailwindcss(), reactRouter()],
+  plugins: [
+    tauriWatchGuardPlugin(),
+    chromeDevtoolsJsonPlugin(),
+    tailwindcss(),
+    reactRouter(),
+  ],
   optimizeDeps: {
     // 禁止运行时依赖发现 → 禁止中途改 browserHash → 消除 504 Outdated Optimize Dep
     noDiscovery: true,
@@ -106,6 +232,13 @@ export default defineConfig({
     host: true,
     port: 1420,
     strictPort: true,
+    // 热重载必须开 watch；只把 src-tauri 整棵树排除（尤其是 target/*.dll）
+    watch: {
+      ignored: [
+        "**/src-tauri/**",
+        (filePath: string) => isInsideSrcTauri(filePath),
+      ],
+    },
     // 服务端 CORS 只放行 localhost:5173，dev 下把 /gapi 代理到本地 Owl-Server；
     // ws: true 让 Gateway WebSocket（/gapi/v1/gateway）也走同一代理。
     proxy: {

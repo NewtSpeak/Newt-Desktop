@@ -40,6 +40,7 @@ import { SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar"
 import { canOpenGuildAdmin } from "~/components/guild-settings/guild-settings-panel"
 import { leaveGuild } from "~/lib/api/guilds"
 import { ApiError } from "~/lib/api/http"
+import { landInGuild } from "~/lib/land-in-guild"
 import {
   nameInitials,
   resolveProfileAssetUrl,
@@ -170,12 +171,11 @@ export function ServerRailItem({
   if (!guild) return null
 
   const handleSelect = () => {
-    if (selected) return
+    // 已在该服且已打开频道时不重复跳转；卡在空态（无 channel）时再次点击会着陆
     void import("~/lib/ensure-guild-account").then(async (m) => {
       const ok = await m.ensureGuildAccount(guild.id)
       if (!ok) return
-      useUIStore.getState().selectGuild(guild.id)
-      navigate("/")
+      await landInGuild(guild.id, navigate)
     })
   }
 

@@ -73,7 +73,11 @@ export const editMessage = (channelId: string, messageId: string, content: strin
 export const deleteMessage = (channelId: string, messageId: string) =>
   api<void>(`/channels/${channelId}/messages/${messageId}`, { method: "DELETE" })
 
-/** 编辑历史（仅作者/MANAGE_MESSAGES 可见，其他人 404） */
+/**
+ * 编辑历史全文快照（docs AS.5 / FR-36）。
+ * 可见：作者、MANAGE_MESSAGES、系统管理员；其他人 404（只可见 edit_count）。
+ * 每条 edit 为「该次编辑前」的正文快照，version 从 1 递增。
+ */
 export const listMessageEdits = (channelId: string, messageId: string) =>
   api<{ edits?: MessageEdit[]; edit_count?: number }>(
     `/channels/${channelId}/messages/${messageId}/edits`,

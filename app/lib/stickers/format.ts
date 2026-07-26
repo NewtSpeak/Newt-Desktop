@@ -2,12 +2,14 @@
 
 import type { MessageStickerRef, StickerItem } from "~/lib/api/types"
 import { resolveApiUrl } from "~/lib/api/http"
+import { asSnowflakeId } from "~/lib/snowflake"
 
 /** 正文内嵌小表情：`<e:item_id:mark>` */
 export const CUSTOM_EMOTE_RE = /<e:(\d+):([a-zA-Z0-9_]+)>/g
 
 export function customEmoteWire(itemId: string, mark: string): string {
-  return `<e:${itemId}:${mark}>`
+  // itemId 必须保持十进制字符串；勿 Number(itemId)
+  return `<e:${asSnowflakeId(itemId)}:${mark}>`
 }
 
 /** 自定义反应路径键 */
@@ -95,8 +97,8 @@ export function stickerMediaKind(
 
 export function itemToRef(item: StickerItem): MessageStickerRef {
   return {
-    item_id: item.id,
-    pack_id: item.pack_id,
+    item_id: asSnowflakeId(item.id),
+    pack_id: asSnowflakeId(item.pack_id),
     mark: item.mark,
     kind: item.kind,
     animated: item.animated,
@@ -137,20 +139,28 @@ export function loadRecentExpressions(): RecentExpression[] {
     const raw = localStorage.getItem(RECENT_KEY)
     if (!raw) return []
     const list = JSON.parse(raw) as RecentExpression[]
-    return Array.isArray(list) ? list.slice(0, RECENT_MAX) : []
+    if (!Array.isArray(list)) return []
+    return list.slice(0, RECENT_MAX).map((entry) => {
+      if (entry.kind !== "item") return entry
+      return { ...entry, itemId: asSnowflakeId(entry.itemId) }
+    })
   } catch {
     return []
   }
 }
 
 export function pushRecentExpression(entry: RecentExpression): RecentExpression[] {
+  const normalized: RecentExpression =
+    entry.kind === "item"
+      ? { ...entry, itemId: asSnowflakeId(entry.itemId) }
+      : entry
   const prev = loadRecentExpressions()
   const key =
-    entry.kind === "unicode"
-      ? `u:${entry.emoji}`
-      : `i:${entry.itemId}`
+    normalized.kind === "unicode"
+      ? `u:${normalized.emoji}`
+      : `i:${normalized.itemId}`
   const next = [
-    entry,
+    normalized,
     ...prev.filter((item) =>
       item.kind === "unicode"
         ? `u:${item.emoji}` !== key
@@ -163,4 +173,67 @@ export function pushRecentExpression(entry: RecentExpression): RecentExpression[
     // quota
   }
   return next
+}
+
+// ---------------------------------------------------------------------------
+// 表情选择器 UI 记忆：主 Tab / 侧栏分组 / 滚动位置
+// ---------------------------------------------------------------------------
+
+const PICKER_UI_KEY = "owl.expression.picker.ui.v2"
+
+export type ExpressionPickerMainTab = "stickers" | "emotes"
+
+export type ExpressionPickerTabUi = {
+  activeNav: string
+  scrollTop: number
+}
+
+export type ExpressionPickerUiState = {
+  mainTab: ExpressionPickerMainTab
+  byTab: Record<ExpressionPickerMainTab, ExpressionPickerTabUi>
+}
+
+const DEFAULT_PICKER_UI: ExpressionPickerUiState = {
+  mainTab: "stickers",
+  byTab: {
+    stickers: { activeNav: "recent", scrollTop: 0 },
+    emotes: { activeNav: "recent", scrollTop: 0 },
+  },
+}
+
+export function loadExpressionPickerUi(): ExpressionPickerUiState {
+  if (typeof window === "undefined") return DEFAULT_PICKER_UI
+  try {
+    const raw = localStorage.getItem(PICKER_UI_KEY)
+    if (!raw) return { ...DEFAULT_PICKER_UI, byTab: { ...DEFAULT_PICKER_UI.byTab, stickers: { ...DEFAULT_PICKER_UI.byTab.stickers }, emotes: { ...DEFAULT_PICKER_UI.byTab.emotes } } }
+    const parsed = JSON.parse(raw) as Partial<ExpressionPickerUiState>
+    const mainTab: ExpressionPickerMainTab =
+      parsed.mainTab === "emotes" ? "emotes" : "stickers"
+    const stickers = {
+      activeNav: parsed.byTab?.stickers?.activeNav || "recent",
+      scrollTop: Math.max(0, Number(parsed.byTab?.stickers?.scrollTop) || 0),
+    }
+    const emotes = {
+      activeNav: parsed.byTab?.emotes?.activeNav || "recent",
+      scrollTop: Math.max(0, Number(parsed.byTab?.emotes?.scrollTop) || 0),
+    }
+    return { mainTab, byTab: { stickers, emotes } }
+  } catch {
+    return {
+      ...DEFAULT_PICKER_UI,
+      byTab: {
+        stickers: { ...DEFAULT_PICKER_UI.byTab.stickers },
+        emotes: { ...DEFAULT_PICKER_UI.byTab.emotes },
+      },
+    }
+  }
+}
+
+export function saveExpressionPickerUi(state: ExpressionPickerUiState): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(PICKER_UI_KEY, JSON.stringify(state))
+  } catch {
+    // quota
+  }
 }

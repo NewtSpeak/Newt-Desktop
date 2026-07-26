@@ -805,8 +805,8 @@ function ConnectionStatsPopover({
         >
           <SignalIcon rttMs={connected ? rttMs : null} />
         </span>
-        <span className="min-w-0">
-          <span className="block text-[13px] leading-tight font-semibold">
+        <span className="min-w-0 overflow-hidden">
+          <span className="block truncate text-[13px] leading-tight font-semibold">
             {statusLabel}
           </span>
           <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
@@ -1052,18 +1052,29 @@ export function VoicePanel() {
 
   const inRecovery =
     session.phase === "recovering" || session.phase === "suspended"
-  const statusLabel =
-    session.error ??
-    (inRecovery && escalated
-      ? "网络状况不佳，仍在重连…"
-      : phaseLabel(session.phase))
-  const showRetry = Boolean(session.error) || (inRecovery && escalated)
+  /** 严重网络问题：在语音卡片外横幅提示，避免卡内长文换行 */
+  const showNetworkBanner =
+    Boolean(session.error) || (inRecovery && escalated)
+  const bannerText =
+    session.error?.trim() ||
+    (inRecovery ? "网络状况不佳，仍在重连…" : "")
+  // 卡片内只保留短状态，不放长错误文案
+  const statusLabel = session.error
+    ? "连接异常"
+    : inRecovery
+      ? session.phase === "suspended"
+        ? "等待网络…"
+        : "重连中…"
+      : phaseLabel(session.phase)
+  const showRetry = showNetworkBanner
 
   const statusColor = connected
     ? "text-emerald-600 dark:text-emerald-400"
-    : session.error
+    : session.error || showNetworkBanner
       ? "text-destructive"
-      : "text-amber-600 dark:text-amber-400"
+      : inRecovery
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-amber-600 dark:text-amber-400"
 
   const micBlocked =
     session.serverMute ||
@@ -1129,7 +1140,29 @@ export function VoicePanel() {
     .join(" / ")
 
   return (
-    <div className="shrink-0 overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
+    <div className="flex shrink-0 flex-col gap-1.5">
+      {/* 网络异常横幅：在语音卡片外部，无描边，仅错误色底 + 文案 */}
+      {showNetworkBanner && bannerText ? (
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-2xl bg-destructive/12 px-3 py-2 text-destructive dark:bg-destructive/15 dark:text-red-400"
+        >
+          <p className="min-w-0 flex-1 text-[12px] leading-snug font-medium">
+            {bannerText}
+          </p>
+          {showRetry ? (
+            <button
+              type="button"
+              onClick={() => voiceConnection.retry()}
+              className="shrink-0 rounded-lg px-2 py-0.5 text-[11px] font-semibold text-destructive/90 transition-colors hover:bg-destructive/10 dark:text-red-300"
+            >
+              重试
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
       {session.migrating && (
         <div className="bg-amber-500/15 px-3 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
           线路优化中…
@@ -1141,7 +1174,7 @@ export function VoicePanel() {
         <div className="flex items-start justify-between gap-2">
           <ConnectionStatsPopover
             connected={connected}
-            statusColor={session.error ? "text-destructive" : statusColor}
+            statusColor={statusColor}
             statusLabel={statusLabel}
             locationLabel={locationLabel}
             rttMs={rttMs}
@@ -1153,15 +1186,6 @@ export function VoicePanel() {
           />
 
           <div className="flex shrink-0 items-center gap-0.5">
-            {showRetry && (
-              <button
-                type="button"
-                onClick={() => voiceConnection.retry()}
-                className="rounded-lg px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-              >
-                重试
-              </button>
-            )}
             <ContextMenu>
               <Tooltip>
                 <TooltipTrigger
@@ -1448,6 +1472,7 @@ export function VoicePanel() {
             onToggleDeaf={() => voiceConnection.toggleDeaf()}
           />
         </div>
+      </div>
       </div>
 
       <ScreenQualityDialog

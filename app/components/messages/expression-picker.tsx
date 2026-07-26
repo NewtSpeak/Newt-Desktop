@@ -1,8 +1,8 @@
 // 表情选择器：
-// - 顶部 Tab：贴图 | 表情（默认贴图）
-// - 左侧导航：当前 Tab 下的分组/包封面
-// - 表情 Tab = Unicode emoji + 小表情包；贴图 Tab = 大表情包
-// - 搜索：用户名 + mark（系统名）+ 包名 + emoji 分组关键词
+// - 顶部 Tab：贴图 | 小表情（无系统 Unicode emoji）
+// - 左侧导航：最近 + 当前 Tab 下的包封面
+// - 记忆上次主 Tab / 分组 / 滚动位置
+// - 搜索：name + mark + 包名
 // - 无加载动画；底部悬停预览栏
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -18,14 +18,16 @@ import { GuildAvatar } from "~/components/guild-avatar"
 import { UserProfilePopover } from "~/components/user-profile-popover"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover"
-import { EMOJI_GROUPS } from "~/lib/emoji/data"
-import { emojiShortcode } from "~/lib/emoji/shortcodes"
 import type { StickerItem, StickerPack } from "~/lib/api/types"
 import { StickerMedia } from "~/components/messages/sticker-media"
 import {
   itemDisplayName,
+  loadExpressionPickerUi,
   loadRecentExpressions,
   pushRecentExpression,
+  saveExpressionPickerUi,
+  type ExpressionPickerMainTab,
+  type ExpressionPickerUiState,
   type RecentExpression,
 } from "~/lib/stickers/format"
 import { nameInitials, resolveProfileAssetUrl } from "~/lib/user-display"
@@ -39,22 +41,16 @@ export type ExpressionPick =
   | { type: "emote"; item: StickerItem }
   | { type: "sticker"; item: StickerItem }
 
-/** 顶部主分组：贴图（大）/ 表情（emoji+小表情） */
-type MainTab = "stickers" | "emotes"
+/** 顶部主分组：贴图（大）/ 小表情包（无系统 emoji） */
+type MainTab = ExpressionPickerMainTab
 
 type NavId = string
 
-type HoverPreview =
-  | {
-      kind: "unicode"
-      emoji: string
-    }
-  | {
-      kind: "item"
-      item: StickerItem
-      pack?: StickerPack
-    }
-  | null
+type HoverPreview = {
+  kind: "item"
+  item: StickerItem
+  pack?: StickerPack
+} | null
 
 function packCoverUrl(
   pack: StickerPack,
@@ -220,14 +216,19 @@ export function ExpressionPickerPanel({
   mode?: "composer" | "reaction"
   onPick: (pick: ExpressionPick) => void
 }) {
-  // 默认贴图分组
-  const [mainTab, setMainTab] = useState<MainTab>("stickers")
+  const initialUi = useMemo(() => loadExpressionPickerUi(), [])
+  const [mainTab, setMainTab] = useState<MainTab>(initialUi.mainTab)
   const [query, setQuery] = useState("")
-  const [activeNav, setActiveNav] = useState<NavId>("recent")
+  const [activeNav, setActiveNav] = useState<NavId>(
+    () => initialUi.byTab[initialUi.mainTab]?.activeNav || "recent",
+  )
   const [recent, setRecent] = useState<RecentExpression[]>(() =>
     loadRecentExpressions(),
   )
   const [hover, setHover] = useState<HoverPreview>(null)
+  /** 各 Tab 独立记忆侧栏 + 滚动 */
+  const uiByTabRef = useRef<ExpressionPickerUiState["byTab"]>(initialUi.byTab)
+  const pendingScrollRestore = useRef(initialUi.byTab[initialUi.mainTab]?.scrollTop ?? 0)
 
   const ensureAvailable = useStickersStore((s) => s.ensureAvailable)
   const available = useStickersStore(
@@ -239,17 +240,73 @@ export function ExpressionPickerPanel({
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({})
   const suppressScrollSpy = useRef(false)
 
+  const persistUi = useCallback(
+    (patch?: {
+      mainTab?: MainTab
+      activeNav?: NavId
+      scrollTop?: number
+    }) => {
+      const tab = patch?.mainTab ?? mainTab
+      const prevTabState = uiByTabRef.current[tab] ?? {
+        activeNav: "recent",
+        scrollTop: 0,
+      }
+      const nextTabState = {
+        activeNav: patch?.activeNav ?? prevTabState.activeNav,
+        scrollTop:
+          patch?.scrollTop !== undefined
+            ? patch.scrollTop
+            : prevTabState.scrollTop,
+      }
+      uiByTabRef.current = { ...uiByTabRef.current, [tab]: nextTabState }
+      saveExpressionPickerUi({
+        mainTab: tab,
+        byTab: uiByTabRef.current,
+      })
+    },
+    [mainTab],
+  )
+
   useEffect(() => {
     // 静默加载，不展示 spinner / 入场动画
     void ensureAvailable(guildId)
   }, [guildId, ensureAvailable])
 
-  // 切换顶部 Tab 时重置侧栏与搜索（保留最后悬停预览）
+  // 切换顶部 Tab：恢复该 Tab 记忆的分组与滚动，不清成「最近」
+  const switchMainTab = useCallback(
+    (next: MainTab) => {
+      if (next === mainTab) return
+      // 离开前写入当前滚动
+      const top = scrollRef.current?.scrollTop ?? 0
+      persistUi({ mainTab, activeNav, scrollTop: top })
+      const remembered = uiByTabRef.current[next] ?? {
+        activeNav: "recent",
+        scrollTop: 0,
+      }
+      pendingScrollRestore.current = remembered.scrollTop
+      setQuery("")
+      setMainTab(next)
+      setActiveNav(remembered.activeNav || "recent")
+      persistUi({ mainTab: next, activeNav: remembered.activeNav })
+    },
+    [mainTab, activeNav, persistUi],
+  )
+
+  // 内容就绪后恢复滚动位置
   useEffect(() => {
-    setActiveNav("recent")
-    setQuery("")
-    scrollRef.current?.scrollTo({ top: 0 })
-  }, [mainTab])
+    const root = scrollRef.current
+    if (!root) return
+    const top = pendingScrollRestore.current
+    // 等包列表渲染一帧
+    const id = window.requestAnimationFrame(() => {
+      root.scrollTop = top
+      // 再写一次，避免图片加载后高度变化把位置冲掉
+      window.setTimeout(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = top
+      }, 50)
+    })
+    return () => window.cancelAnimationFrame(id)
+  }, [mainTab, available])
 
   const allItems = useMemo(() => availableItems(guildId), [guildId, available])
   const packs = available?.packs ?? []
@@ -293,27 +350,7 @@ export function ExpressionPickerPanel({
   const q = query.trim().toLowerCase()
   const searching = q.length > 0
 
-  // ---- 搜索：emoji 分组关键词 + 字符；自定义：name + mark + 包名 ----
-  const filteredEmojis = useMemo(() => {
-    if (!searching || mainTab !== "emotes") return [] as string[]
-    const out: string[] = []
-    const seen = new Set<string>()
-    for (const g of EMOJI_GROUPS) {
-      const groupHit =
-        g.label.toLowerCase().includes(q) ||
-        g.keywords.some((k) => k.toLowerCase().includes(q))
-      for (const e of g.emojis) {
-        if (groupHit || e.includes(q)) {
-          if (!seen.has(e)) {
-            seen.add(e)
-            out.push(e)
-          }
-        }
-      }
-    }
-    return out
-  }, [q, searching, mainTab])
-
+  // ---- 搜索：仅自定义小表情 / 贴图（name + mark + 包名）----
   const filteredEmotes = useMemo(() => {
     if (!searching || mainTab !== "emotes") return [] as StickerItem[]
     return allItems.filter(
@@ -332,27 +369,18 @@ export function ExpressionPickerPanel({
     )
   }, [allItems, packById, q, searching, mainTab])
 
-  // 左侧导航
+  // 左侧导航：最近 + 包（无系统 emoji 分组）
   const navItems = useMemo(() => {
     type NavEntry = {
       id: NavId
       label: string
-      kind: "recent" | "emoji" | "emote-pack" | "sticker-pack"
-      emojiIcon?: string
+      kind: "recent" | "emote-pack" | "sticker-pack"
       coverUrl?: string
     }
     const list: NavEntry[] = [
       { id: "recent", label: "最近", kind: "recent" },
     ]
     if (mainTab === "emotes") {
-      for (const g of EMOJI_GROUPS) {
-        list.push({
-          id: g.id,
-          label: g.label,
-          kind: "emoji",
-          emojiIcon: g.icon,
-        })
-      }
       for (const pack of emotePacks) {
         list.push({
           id: `emote-pack:${pack.id}`,
@@ -374,10 +402,19 @@ export function ExpressionPickerPanel({
     return list
   }, [mainTab, emotePacks, stickerPacks, allItems])
 
-  // 滚动联动侧栏高亮
+  // 若记忆的 activeNav 已不存在（包被删），回退最近
+  useEffect(() => {
+    if (searching) return
+    if (navItems.some((n) => n.id === activeNav)) return
+    setActiveNav("recent")
+    persistUi({ activeNav: "recent" })
+  }, [navItems, activeNav, searching, persistUi])
+
+  // 滚动联动侧栏高亮 + 持久化滚动位置
   useEffect(() => {
     const root = scrollRef.current
     if (!root || searching) return
+    let scrollSaveTimer: number | undefined
     const onScroll = () => {
       if (suppressScrollSpy.current) return
       const rootTop = root.getBoundingClientRect().top
@@ -392,32 +429,40 @@ export function ExpressionPickerPanel({
           current = item.id
         }
       }
-      setActiveNav((prev) => (prev === current ? prev : current))
+      setActiveNav((prev) => {
+        if (prev === current) return prev
+        persistUi({ activeNav: current, scrollTop: root.scrollTop })
+        return current
+      })
+      window.clearTimeout(scrollSaveTimer)
+      scrollSaveTimer = window.setTimeout(() => {
+        persistUi({ scrollTop: root.scrollTop })
+      }, 120)
     }
     root.addEventListener("scroll", onScroll, { passive: true })
     onScroll()
-    return () => root.removeEventListener("scroll", onScroll)
-  }, [navItems, searching, mainTab])
+    return () => {
+      root.removeEventListener("scroll", onScroll)
+      window.clearTimeout(scrollSaveTimer)
+    }
+  }, [navItems, searching, mainTab, persistUi])
 
   const scrollToSection = (id: NavId) => {
     setActiveNav(id)
     setQuery("")
+    persistUi({ activeNav: id })
     const el = sectionRefs.current[id]
     if (!el || !scrollRef.current) return
     suppressScrollSpy.current = true
     el.scrollIntoView({ behavior: "smooth", block: "start" })
     window.setTimeout(() => {
       suppressScrollSpy.current = false
+      persistUi({
+        activeNav: id,
+        scrollTop: scrollRef.current?.scrollTop ?? 0,
+      })
     }, 400)
   }
-
-  const pickUnicode = useCallback(
-    (emoji: string) => {
-      setRecent(pushRecentExpression({ kind: "unicode", emoji }))
-      onPick({ type: "unicode", emoji })
-    },
-    [onPick],
-  )
 
   const pickItem = useCallback(
     (item: StickerItem) => {
@@ -431,13 +476,18 @@ export function ExpressionPickerPanel({
           itemKind: item.kind,
         }),
       )
+      // 选中时也记下当前位置，下次打开仍在附近
+      persistUi({
+        scrollTop: scrollRef.current?.scrollTop ?? 0,
+        activeNav,
+      })
       onPick(
         item.kind === "sticker"
           ? { type: "sticker", item }
           : { type: "emote", item },
       )
     },
-    [onPick],
+    [onPick, persistUi, activeNav],
   )
 
   const resolveRecentItem = (entry: RecentExpression & { kind: "item" }) => {
@@ -463,15 +513,14 @@ export function ExpressionPickerPanel({
   }
 
   const recentForTab = useMemo(() => {
+    // 仅自定义条目；系统 emoji 已移除
     if (mainTab === "stickers") {
       return recent.filter(
         (e) => e.kind === "item" && e.itemKind === "sticker",
       )
     }
     return recent.filter(
-      (e) =>
-        e.kind === "unicode" ||
-        (e.kind === "item" && e.itemKind === "emote"),
+      (e) => e.kind === "item" && e.itemKind === "emote",
     )
   }, [recent, mainTab])
 
@@ -479,24 +528,17 @@ export function ExpressionPickerPanel({
     sectionRefs.current[id] = el
   }
 
-  const hoverNameLine = (() => {
-    if (!hover) return ""
-    if (hover.kind === "unicode") return emojiShortcode(hover.emoji)
-    return customColonName(hover.item)
-  })()
+  const hoverNameLine = hover ? customColonName(hover.item) : ""
 
   const hoverSourceLine = (() => {
     if (!hover) return ""
-    if (hover.kind === "unicode") return "来源：系统 Emoji"
     const packName = hover.pack?.name
     if (packName) return `来源：${packName}`
     return hover.item.kind === "sticker" ? "来源：贴图" : "来源：小表情"
   })()
 
   const hoverGuild =
-    hover?.kind === "item" &&
-    hover.pack?.scope === "guild" &&
-    hover.pack.guild_id
+    hover?.pack?.scope === "guild" && hover.pack.guild_id
       ? guilds.find((g) => g.id === hover.pack!.guild_id)
       : undefined
 
@@ -512,7 +554,7 @@ export function ExpressionPickerPanel({
           type="button"
           role="tab"
           aria-selected={mainTab === "stickers"}
-          onClick={() => setMainTab("stickers")}
+          onClick={() => switchMainTab("stickers")}
           className={cn(
             "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium",
             "transition-[background-color,color,transform] duration-150",
@@ -529,7 +571,7 @@ export function ExpressionPickerPanel({
           type="button"
           role="tab"
           aria-selected={mainTab === "emotes"}
-          onClick={() => setMainTab("emotes")}
+          onClick={() => switchMainTab("emotes")}
           className={cn(
             "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium",
             "transition-[background-color,color,transform] duration-150",
@@ -540,7 +582,7 @@ export function ExpressionPickerPanel({
           )}
         >
           <SmileIcon className="size-4 opacity-80" aria-hidden />
-          表情
+          小表情
         </button>
       </div>
 
@@ -573,9 +615,6 @@ export function ExpressionPickerPanel({
                 {item.kind === "recent" && (
                   <ClockIcon className="size-4" aria-hidden />
                 )}
-                {item.kind === "emoji" && (
-                  <span className="text-lg leading-none">{item.emojiIcon}</span>
-                )}
                 {(item.kind === "emote-pack" ||
                   item.kind === "sticker-pack") &&
                   (item.coverUrl ? (
@@ -605,7 +644,7 @@ export function ExpressionPickerPanel({
               placeholder={
                 mainTab === "stickers"
                   ? "搜索贴图名称、mark 或包名…"
-                  : "搜索 emoji、小表情名称 / mark / 包名…"
+                  : "搜索小表情名称、mark 或包名…"
               }
               className={cn(
                 "h-9 w-full rounded-xl border-0 bg-muted/50 py-1.5 pr-3 pl-9 text-sm",
@@ -624,26 +663,7 @@ export function ExpressionPickerPanel({
               <div className="flex flex-col gap-3">
                 {mainTab === "emotes" && (
                   <>
-                    {filteredEmojis.length > 0 && (
-                      <section>
-                        <SectionTitle>Emoji</SectionTitle>
-                        <div className="grid grid-cols-8 gap-1">
-                          {filteredEmojis.map((emoji) => (
-                            <NamedCell
-                              key={emoji}
-                              label={emoji}
-                              onClick={() => pickUnicode(emoji)}
-                              onHoverEnter={() =>
-                                setHover({ kind: "unicode", emoji })
-                              }
-                            >
-                              {emoji}
-                            </NamedCell>
-                          ))}
-                        </div>
-                      </section>
-                    )}
-                    {filteredEmotes.length > 0 && (
+                    {filteredEmotes.length > 0 ? (
                       <section>
                         <SectionTitle>小表情</SectionTitle>
                         <div className="grid grid-cols-8 gap-1">
@@ -662,22 +682,20 @@ export function ExpressionPickerPanel({
                               }
                             >
                               <StickerMedia
-                      src={item.asset_url}
-                      alt=""
-                      className="size-9 object-contain"
-                      draggable={false}
-                    />
+                                src={item.asset_url}
+                                alt=""
+                                className="size-9 object-contain"
+                                draggable={false}
+                              />
                             </NamedCell>
                           ))}
                         </div>
                       </section>
+                    ) : (
+                      <p className="py-12 text-center text-sm text-muted-foreground">
+                        没有匹配「{query.trim()}」的小表情
+                      </p>
                     )}
-                    {filteredEmojis.length === 0 &&
-                      filteredEmotes.length === 0 && (
-                        <p className="py-12 text-center text-sm text-muted-foreground">
-                          没有匹配「{query.trim()}」的表情
-                        </p>
-                      )}
                   </>
                 )}
                 {mainTab === "stickers" && (
@@ -775,22 +793,9 @@ export function ExpressionPickerPanel({
                     </div>
                   ) : (
                     <div className="grid grid-cols-8 gap-1">
-                      {recentForTab.map((entry, i) =>
-                        entry.kind === "unicode" ? (
-                          <NamedCell
-                            key={`r-u-${entry.emoji}-${i}`}
-                            label={entry.emoji}
-                            onClick={() => pickUnicode(entry.emoji)}
-                            onHoverEnter={() =>
-                              setHover({
-                                kind: "unicode",
-                                emoji: entry.emoji,
-                              })
-                            }
-                          >
-                            {entry.emoji}
-                          </NamedCell>
-                        ) : (
+                      {recentForTab.map((entry, i) => {
+                        if (entry.kind !== "item") return null
+                        return (
                           <NamedCell
                             key={`r-i-${entry.itemId}-${i}`}
                             label={entry.name || entry.mark}
@@ -806,46 +811,21 @@ export function ExpressionPickerPanel({
                             }}
                           >
                             <StickerMedia
-                      src={entry.assetUrl}
-                      alt=""
-                      className="size-9 object-contain"
-                      draggable={false}
-                    />
+                              src={entry.assetUrl}
+                              alt=""
+                              className="size-9 object-contain"
+                              draggable={false}
+                            />
                           </NamedCell>
-                        ),
-                      )}
+                        )
+                      })}
                     </div>
                   )}
                 </section>
 
-                {/* 表情 Tab：Unicode + 小表情包 */}
+                {/* 小表情 Tab：仅自定义包 */}
                 {mainTab === "emotes" && (
                   <>
-                    {EMOJI_GROUPS.map((group) => (
-                      <section
-                        key={group.id}
-                        ref={setSectionRef(group.id)}
-                        data-section={group.id}
-                        className="scroll-mt-1"
-                      >
-                        <SectionTitle>{group.label}</SectionTitle>
-                        <div className="grid grid-cols-8 gap-1">
-                          {group.emojis.map((emoji) => (
-                            <NamedCell
-                              key={`${group.id}-${emoji}`}
-                              label={emoji}
-                              onClick={() => pickUnicode(emoji)}
-                              onHoverEnter={() =>
-                                setHover({ kind: "unicode", emoji })
-                              }
-                            >
-                              {emoji}
-                            </NamedCell>
-                          ))}
-                        </div>
-                      </section>
-                    ))}
-
                     {emotePacks.map((pack) => {
                       const items = emotesByPack.get(pack.id) ?? []
                       const sectionId = `emote-pack:${pack.id}`
@@ -976,23 +956,15 @@ export function ExpressionPickerPanel({
       >
         {hover ? (
           <>
-            {/* 表情 icon / 图 */}
             <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-background/70">
-              {hover.kind === "unicode" ? (
-                <span className="text-[1.75rem] leading-none">
-                  {hover.emoji}
-                </span>
-              ) : (
-                <StickerMedia
-                      src={hover.item.asset_url}
-                      alt=""
-                      className="size-10 object-contain"
-                      draggable={false}
-                    />
-              )}
+              <StickerMedia
+                src={hover.item.asset_url}
+                alt=""
+                className="size-10 object-contain"
+                draggable={false}
+              />
             </div>
 
-            {/* 名称 + 来源（两行，留间距） */}
             <div className="min-w-0 flex-1">
               <p className="truncate font-mono text-sm font-medium leading-snug tracking-tight">
                 {hoverNameLine}
@@ -1002,13 +974,8 @@ export function ExpressionPickerPanel({
               </p>
             </div>
 
-            {/* 右侧：服 icon 或用户头像（可点资料卡） */}
             <div className="flex shrink-0 items-center justify-end pl-2">
-              {hover.kind === "unicode" ? (
-                <span className="rounded-md bg-background/50 px-2 py-1 text-[11px] text-muted-foreground">
-                  系统
-                </span>
-              ) : hoverGuild ? (
+              {hoverGuild ? (
                 <div
                   className="flex items-center gap-1.5"
                   title={hoverGuild.name}

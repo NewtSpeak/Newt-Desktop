@@ -192,11 +192,12 @@ export function PackPreviewDialog() {
                     key={item.id}
                     data-sticker-cell
                     className={cn(
-                      "group relative flex flex-col items-center gap-1 rounded-xl p-2",
-                      "bg-muted/40",
+                      "group relative flex flex-col items-center gap-1 rounded-xl border-0 p-2",
+                      "bg-muted/40 ring-0 outline-none",
                       "transition-[background-color,transform] duration-150",
                       "hover:bg-muted/65",
-                      highlight && "bg-primary/10 ring-2 ring-primary/40",
+                      // 当前点开的项：仅用底色区分，不要描边/ring
+                      highlight && "bg-primary/12",
                     )}
                   >
                     <StickerMedia

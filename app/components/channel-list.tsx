@@ -3,6 +3,7 @@
 
 import { useEffect } from "react"
 import { EyeIcon, HashIcon, XIcon } from "lucide-react"
+import { useNavigate } from "react-router"
 
 import { DmSidebar } from "~/components/dm-sidebar"
 import { GuildChannelSpaceMenu } from "~/components/guild-channel-space-menu"
@@ -11,6 +12,7 @@ import { GuildBannerCarousel } from "~/components/guild-banner"
 import { PanelResizeHandle } from "~/components/panel-resize-handle"
 import { VoicePanel } from "~/components/voice-panel"
 import { Button } from "~/components/ui/button"
+import { resolveLandingChannelId } from "~/lib/guild-landing"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
 import { cn } from "~/lib/utils"
 import { useChannelsStore } from "~/stores/channels"
@@ -21,7 +23,9 @@ import { useUIStore } from "~/stores/ui"
 import { useViewAsStore, viewAsLabel } from "~/stores/view-as"
 
 export function ChannelList() {
+  const navigate = useNavigate()
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
+  const selectedChannelId = useUIStore((state) => state.selectedChannelId)
   const channelListWidth = useUIStore((state) => state.channelListWidth)
   const setChannelListWidth = useUIStore((state) => state.setChannelListWidth)
   const isHomeOrDm = !selectedGuildId || selectedGuildId === "@me"
@@ -51,6 +55,30 @@ export function ChannelList() {
       .fetchRoles(selectedGuildId)
       .catch(() => undefined)
   }, [selectedGuildId, isHomeOrDm])
+
+  // 进服着陆兜底：选中服务器且尚无频道时（例如 READY 后频道才到齐、
+  // 或其它入口只 selectGuild 未 landInGuild），打开默认欢迎频道 / 第一个 TEXT。
+  useEffect(() => {
+    if (!selectedGuildId || isHomeOrDm) return
+    if (selectedChannelId) return
+    if (!channels?.length) return
+
+    const landingId = resolveLandingChannelId(guild, channels)
+    if (!landingId) return
+
+    const ui = useUIStore.getState()
+    if (ui.selectedGuildId !== selectedGuildId || ui.selectedChannelId) return
+
+    ui.selectChannel(selectedGuildId, landingId)
+    navigate(`/channels/${selectedGuildId}/${landingId}`, { replace: true })
+  }, [
+    selectedGuildId,
+    selectedChannelId,
+    channels,
+    guild,
+    isHomeOrDm,
+    navigate,
+  ])
 
   useEffect(() => {
     const session = useViewAsStore.getState().session

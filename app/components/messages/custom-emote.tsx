@@ -12,8 +12,11 @@ import { useStickersStore } from "~/stores/stickers"
 
 /** 反应栏统一视觉高度（docs 17 R.2：16–20 CSS px） */
 export const REACTION_EMOTE_PX = 18
-/** 消息内联小表情 */
-export const INLINE_EMOTE_PX = 22
+/**
+ * 消息/输入框内联小表情：与正文字号一致时用 1em（见 TipTap NodeView）。
+ * 此常量仅作非 TipTap 场景的像素兜底（约等于 text-sm 的 1em）。
+ */
+export const INLINE_EMOTE_PX = 14
 /** 贴图消息展示最大边 */
 export const STICKER_MSG_MAX = 160
 

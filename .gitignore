@@ -8,3 +8,6 @@ build
 
 # typescript
 *.tsbuildinfo
+
+# Tauri/Cargo (default path; actual output is repo-root .tauri-target/)
+src-tauri/target

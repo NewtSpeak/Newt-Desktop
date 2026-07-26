@@ -245,6 +245,8 @@ export type SettingsSection =
   | "appearance"
   | "keybinds"
   | "stickers"
+  | "cosmetics-shop"
+  | "cosmetics-inventory"
   | "about"
 
 const DEFAULT_VOICE: VoiceSettings = {

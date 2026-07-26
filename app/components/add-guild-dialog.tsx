@@ -75,13 +75,12 @@ export function AddGuildDialog({
   }
 
   const finish = async (guildId: string) => {
-    // 刷新列表并选中新服务器
+    // 刷新列表并着陆到默认欢迎频道 / 第一个可见文字频道
     await useGuildsStore.getState().fetchGuilds().catch(() => undefined)
-    useUIStore.getState().selectGuild(guildId)
-    void useChannelsStore.getState().fetchChannels(guildId)
     onOpenChange(false)
     reset()
-    navigate("/")
+    const { landInGuild } = await import("~/lib/land-in-guild")
+    await landInGuild(guildId, navigate)
   }
 
   const handleCreate = async (event: React.FormEvent) => {

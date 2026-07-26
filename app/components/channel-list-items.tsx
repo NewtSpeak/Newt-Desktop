@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner"
 
 import { AdminMemberMenuSection } from "~/components/admin/admin-member-menu"
+import { GuildSettingsContextMenuItems } from "~/components/guild-settings-menu-items"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
@@ -254,51 +255,56 @@ export function CategoryHeader({
   return (
     <>
       <div className="group/category flex h-7 w-full items-center gap-0.5 pr-0.5">
-        {canManageChannels ? (
-          <ContextMenu>
-            <ContextMenuTrigger className="flex min-w-0 flex-1">
-              {headerButton}
-            </ContextMenuTrigger>
-            <ContextMenuContent className="min-w-44">
-              <ContextMenuItem
-                onClick={() => {
-                  setRenameValue(name)
-                  setRenameOpen(true)
-                }}
-              >
-                <PencilIcon />
-                重命名
-              </ContextMenuItem>
-              <ContextMenuItem
-                onClick={() =>
-                  useUIStore.getState().openChannelSettings(categoryId)
-                }
-              >
-                <SettingsIcon />
-                管理分类
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => openCreate("TEXT")}>
-                <HashIcon />
-                创建文字频道
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => openCreate("VOICE")}>
-                <Volume2Icon />
-                创建语音频道
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                variant="destructive"
-                onClick={() => void onDeleteCategory()}
-              >
-                <Trash2Icon />
-                删除分类
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        ) : (
-          headerButton
-        )}
+        {/* 始终可右键：频道很多时分类行也是打开「服务器设置」的入口 */}
+        <ContextMenu>
+          <ContextMenuTrigger className="flex min-w-0 flex-1">
+            {headerButton}
+          </ContextMenuTrigger>
+          <ContextMenuContent className="min-w-44">
+            {canManageChannels ? (
+              <>
+                <ContextMenuItem
+                  onClick={() => {
+                    setRenameValue(name)
+                    setRenameOpen(true)
+                  }}
+                >
+                  <PencilIcon />
+                  重命名
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onClick={() =>
+                    useUIStore.getState().openChannelSettings(categoryId)
+                  }
+                >
+                  <SettingsIcon />
+                  管理分类
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => openCreate("TEXT")}>
+                  <HashIcon />
+                  创建文字频道
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => openCreate("VOICE")}>
+                  <Volume2Icon />
+                  创建语音频道
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  variant="destructive"
+                  onClick={() => void onDeleteCategory()}
+                >
+                  <Trash2Icon />
+                  删除分类
+                </ContextMenuItem>
+              </>
+            ) : null}
+            <GuildSettingsContextMenuItems
+              guildId={guildId}
+              withSeparator={canManageChannels}
+            />
+          </ContextMenuContent>
+        </ContextMenu>
 
         {canManageChannels && (
           <DropdownMenu>
@@ -659,6 +665,7 @@ export function TextChannelItem({
             useSettingsStore.getState().setChannelNotify(channel.id, patch)
           }
         />
+        <GuildSettingsContextMenuItems guildId={guildId} />
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -1086,6 +1093,7 @@ export function VoiceChannelItem({
             <HashIcon />
             复制频道 ID
           </ContextMenuItem>
+          <GuildSettingsContextMenuItems guildId={guildId} />
         </ContextMenuContent>
       </ContextMenu>
       {/* 活动注释 + 在线成员：注释始终在成员列表最上方 */}

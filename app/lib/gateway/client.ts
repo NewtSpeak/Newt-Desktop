@@ -14,6 +14,7 @@
 // 重连采用指数退避（1s 起、2 倍、封顶 30s、±20% 抖动）。
 
 import { ensureAccessToken, gatewayURL } from "~/lib/api/http"
+import { parseJsonPreservingLargeInts } from "~/lib/snowflake"
 import {
   GatewayCloseCodes,
   type GatewayEventPayloadMap,
@@ -107,7 +108,9 @@ class GatewayClient {
     socket.onmessage = (event) => {
       let frame: GatewayFrame
       try {
-        frame = JSON.parse(String(event.data)) as GatewayFrame
+        frame = parseJsonPreservingLargeInts(
+          String(event.data),
+        ) as GatewayFrame
       } catch {
         return
       }

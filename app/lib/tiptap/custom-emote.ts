@@ -3,10 +3,13 @@
 import { Node, mergeAttributes } from "@tiptap/core"
 import { ReactNodeViewRenderer } from "@tiptap/react"
 
+import { asSnowflakeId } from "~/lib/snowflake"
 import { CustomEmoteChipView } from "./custom-emote-view"
 
 export type CustomEmoteStorage = {
   resolveAssetUrl?: (itemId: string) => string | undefined
+  /** 只读消息：点击小表情打开表情包预览 */
+  onOpen?: (opts: { itemId: string; mark: string }) => void
 }
 
 declare module "@tiptap/core" {
@@ -26,12 +29,25 @@ export const CustomEmoteExtension = Node.create({
   addStorage() {
     return {
       resolveAssetUrl: undefined,
+      onOpen: undefined,
     } satisfies CustomEmoteStorage
   },
 
   addAttributes() {
     return {
-      itemId: { default: "" },
+      itemId: {
+        default: "",
+        // 始终存字符串，防止 ProseMirror/JSON 路径把雪花变成 number
+        parseHTML: (el) =>
+          asSnowflakeId(
+            el instanceof HTMLElement
+              ? el.getAttribute("data-item-id")
+              : "",
+          ),
+        renderHTML: (attrs) => ({
+          "data-item-id": asSnowflakeId(attrs.itemId),
+        }),
+      },
       mark: { default: "" },
       assetUrl: { default: "" },
       animated: { default: false },
@@ -45,7 +61,7 @@ export const CustomEmoteExtension = Node.create({
         getAttrs: (el) => {
           if (!(el instanceof HTMLElement)) return false
           return {
-            itemId: el.getAttribute("data-item-id") || "",
+            itemId: asSnowflakeId(el.getAttribute("data-item-id")),
             mark: el.getAttribute("data-mark") || "",
             assetUrl: el.getAttribute("data-asset-url") || "",
             animated: el.getAttribute("data-animated") === "true",
@@ -56,26 +72,33 @@ export const CustomEmoteExtension = Node.create({
   },
 
   renderHTML({ node, HTMLAttributes }) {
+    const itemId = asSnowflakeId(node.attrs.itemId)
     return [
       "span",
       mergeAttributes(HTMLAttributes, {
         "data-type": "custom-emote",
-        "data-item-id": node.attrs.itemId,
+        "data-item-id": itemId,
         "data-mark": node.attrs.mark,
         "data-asset-url": node.attrs.assetUrl,
         "data-animated": node.attrs.animated ? "true" : "false",
-        class: "inline-block align-middle mx-0.5",
+        // 与正文字号一致（1em），行内混排
+        class: "owl-custom-emote inline-block align-[-0.15em]",
+        style: "width:1em;height:1em;line-height:1",
       }),
       `:${node.attrs.mark || "emote"}:`,
     ]
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(CustomEmoteChipView)
+    return ReactNodeViewRenderer(CustomEmoteChipView, {
+      // 行内 atom：必须用 span，否则会变成块级单独占行
+      as: "span",
+      className: "owl-custom-emote-nv",
+    })
   },
 
   renderText({ node }) {
-    const itemId = String(node.attrs.itemId ?? "")
+    const itemId = asSnowflakeId(node.attrs.itemId)
     const mark = String(node.attrs.mark ?? "")
     if (!itemId || !mark) return ""
     return `<e:${itemId}:${mark}>`

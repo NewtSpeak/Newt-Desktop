@@ -1,0 +1,8 @@
+{
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../build/client",
+    "devUrl": null
+  }
+}

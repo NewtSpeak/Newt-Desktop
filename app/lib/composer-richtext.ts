@@ -15,7 +15,8 @@ const INLINE_CLASS: Record<InlineFormat, string> = {
   bold: "font-semibold",
   italic: "italic",
   strike: "line-through",
-  code: "rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]",
+  // 行内 `code` 与消息正文一致：用全局 UI 字体（MiSans），不用等宽
+  code: "rounded bg-muted px-1 py-0.5 font-sans text-[0.85em]",
 }
 
 const MD_MARK: Record<InlineFormat, [string, string]> = {
@@ -32,7 +33,7 @@ export const MENTION_CHIP_CLASS =
 const BLOCK_QUOTE_CLASS =
   "my-0.5 border-l-2 border-border pl-2 text-muted-foreground"
 const BLOCK_CODE_CLASS =
-  "my-0.5 block w-full overflow-x-auto rounded-md border bg-muted/60 px-2 py-1.5 font-mono text-[13px] leading-relaxed whitespace-pre-wrap"
+  "my-0.5 block w-full overflow-x-auto rounded-md border-0 bg-muted/50 px-2 py-1.5 font-sans text-[13px] leading-relaxed whitespace-pre-wrap"
 const LIST_ITEM_CLASS = "list-item-composer relative pl-4 before:absolute before:left-1 before:content-['•'] before:text-muted-foreground"
 const LINK_CLASS = "text-primary underline-offset-2 underline break-all"
 

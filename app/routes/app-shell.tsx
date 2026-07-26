@@ -22,6 +22,7 @@ import { WelcomeShell } from "~/components/welcome-shell"
 import { SidebarProvider } from "~/components/ui/sidebar"
 import { Toaster } from "~/components/ui/sonner"
 import { useAuthBootstrap } from "~/hooks/use-auth-bootstrap"
+import { useAuthStore } from "~/stores/auth"
 import { isFriendsLocation } from "~/lib/friends-route"
 import { isStickersLocation } from "~/lib/stickers-route"
 import {
@@ -87,10 +88,28 @@ export default function AppShell() {
   if (status === "loading") {
     return (
       <div
-        className="flex h-svh items-center justify-center bg-background"
+        className="flex h-svh flex-col items-center justify-center gap-3 bg-background text-foreground"
         onMouseDown={dragWindowOnSelfMouseDown}
       >
-        <p className="text-sm text-muted-foreground">正在恢复会话…</p>
+        <div
+          className="size-7 animate-spin rounded-full border-[3px] border-muted border-t-foreground"
+          aria-hidden
+        />
+        <p className="text-sm font-medium">正在恢复会话…</p>
+        <p className="text-xs text-muted-foreground">最多几秒，请稍候</p>
+        <button
+          type="button"
+          className="mt-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted"
+          onClick={() => {
+            useAuthStore.setState({
+              status: "unauthenticated",
+              user: null,
+              activeAccountId: null,
+            })
+          }}
+        >
+          跳过，进入欢迎页
+        </button>
       </div>
     )
   }

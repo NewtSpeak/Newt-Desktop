@@ -12,10 +12,12 @@ import {
 import {
   CrownIcon,
   FileIcon,
+  HashIcon,
   LockIcon,
   PlusIcon,
   SendIcon,
   SmileIcon,
+  Volume2Icon,
   XIcon,
 } from "lucide-react"
 
@@ -23,18 +25,24 @@ import { presignAttachment, uploadAttachmentWithProgress } from "~/lib/api/attac
 import { ApiError } from "~/lib/api/http"
 import { sendTyping } from "~/lib/api/messages"
 import type { DmBlockState } from "~/lib/api/social"
-import { MESSAGE_TYPE_SYSTEM_ADMIN, type GuildMember } from "~/lib/api/types"
+import {
+  MESSAGE_TYPE_SYSTEM_ADMIN,
+  type Channel,
+  type GuildMember,
+} from "~/lib/api/types"
 import {
   memberDisplayName,
   nameInitials,
   resolveProfileAssetUrl,
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
+import { useChannelsStore } from "~/stores/channels"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
 import { formatBytes } from "./attachments"
 import {
   TipTapComposerEditor,
+  type ComposerAtQuery,
   type TipTapComposerHandle,
 } from "./composer-tiptap"
 import { useStickersStore } from "~/stores/stickers"
@@ -146,6 +154,15 @@ function filterMembers(members: GuildMember[], query: string): GuildMember[] {
     .slice(0, 8)
 }
 
+/** 当前服务器可见 TEXT/VOICE 频道，按名称模糊匹配（# 链接补全） */
+function filterChannels(channels: Channel[], query: string): Channel[] {
+  const lowered = query.toLowerCase()
+  return channels
+    .filter((ch) => ch.type === "TEXT" || ch.type === "VOICE")
+    .filter((ch) => !lowered || ch.name.toLowerCase().includes(lowered))
+    .slice(0, 8)
+}
+
 // ---------------------------------------------------------------------------
 // Composer
 // ---------------------------------------------------------------------------
@@ -184,13 +201,15 @@ export function Composer({
   const send = useMessagesStore((state) => state.send)
   const discardPending = useMessagesStore((state) => state.discardPending)
   const members = useMembersStore((state) => state.byGuild[guildId]) ?? []
+  const guildChannels =
+    useChannelsStore((state) => state.byGuild[guildId]) ?? []
 
   const [value, setValue] = useState("")
   const [uploads, setUploads] = useState<UploadItem[]>([])
   const [inlineError, setInlineError] = useState<string | null>(null)
   const [cooldown, setCooldown] = useState(0)
   const [dragOver, setDragOver] = useState(false)
-  const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
+  const [mention, setMention] = useState<ComposerAtQuery | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
   /** 发送失败后从错误码推断的对端拉黑（本地 relationships 看不到对方拉黑我） */
   const [peerBlockHint, setPeerBlockHint] = useState(false)
@@ -370,26 +389,39 @@ export function Composer({
   )
 
   // -------------------------------------------------------------------------
-  // @ 补全
+  // @ 成员 / # 频道 补全
   // -------------------------------------------------------------------------
 
   const mentionCandidates = useMemo(
-    () => (mention ? filterMembers(members, mention.query) : []),
+    () =>
+      mention?.kind === "mention"
+        ? filterMembers(members, mention.query)
+        : [],
     [mention, members],
   )
 
-  const onMentionQuery = useCallback(
-    (query: { start: number; query: string } | null) => {
-      setMention(query)
-      if (query) setMentionIndex(0)
-    },
-    [],
+  const channelCandidates = useMemo(
+    () =>
+      mention?.kind === "channel"
+        ? filterChannels(guildChannels, mention.query)
+        : [],
+    [mention, guildChannels],
   )
+
+  const activeCandidatesCount =
+    mention?.kind === "channel"
+      ? channelCandidates.length
+      : mentionCandidates.length
+
+  const onMentionQuery = useCallback((query: ComposerAtQuery | null) => {
+    setMention(query)
+    if (query) setMentionIndex(0)
+  }, [])
 
   /** 在输入框光标处插入 @chip，替换正在输入的 @query */
   const insertMention = useCallback(
     (member: GuildMember) => {
-      if (!mention) return
+      if (!mention || mention.kind !== "mention") return
       const handle = tipTapRef.current
       if (!handle) return
 
@@ -408,13 +440,39 @@ export function Composer({
     [mention],
   )
 
-  // mention 面板键盘：捕获阶段优先于 TipTap 内部 Enter 发送
+  /** 插入 # 频道 chip，wire `<#id>`；不选则保持纯文本 #xxx */
+  const insertChannelMention = useCallback(
+    (channel: Channel) => {
+      if (!mention || mention.kind !== "channel") return
+      if (channel.type !== "TEXT" && channel.type !== "VOICE") return
+      const handle = tipTapRef.current
+      if (!handle) return
+
+      const queryLen = mention.query.length + 1 // 含 #
+      const already = handle.getMarkdown().includes(`<#${channel.id}>`)
+      if (already) {
+        handle.deleteBeforeCaret(queryLen)
+      } else {
+        handle.insertChannelMention(
+          channel.id,
+          channel.name,
+          channel.type,
+          queryLen,
+        )
+      }
+      setMention(null)
+      requestAnimationFrame(() => handle.focus())
+    },
+    [mention],
+  )
+
+  // 补全面板键盘：捕获阶段优先于 TipTap 内部 Enter 发送
   const onComposerKeyDownCapture = (event: React.KeyboardEvent) => {
-    if (!mention || mentionCandidates.length === 0) return
+    if (!mention || activeCandidatesCount === 0) return
     if (event.key === "ArrowDown") {
       event.preventDefault()
       event.stopPropagation()
-      setMentionIndex((index) => (index + 1) % mentionCandidates.length)
+      setMentionIndex((index) => (index + 1) % activeCandidatesCount)
       return
     }
     if (event.key === "ArrowUp") {
@@ -422,14 +480,20 @@ export function Composer({
       event.stopPropagation()
       setMentionIndex(
         (index) =>
-          (index - 1 + mentionCandidates.length) % mentionCandidates.length,
+          (index - 1 + activeCandidatesCount) % activeCandidatesCount,
       )
       return
     }
     if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault()
       event.stopPropagation()
-      insertMention(mentionCandidates[mentionIndex])
+      if (mention.kind === "channel") {
+        const ch = channelCandidates[mentionIndex]
+        if (ch) insertChannelMention(ch)
+      } else {
+        const member = mentionCandidates[mentionIndex]
+        if (member) insertMention(member)
+      }
       return
     }
     if (event.key === "Escape") {
@@ -510,11 +574,14 @@ export function Composer({
     }
     if (pick.type === "emote") {
       useStickersStore.getState().cacheItems([pick.item])
+      // 再从 cache 取规范化后的 id（字符串雪花），避免精度丢失导致服务端拒收
+      const cached =
+        useStickersStore.getState().getItem(String(pick.item.id)) ?? pick.item
       tipTapRef.current?.insertCustomEmote({
-        itemId: pick.item.id,
-        mark: pick.item.mark,
-        assetUrl: pick.item.asset_url,
-        animated: pick.item.animated,
+        itemId: cached.id,
+        mark: cached.mark,
+        assetUrl: cached.asset_url,
+        animated: cached.animated,
       })
       tipTapRef.current?.focus()
       return
@@ -596,7 +663,13 @@ export function Composer({
     input.click()
   }
 
-  const mentionOpen = Boolean(mention && mentionCandidates.length > 0)
+  const mentionOpen = Boolean(mention && activeCandidatesCount > 0)
+  const channelPanelOpen = Boolean(
+    mention?.kind === "channel" && channelCandidates.length > 0,
+  )
+  const memberPanelOpen = Boolean(
+    mention?.kind === "mention" && mentionCandidates.length > 0,
+  )
 
   return (
     <div
@@ -620,13 +693,15 @@ export function Composer({
         </p>
       )}
 
-      {/* @ 补全面板（带头像）；chip 本身在输入框内渲染 */}
-      {mentionOpen && (
+      {/* @ 成员补全面板 */}
+      {memberPanelOpen && (
         <div
           data-mention-panel
           className="absolute bottom-full left-4 z-30 mb-1 w-72 rounded-lg border bg-popover p-1 shadow-lg"
         >
-          <p className="px-2 py-1 text-xs text-muted-foreground select-none">成员</p>
+          <p className="px-2 py-1 text-xs text-muted-foreground select-none">
+            成员
+          </p>
           {mentionCandidates.map((member, index) => {
             const name = memberDisplayName(member)
             const avatar = resolveProfileAssetUrl(member.avatar_url)
@@ -652,13 +727,58 @@ export function Composer({
                     {nameInitials(name)}
                   </span>
                 )}
-                <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {name}
+                </span>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   @{member.username}
                 </span>
               </button>
             )
           })}
+        </div>
+      )}
+
+      {/* # 频道链接补全面板：选择后插入可点击 chip；Esc / 不选则保留纯文本 */}
+      {channelPanelOpen && (
+        <div
+          data-channel-mention-panel
+          className="absolute bottom-full left-4 z-30 mb-1 w-72 rounded-lg border bg-popover p-1 shadow-lg"
+        >
+          <p className="px-2 py-1 text-xs text-muted-foreground select-none">
+            链接到频道
+          </p>
+          {channelCandidates.map((channel, index) => {
+            const isVoice = channel.type === "VOICE"
+            return (
+              <button
+                key={channel.id}
+                type="button"
+                onMouseEnter={() => setMentionIndex(index)}
+                onClick={() => insertChannelMention(channel)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  index === mentionIndex && "bg-muted",
+                )}
+              >
+                {isVoice ? (
+                  <Volume2Icon className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <HashIcon className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {channel.name}
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {isVoice ? "语音" : "文字"}
+                  {channel.locked ? " · 上锁" : ""}
+                </span>
+              </button>
+            )
+          })}
+          <p className="px-2 pt-1 pb-0.5 text-[10px] text-muted-foreground/80 select-none">
+            回车链接 · Esc 保持为纯文本 #…
+          </p>
         </div>
       )}
 

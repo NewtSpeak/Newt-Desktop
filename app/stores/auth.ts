@@ -86,7 +86,7 @@ type AuthState = {
 let bootstrapInFlight: Promise<void> | null = null
 
 /** 兜底超时：网络/安全存储层意外挂起时不能让启动 gate 永远转圈 */
-const BOOTSTRAP_TIMEOUT_MS = 12_000
+const BOOTSTRAP_TIMEOUT_MS = 5_000
 
 function toSummary(account: PersistedAccount): AccountSummary {
   return {
@@ -146,22 +146,47 @@ function restoreFromCachedAccount(
   })
 }
 
+function setUnauthenticated(set: (state: Partial<AuthState>) => void) {
+  set({
+    status: "unauthenticated",
+    user: null,
+    activeAccountId: null,
+    accounts: summariesFromPersisted(),
+  })
+}
+
+/** 冷启动引导：任何路径都必须落到非 loading 终态，禁止抛错卡住欢迎页 */
 async function doBootstrap(set: (state: Partial<AuthState>) => void) {
+  let settled = false
+  const trackedSet = (partial: Partial<AuthState>) => {
+    if (partial.status && partial.status !== "loading") settled = true
+    set(partial)
+  }
+
+  const finishFromCacheOrGuest = (reason: string) => {
+    const list = getPersistedAccounts()
+    const activeId = getActiveAccountId()
+    const cached =
+      list.find((a) => a.id === activeId) ?? list[0] ?? null
+    if (cached) {
+      console.warn(`auth: ${reason}，使用本地缓存保持登录`)
+      restoreFromCachedAccount(cached, trackedSet)
+    } else {
+      console.warn(`auth: ${reason}，进入未登录欢迎页`)
+      setUnauthenticated(trackedSet)
+    }
+  }
+
   const timeout = new Promise<"timeout">((resolve) =>
     setTimeout(() => resolve("timeout"), BOOTSTRAP_TIMEOUT_MS),
   )
-  const run = async (): Promise<void> => {
+  const run = async (): Promise<"ok"> => {
     await initTokenStorage()
 
     const persisted = getPersistedAccounts()
     if (persisted.length === 0 && !hasRefreshToken()) {
-      set({
-        status: "unauthenticated",
-        user: null,
-        activeAccountId: null,
-        accounts: [],
-      })
-      return
+      setUnauthenticated(trackedSet)
+      return "ok"
     }
 
     const activeId = getActiveAccountId()
@@ -188,8 +213,8 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
         console.warn(
           "auth: 续期失败（网络/服务暂不可用），保留本地登录态",
         )
-        restoreFromCachedAccount(cached, set)
-        return
+        restoreFromCachedAccount(cached, trackedSet)
+        return "ok"
       }
     } else {
       // invalid / missing：尝试其它账号（仅凭证失效才 drop）
@@ -222,34 +247,24 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
             console.warn(
               "auth: 全部账号续期遇网络问题，保留本地登录态",
             )
-            restoreFromCachedAccount(fallback, set)
-            return
+            restoreFromCachedAccount(fallback, trackedSet)
+            return "ok"
           }
         }
         if (!hasRefreshToken() && getPersistedAccounts().length === 0) {
           clearSession()
-          set({
-            status: "unauthenticated",
-            user: null,
-            activeAccountId: null,
-            accounts: [],
-          })
-          return
+          setUnauthenticated(trackedSet)
+          return "ok"
         }
         // 还有本地账号但 refresh 全失败且无网络线索：仍尽量保留缓存登录
         const fallback = getPersistedAccounts()[0] ?? null
         if (fallback) {
-          restoreFromCachedAccount(fallback, set)
-          return
+          restoreFromCachedAccount(fallback, trackedSet)
+          return "ok"
         }
         clearSession()
-        set({
-          status: "unauthenticated",
-          user: null,
-          activeAccountId: null,
-          accounts: [],
-        })
-        return
+        setUnauthenticated(trackedSet)
+        return "ok"
       }
     }
 
@@ -268,12 +283,13 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
         dropAccountSession("__legacy__")
         activateAccount(accountId)
       }
-      set({
+      trackedSet({
         status: "authenticated",
         user,
         activeAccountId: accountId,
         accounts: summariesFromPersisted(),
       })
+      return "ok"
     } catch (error) {
       // 仅 401 视为会话失效；网络错误用缓存用户保持登录
       const isAuthFail =
@@ -292,8 +308,8 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
           activeRecord
         if (cached) {
           console.warn("auth: getMe 失败（网络），保留本地登录态")
-          restoreFromCachedAccount(cached, set)
-          return
+          restoreFromCachedAccount(cached, trackedSet)
+          return "ok"
         }
       }
 
@@ -303,8 +319,8 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
         activateAccount(next.id)
         const r = await refreshSessionResult(next.id)
         if (r.status === "transient") {
-          restoreFromCachedAccount(next, set)
-          return
+          restoreFromCachedAccount(next, trackedSet)
+          return "ok"
         }
         if (r.status !== "ok") {
           if (r.status === "invalid" || r.status === "missing") {
@@ -320,20 +336,20 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
             serverBaseUrl: next.serverBaseUrl,
             serverName: next.serverName,
           })
-          set({
+          trackedSet({
             status: "authenticated",
             user,
             activeAccountId: next.id,
             accounts: summariesFromPersisted(),
           })
-          return
+          return "ok"
         } catch (inner) {
           if (
             inner instanceof ApiError &&
             (inner.status === 0 || inner.code === "NETWORK_ERROR")
           ) {
-            restoreFromCachedAccount(next, set)
-            return
+            restoreFromCachedAccount(next, trackedSet)
+            return "ok"
           }
           if (inner instanceof ApiError && inner.status === 401) {
             dropAccountSession(next.id)
@@ -344,37 +360,37 @@ async function doBootstrap(set: (state: Partial<AuthState>) => void) {
       // 仍有本地账号则保留；否则才回欢迎页
       const remaining = getPersistedAccounts()
       if (remaining.length > 0) {
-        restoreFromCachedAccount(remaining[0]!, set)
-        return
+        restoreFromCachedAccount(remaining[0]!, trackedSet)
+        return "ok"
       }
       clearSession()
-      set({
-        status: "unauthenticated",
-        user: null,
-        activeAccountId: null,
-        accounts: [],
-      })
+      setUnauthenticated(trackedSet)
+      return "ok"
     }
   }
-  const result = await Promise.race([run(), timeout])
-  if (result === "timeout") {
-    // 超时也不清本地账号：有缓存就保持登录界面
-    const list = getPersistedAccounts()
-    const activeId = getActiveAccountId()
-    const cached =
-      list.find((a) => a.id === activeId) ?? list[0] ?? null
-    if (cached) {
-      console.warn("auth: 会话恢复超时，使用本地缓存保持登录")
-      restoreFromCachedAccount(cached, set)
-    } else {
-      console.error("auth: 会话恢复超时且无本地账号")
-      set({
-        status: "unauthenticated",
-        user: null,
-        activeAccountId: null,
-        accounts: [],
-      })
+
+  try {
+    // run() 失败不能让整个 bootstrap 拒绝，否则 status 会永远卡在 loading
+    const result = await Promise.race([
+      run().catch((error): "error" => {
+        console.error("auth: 会话恢复异常", error)
+        return "error"
+      }),
+      timeout,
+    ])
+    if (result === "timeout") {
+      finishFromCacheOrGuest("会话恢复超时")
+    } else if (result === "error") {
+      finishFromCacheOrGuest("会话恢复异常")
     }
+  } catch (error) {
+    console.error("auth: bootstrap 未捕获错误", error)
+    finishFromCacheOrGuest("bootstrap 失败")
+  }
+
+  // 最终兜底：任何遗漏路径都不得保持 loading
+  if (!settled) {
+    finishFromCacheOrGuest("bootstrap 未进入终态")
   }
 }
 
@@ -390,6 +406,7 @@ async function prepareAccountSwitch() {
     import("./notifications-inbox"),
     import("./presence"),
     import("./stickers"),
+    import("./cosmetics"),
     import("./ui"),
   ]).then(
     ([
@@ -401,6 +418,7 @@ async function prepareAccountSwitch() {
       notifications,
       presence,
       stickers,
+      cosmetics,
       ui,
     ]) => {
       voice.useVoiceStore.getState().reset()
@@ -411,6 +429,7 @@ async function prepareAccountSwitch() {
       notifications.useNotificationsStore.getState().reset()
       presence.usePresenceStore.getState().reset()
       stickers.useStickersStore.getState().reset()
+      cosmetics.useCosmeticsStore.getState().reset()
       ui.useUIStore.getState().selectGuild(null)
     },
   )
@@ -881,6 +900,7 @@ function resetAllDataStores() {
     import("./notifications-inbox"),
     import("./private-channels"),
     import("./stickers"),
+    import("./cosmetics"),
   ]).then(
     ([
       guilds,
@@ -896,6 +916,7 @@ function resetAllDataStores() {
       notifications,
       privateChannels,
       stickers,
+      cosmetics,
     ]) => {
       guilds.useGuildsStore.getState().reset()
       channels.useChannelsStore.getState().reset()
@@ -910,6 +931,7 @@ function resetAllDataStores() {
       notifications.useNotificationsStore.getState().reset()
       privateChannels.usePrivateChannelsStore.getState().reset()
       stickers.useStickersStore.getState().reset()
+      cosmetics.useCosmeticsStore.getState().reset()
       void import("~/lib/public-profile-cache").then((m) =>
         m.clearPublicProfileCache(),
       )
