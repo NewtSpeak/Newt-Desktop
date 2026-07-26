@@ -12,9 +12,11 @@ import {
   InfoIcon,
   KeyboardIcon,
   MicIcon,
+  PackageOpenIcon,
   PaletteIcon,
   KeyRoundIcon,
   ShieldIcon,
+  SparklesIcon,
   StickerIcon,
   XIcon,
 } from "lucide-react"
@@ -25,6 +27,8 @@ import { AboutSection } from "./about-section"
 import { AccountSection } from "./account-section"
 import { ApplicationsSection } from "./applications-section"
 import { AppearanceSection } from "./appearance-section"
+import { CosmeticsInventorySection } from "./cosmetics-inventory-section"
+import { CosmeticsShopSection } from "./cosmetics-shop-section"
 import { KeybindsSection } from "./keybinds-section"
 import { NotificationsSection } from "./notifications-section"
 import { PrivacySection } from "./privacy-section"
@@ -61,6 +65,13 @@ const NAV: {
     ],
   },
   {
+    group: "装扮",
+    items: [
+      { id: "cosmetics-shop", label: "装扮商店", icon: SparklesIcon },
+      { id: "cosmetics-inventory", label: "我的装扮", icon: PackageOpenIcon },
+    ],
+  },
+  {
     group: "高级",
     items: [{ id: "about", label: "关于", icon: InfoIcon }],
   },
@@ -89,6 +100,10 @@ function SectionContent({ section }: { section: SettingsSection }) {
       return <KeybindsSection />
     case "stickers":
       return <StickersSection />
+    case "cosmetics-shop":
+      return <CosmeticsShopSection />
+    case "cosmetics-inventory":
+      return <CosmeticsInventorySection />
     case "about":
       return <AboutSection />
     default:

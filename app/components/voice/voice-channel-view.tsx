@@ -41,6 +41,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
@@ -74,6 +75,7 @@ import { markSelfStageAction } from "~/lib/voice/stage-notify"
 import { screenErrorMessage, stageErrorMessage } from "~/lib/voice/stage-errors"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useMembersStore } from "~/stores/members"
 import { useSettingsStore } from "~/stores/settings"
 import {
@@ -375,6 +377,12 @@ function FreeVoiceCard({
     Boolean(s.voice.localNs?.[state.user_id]),
   )
   const nsMasterOn = useSettingsStore((s) => s.voice.ns)
+  // 头像框：本人走 loadout，他人复用成员进服时缓存的 equippedByUser（零新增请求）
+  const avatarFrame = useCosmeticsStore((s) =>
+    state.user_id === selfId
+      ? s.loadout.avatar_frame
+      : s.equippedByUser[state.user_id]?.avatar_frame,
+  )
 
   const isSelf = state.user_id === selfId
   const speaking = isSelf ? selfSpeaking || remoteSpeaking : remoteSpeaking
@@ -630,23 +638,26 @@ function FreeVoiceCard({
       {menu}
       <span className="relative">
         {/* 卡片外圈已有说话绿边，头像不再加描边；语音内不显示在线状态点 */}
-        <Avatar
-          className={cn(avatarClass, "after:hidden after:border-0")}
-        >
-          {avatarSrc ? (
-            <AvatarImage src={avatarSrc} alt={name} className="object-cover" />
-          ) : null}
-          <AvatarFallback
-            className={cn(
-              "bg-black/20 font-semibold text-white",
-              layout === "stage" ? "text-2xl" : layout === "grid" ? "text-lg" : "text-[10px]",
-            )}
+        {/* 头像框内嵌头像；LIVE 角标保持在框外层 */}
+        <AvatarWithFrame frame={avatarFrame} sizeClass={avatarClass}>
+          <Avatar
+            className={cn(avatarClass, "after:hidden after:border-0")}
           >
-            {nameInitials(name)}
-          </AvatarFallback>
-        </Avatar>
+            {avatarSrc ? (
+              <AvatarImage src={avatarSrc} alt={name} className="object-cover" />
+            ) : null}
+            <AvatarFallback
+              className={cn(
+                "bg-black/20 font-semibold text-white",
+                layout === "stage" ? "text-2xl" : layout === "grid" ? "text-lg" : "text-[10px]",
+              )}
+            >
+              {nameInitials(name)}
+            </AvatarFallback>
+          </Avatar>
+        </AvatarWithFrame>
         {streaming && (
-          <span className="absolute -right-2 -bottom-1 rounded-sm bg-red-600 px-1 text-[9px] font-bold text-white select-none">
+          <span className="absolute -right-2 -bottom-1 z-[3] rounded-sm bg-red-600 px-1 text-[9px] font-bold text-white select-none">
             LIVE
           </span>
         )}
@@ -734,6 +745,12 @@ function ParticipantTile({
     Boolean(s.voice.localNs?.[state.user_id]),
   )
   const nsMasterOn = useSettingsStore((s) => s.voice.ns)
+  // 头像框：本人走 loadout，他人复用成员缓存 equippedByUser（零新增请求）
+  const avatarFrame = useCosmeticsStore((s) =>
+    state.user_id === selfId
+      ? s.loadout.avatar_frame
+      : s.equippedByUser[state.user_id]?.avatar_frame,
+  )
 
   const isSelf = state.user_id === selfId
   const speaking = isSelf ? selfSpeaking || remoteSpeaking : remoteSpeaking
@@ -790,32 +807,35 @@ function ParticipantTile({
         )}
       >
         <span className="relative">
-          <Avatar
-            className={cn(
-              avatarSize,
-              "after:hidden after:border-0",
-              speaking &&
-                "ring-2 ring-emerald-500 ring-offset-2 ring-offset-background"
-            )}
-          >
-            {avatarSrc ? (
-              <AvatarImage src={avatarSrc} alt={name} className="object-cover" />
-            ) : null}
-            <AvatarFallback
-              className={size === "lg" ? "text-lg" : "text-[10px]"}
+          {/* 头像框内嵌头像；LIVE / 举手角标保持在框外层 */}
+          <AvatarWithFrame frame={avatarFrame} sizeClass={avatarSize}>
+            <Avatar
+              className={cn(
+                avatarSize,
+                "after:hidden after:border-0",
+                speaking &&
+                  "ring-2 ring-emerald-500 ring-offset-2 ring-offset-background"
+              )}
             >
-              {nameInitials(name)}
-            </AvatarFallback>
-          </Avatar>
+              {avatarSrc ? (
+                <AvatarImage src={avatarSrc} alt={name} className="object-cover" />
+              ) : null}
+              <AvatarFallback
+                className={size === "lg" ? "text-lg" : "text-[10px]"}
+              >
+                {nameInitials(name)}
+              </AvatarFallback>
+            </Avatar>
+          </AvatarWithFrame>
           {/* 语音内不显示在线状态点；仅保留 LIVE / 举手角标 */}
           {streaming && (
-            <span className="absolute -right-2 -bottom-1 rounded-sm bg-red-600 px-1 text-[9px] font-bold text-white select-none">
+            <span className="absolute -right-2 -bottom-1 z-[3] rounded-sm bg-red-600 px-1 text-[9px] font-bold text-white select-none">
               LIVE
             </span>
           )}
           {/* 举手角标 + 队列位次（QUEUED，黄色，docs 10 UX-03） */}
           {stageMode && role === "QUEUED" && (
-            <span className="absolute -top-1 -right-2 flex items-center gap-0.5 rounded-full bg-amber-500 px-1 py-0.5 text-[9px] font-semibold text-white select-none">
+            <span className="absolute -top-1 -right-2 z-[3] flex items-center gap-0.5 rounded-full bg-amber-500 px-1 py-0.5 text-[9px] font-semibold text-white select-none">
               <HandIcon className="size-2.5" />
               {queuePosition ?? "·"}
             </span>

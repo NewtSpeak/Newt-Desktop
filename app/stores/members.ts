@@ -6,6 +6,7 @@ import { listMembers } from "~/lib/api/guilds"
 import { isNotFound } from "~/lib/api/http"
 import type { GuildMember } from "~/lib/api/types"
 import { reconcileList } from "~/lib/reconcile-list"
+import type { EquippedSlot } from "~/lib/api/cosmetics"
 
 /** USER_UPDATE 带来的全局资料片段（按 user_id 合并进各服缓存） */
 export type MemberProfilePatch = {
@@ -64,6 +65,19 @@ export const useMembersStore = create<MembersState>()((set, get) => ({
     const request = (async () => {
       try {
         const members = await listMembers(guildId)
+        // 将成员装扮精简投影写入 cosmetics store（列表渲染铭牌/头像框）
+        void import("./cosmetics").then(({ useCosmeticsStore }) => {
+          for (const m of members) {
+            if (m.cosmetics && Object.keys(m.cosmetics).length > 0) {
+              useCosmeticsStore
+                .getState()
+                .setEquippedForUser(
+                  m.user_id,
+                  m.cosmetics as Record<string, EquippedSlot>,
+                )
+            }
+          }
+        })
         set((state) => {
           const previous = state.byGuild[guildId]
           const next = reconcileList(

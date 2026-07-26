@@ -48,6 +48,7 @@ import {
 import { useRolesStore } from "./roles"
 import { useStageStore } from "./stage"
 import { useStickersStore } from "./stickers"
+import { useCosmeticsStore } from "./cosmetics"
 import { useUIStore } from "./ui"
 import { useVoiceStore } from "./voice"
 import { useNotificationsStore } from "./notifications-inbox"
@@ -173,6 +174,9 @@ export function bindGatewayToStores() {
       .setUnreadCount(ready.notification_unread_count ?? 0)
 
     void useGuildsStore.getState().fetchGuilds()
+    // 本人装扮装备（全局）
+    void useCosmeticsStore.getState().loadLoadout().catch(() => undefined)
+    void useCosmeticsStore.getState().loadPoints().catch(() => undefined)
     const guildId = useUIStore.getState().selectedGuildId
     if (guildId && guildId !== "@me") {
       void useChannelsStore.getState().fetchChannels(guildId)
@@ -545,6 +549,37 @@ export function bindGatewayToStores() {
   gateway.subscribe(GatewayEvents.PermissionsUpdate, (payload) => {
     if (useChannelsStore.getState().byGuild[payload.guild_id]) {
       void useChannelsStore.getState().fetchChannels(payload.guild_id).catch(() => undefined)
+    }
+  })
+
+  // 平台装扮
+  // 目录更新是全站广播（gateway 白名单），所有在线端同时收到；
+  // 回源拉取加 0-5s 随机抖动，避免管理员改目录后瞬时打爆商店接口。
+  let catalogRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  gateway.subscribe(GatewayEvents.CosmeticCatalogUpdate, () => {
+    if (catalogRefreshTimer) return
+    catalogRefreshTimer = setTimeout(() => {
+      catalogRefreshTimer = null
+      void useCosmeticsStore.getState().ensureMeta().catch(() => undefined)
+      void useCosmeticsStore.getState().loadShop().catch(() => undefined)
+    }, Math.random() * 5000)
+  })
+  gateway.subscribe(GatewayEvents.CosmeticInventoryUpdate, () => {
+    void useCosmeticsStore.getState().loadInventory().catch(() => undefined)
+  })
+  gateway.subscribe(GatewayEvents.CosmeticLoadoutUpdate, (payload) => {
+    const p = payload as {
+      user_id?: string
+      slots?: Record<string, import("~/lib/api/cosmetics").EquippedSlot>
+    }
+    if (p.user_id && p.slots) {
+      useCosmeticsStore.getState().applyLoadoutUpdate(p.user_id, p.slots)
+    }
+  })
+  gateway.subscribe(GatewayEvents.CosmeticPointsUpdate, (payload) => {
+    const bal = (payload as { balance?: number }).balance
+    if (typeof bal === "number") {
+      useCosmeticsStore.getState().setPoints(bal)
     }
   })
 

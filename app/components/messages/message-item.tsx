@@ -62,6 +62,7 @@ import {
   isCustomReactionKey,
   parseCustomReactionItemId,
 } from "~/lib/stickers/format"
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { RoleBadgePills, StyledDisplayName } from "~/components/styled-name"
 import {
   memberDisplayName,
@@ -70,6 +71,7 @@ import {
 } from "~/lib/user-display"
 import { useAuthStore } from "~/stores/auth"
 import { useChannelsStore } from "~/stores/channels"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
 import {
@@ -1259,6 +1261,13 @@ export const MessageRow = memo(function MessageRow({
   const roles = useRolesStore((state) =>
     guildId ? state.byGuild[guildId] : undefined
   )
+  // 作者头像框：只订阅 avatar_frame 单槽引用，避免无关装扮变更触发重渲；
+  // 本人走 loadout，他人走 equippedByUser 缓存（不在 store 则无框降级，不单独发请求）
+  const authorAvatarFrame = useCosmeticsStore((state) =>
+    isOwn
+      ? state.loadout.avatar_frame
+      : state.equippedByUser[message.author_id]?.avatar_frame,
+  )
   const selfGuildPerms = useMemo(
     () => memberGuildPermissions(selfMember, roles),
     [selfMember, roles],
@@ -1331,11 +1340,13 @@ export const MessageRow = memo(function MessageRow({
           systemAdmin ? (
             <SystemAdminAvatar />
           ) : (
-            <AuthorAvatar
-              userId={message.author_id}
-              name={displayName}
-              avatarUrl={authorAvatarUrl}
-            />
+            <AvatarWithFrame frame={authorAvatarFrame} sizeClass="size-9">
+              <AuthorAvatar
+                userId={message.author_id}
+                name={displayName}
+                avatarUrl={authorAvatarUrl}
+              />
+            </AvatarWithFrame>
           )
         ) : (
           <span className="w-9 shrink-0 pt-0.5 text-right text-[10px] leading-5 text-muted-foreground opacity-0 select-none group-hover/message:opacity-100">

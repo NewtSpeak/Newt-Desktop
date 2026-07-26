@@ -1,13 +1,21 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/inter";
+
+/* 全局 UI 字体：MiSans 可变字体（public/fonts，构建时原样拷贝） */
+@font-face {
+  font-family: "MiSans VF";
+  src: url("/fonts/MiSansVF.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Inter Variable', sans-serif;
+    --font-sans: "MiSans VF", "MiSans", system-ui, sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -140,13 +148,15 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
+    font-family: var(--font-sans);
     }
   button:not(:disabled), [role="button"]:not(:disabled) {
     cursor: pointer;
     }
   html {
     @apply font-sans;
+    font-family: var(--font-sans);
     }
 
   /* 禁止整页橡皮筋回弹，滚动到边界时不带动页面露出空白 */
@@ -174,6 +184,245 @@
   ::-webkit-scrollbar-thumb:hover {
     background-color: color-mix(in oklab, var(--muted-foreground) 40%, transparent);
   }
+}
+
+/* ---------- 频道提及 chip：与 @mention 同为行内节点，背景对齐 code ---------- */
+.tiptap-owl .owl-channel-mention-nv,
+.tiptap-owl span.owl-channel-mention-nv,
+.tiptap-owl [data-node-view-wrapper].owl-channel-mention-nv {
+  display: inline !important;
+  vertical-align: middle;
+  line-height: inherit;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  float: none !important;
+}
+
+.tiptap-owl .owl-channel-mention-chip,
+.tiptap-owl span[data-type="channelMention"] {
+  box-sizing: border-box;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.2em;
+  max-width: 100%;
+  padding: 0.1em 0.4em;
+  margin: 0 0.12em;
+  border-radius: 0.3em;
+  line-height: 1.25;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-weight: 500;
+  font-size: 0.95em;
+  /* 与行内 code 一致 */
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.tiptap-owl .owl-channel-mention-chip:hover,
+.tiptap-owl span[data-type="channelMention"]:hover {
+  background: color-mix(in oklab, var(--muted) 78%, var(--foreground));
+}
+
+/* ---------- 行内小表情：与正文字号 1em 一致，禁止拆成独立块行 ---------- */
+.tiptap-owl .owl-custom-emote-nv,
+.tiptap-owl span.owl-custom-emote-nv,
+.tiptap-owl [data-node-view-wrapper].owl-custom-emote-nv {
+  display: inline !important;
+  vertical-align: baseline;
+  line-height: inherit;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  /* 防止 NodeView 被当成 flex/block 子项单独换行 */
+  float: none !important;
+  clear: none !important;
+}
+
+.tiptap-owl .owl-custom-emote,
+.tiptap-owl span[data-type="custom-emote"] {
+  display: inline-block !important;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  line-height: 1;
+  margin: 0 0.05em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tiptap-owl .owl-custom-emote img,
+.tiptap-owl .owl-custom-emote video,
+.tiptap-owl span[data-type="custom-emote"] img,
+.tiptap-owl span[data-type="custom-emote"] video {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  vertical-align: baseline;
+}
+
+/* 段落保持自然换行；行内节点（表情/提及）跟文字走，不强制整段 inline */
+.tiptap-owl.owl-prose-inline-emotes p {
+  display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ---------- 消息检查清单 - [ ] / - [x]（TipTap taskList） ---------- */
+.tiptap-owl ul.owl-task-list,
+.tiptap-owl ul[data-type="taskList"] {
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+  font-family: var(--font-sans);
+}
+
+.tiptap-owl li.owl-task-item,
+.tiptap-owl li[data-type="taskItem"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.15rem 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+.tiptap-owl li.owl-task-item > label,
+.tiptap-owl li[data-type="taskItem"] > label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.2rem;
+  user-select: none;
+}
+
+.tiptap-owl li.owl-task-item > label input[type="checkbox"],
+.tiptap-owl li[data-type="taskItem"] > label input[type="checkbox"] {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: default;
+}
+
+.tiptap-owl li.owl-task-item > div,
+.tiptap-owl li[data-type="taskItem"] > div {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-sans);
+}
+
+.tiptap-owl li.owl-task-item > div > p,
+.tiptap-owl li[data-type="taskItem"] > div > p {
+  margin: 0;
+}
+
+/* 已完成：略降对比，不删除线（更像运营检查清单） */
+.tiptap-owl li.owl-task-item[data-checked="true"] > div,
+.tiptap-owl li[data-type="taskItem"][data-checked="true"] > div {
+  color: color-mix(in oklab, var(--foreground) 72%, transparent);
+}
+
+/* ---------- 消息 GFM 表格（TipTap table）：无边框/描边，靠底色区分 ---------- */
+.tiptap-owl .tableWrapper,
+.tiptap-owl div[data-type="tableWrapper"],
+.tiptap-owl div.tableWrapper {
+  display: block;
+  margin: 0.5rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: none;
+  border-radius: 0.5rem;
+  outline: none;
+  box-shadow: none;
+  font-family: var(--font-sans);
+}
+
+/* 防止 prose/inline 规则把 table 压成不可见 */
+.tiptap-owl table.owl-md-table,
+.tiptap-owl table,
+.tiptap-owl .tableWrapper > table {
+  display: table !important;
+  width: max-content;
+  min-width: min(100%, 16rem);
+  max-width: 100%;
+  border: none;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--muted) 45%, var(--background));
+  border-radius: 0.5rem;
+  overflow: hidden;
+  outline: none;
+  box-shadow: none;
+}
+
+.tiptap-owl table.owl-md-table tr,
+.tiptap-owl table tr {
+  display: table-row !important;
+  border: none;
+  outline: none;
+}
+
+.tiptap-owl table.owl-md-table th,
+.tiptap-owl table.owl-md-table td,
+.tiptap-owl table th,
+.tiptap-owl table td,
+.tiptap-owl th.owl-md-th,
+.tiptap-owl td.owl-md-td {
+  display: table-cell !important;
+  min-width: 4rem;
+  max-width: 18rem;
+  padding: 0.45rem 0.75rem;
+  vertical-align: top;
+  text-align: left;
+  font-family: var(--font-sans);
+  word-break: break-word;
+  border: none;
+  outline: none;
+  box-shadow: none;
+}
+
+.tiptap-owl table.owl-md-table th,
+.tiptap-owl table th,
+.tiptap-owl th.owl-md-th {
+  font-weight: 600;
+  background: color-mix(in oklab, var(--muted) 92%, var(--background));
+  color: var(--foreground);
+}
+
+.tiptap-owl table.owl-md-table td,
+.tiptap-owl table td,
+.tiptap-owl td.owl-md-td {
+  background: color-mix(in oklab, var(--background) 70%, transparent);
+}
+
+.tiptap-owl table.owl-md-table p,
+.tiptap-owl table p {
+  margin: 0;
+  font-family: var(--font-sans);
+}
+
+/* 对齐：由表头/单元格 style="text-align: ..." 或 attr 控制 */
+.tiptap-owl table th[style*="text-align: center"],
+.tiptap-owl table td[style*="text-align: center"] {
+  text-align: center;
+}
+.tiptap-owl table th[style*="text-align: right"],
+.tiptap-owl table td[style*="text-align: right"] {
+  text-align: right;
+}
+.tiptap-owl table th[style*="text-align: left"],
+.tiptap-owl table td[style*="text-align: left"] {
+  text-align: left;
 }
 
 /* ---------- 设置弹窗（transitions-dev modal 节奏） ---------- */

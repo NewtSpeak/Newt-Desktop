@@ -13,6 +13,8 @@ import {
 import { toast } from "sonner"
 
 import { presenceDotClass } from "~/components/nav-user"
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
+import { ProfileCardChrome } from "~/components/cosmetics/profile-decorations"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import {
   DropdownMenu,
@@ -39,6 +41,8 @@ import {
   resolveProfileAssetUrl,
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
+import { useAuthStore } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { usePresenceStore } from "~/stores/presence"
 import { usePrivateChannelsStore } from "~/stores/private-channels"
 import {
@@ -91,6 +95,16 @@ export function UserProfilePopover({
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   const navigate = useNavigate()
   const presence = usePresenceStore((s) => s.statusByUser[userId])
+  const selfId = useAuthStore((s) => s.user?.id)
+  // 装扮：订阅 store（本人走 loadout，他人走 equippedByUser 缓存），
+  // COSMETIC_LOADOUT_UPDATE 事件实时生效；成员列表已缓存的 listMode 数据可先渲染减少闪现
+  const cosmeticsSlots = useCosmeticsStore(
+    (s) =>
+      (userId === selfId ? s.loadout : s.equippedByUser[userId]) ?? {},
+  )
+  const avatarFrame = cosmeticsSlots.avatar_frame
+  const profileBorder = cosmeticsSlots.profile_border
+  const profileEffect = cosmeticsSlots.profile_effect
   const relItems = useRelationshipsStore((s) => s.items)
   const isFriend = friendsOf(relItems).some((r) => r.user.id === userId)
   const isBlocked = blockedOf(relItems).some((r) => r.user.id === userId)
@@ -101,7 +115,12 @@ export function UserProfilePopover({
     setLoading(true)
     void getPublicProfile(userId)
       .then((data) => {
-        if (!cancelled) setProfile(data)
+        if (cancelled) return
+        setProfile(data)
+        // 公开资料附带的全量装扮写入 store 缓存，供本卡与其他入口复用
+        if (data.cosmetics) {
+          useCosmeticsStore.getState().setEquippedForUser(userId, data.cosmetics)
+        }
       })
       .catch(() => {
         if (!cancelled) setProfile(null)
@@ -213,6 +232,14 @@ export function UserProfilePopover({
         align="start"
         className="w-64 gap-0 overflow-hidden rounded-2xl p-0 shadow-xl"
       >
+        {/* 装扮：资料卡边框 + 内特效（compact 档），打开时播放特效音频 */}
+        <ProfileCardChrome
+          border={profileBorder}
+          effect={profileEffect}
+          size="compact"
+          playAudio={open}
+          className="rounded-2xl"
+        >
         <div className="relative">
           {banner ? (
             <img
@@ -325,21 +352,24 @@ export function UserProfilePopover({
 
           <div className="absolute -bottom-7 left-3">
             <span className="relative block size-14">
-              <Avatar className="size-14 rounded-full ring-4 ring-popover after:rounded-full after:border-0">
-                {resolvedAvatar ? (
-                  <AvatarImage
-                    src={resolvedAvatar}
-                    alt=""
-                    className="rounded-full object-cover"
-                  />
-                ) : null}
-                <AvatarFallback className="rounded-full text-lg font-semibold">
-                  {nameInitials(name)}
-                </AvatarFallback>
-              </Avatar>
+              <AvatarWithFrame frame={avatarFrame} sizeClass="size-14">
+                <Avatar className="size-14 rounded-full ring-4 ring-popover after:rounded-full after:border-0">
+                  {resolvedAvatar ? (
+                    <AvatarImage
+                      src={resolvedAvatar}
+                      alt=""
+                      className="rounded-full object-cover"
+                    />
+                  ) : null}
+                  <AvatarFallback className="rounded-full text-lg font-semibold">
+                    {nameInitials(name)}
+                  </AvatarFallback>
+                </Avatar>
+              </AvatarWithFrame>
+              {/* presence 点保持在头像框外层，z 序压过框（参照 member-panel） */}
               <span
                 className={cn(
-                  "absolute -right-0.5 -bottom-0.5 size-3.5 rounded-full ring-[3px] ring-popover",
+                  "absolute -right-0.5 -bottom-0.5 z-[3] size-3.5 rounded-full ring-[3px] ring-popover",
                   presenceDotClass(presence),
                 )}
                 title={presenceLabel(presence)}
@@ -374,6 +404,7 @@ export function UserProfilePopover({
             </p>
           ) : null}
         </div>
+        </ProfileCardChrome>
       </PopoverContent>
     </Popover>
   )

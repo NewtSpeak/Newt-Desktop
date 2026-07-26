@@ -3,6 +3,8 @@
 //   - clientapi（auth/resources）、message、voice、stage 各模块的 handler；
 //   - 消息 ID 为雪花 int64，后端以 `json:"id,string"` 序列化为字符串，前端一律按 string 处理。
 
+import type { EquippedSlot } from "./cosmetics"
+
 // ---------------------------------------------------------------------------
 // 用户与鉴权
 // ---------------------------------------------------------------------------
@@ -50,6 +52,8 @@ export type PublicUserProfile = {
   banner?: string
   accent_color?: string
   bio: string
+  /** 已装备装扮（full 模式含全部槽位；slot -> 装备视图） */
+  cosmetics?: Record<string, EquippedSlot>
 }
 
 export type TokenResponse = {
@@ -177,6 +181,30 @@ export type GuildMember = {
    * 仅影响展示，不改变角色绑定。
    */
   name_style_role_id?: string | null
+  /** 装扮精简投影（头像框 + 铭牌）；完整槽位见 cosmetics store */
+  cosmetics?: Record<
+    string,
+    {
+      item_id: string
+      category_key: string
+      slot: string
+      name: string
+      assets: Record<
+        string,
+        {
+          id: string
+          url: string
+          mime: string
+          width: number
+          height: number
+          animated: boolean
+          size_bytes: number
+        }
+      >
+      payload: Record<string, unknown>
+      render_hint?: string
+    }
+  >
 }
 
 /**

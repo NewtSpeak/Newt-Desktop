@@ -34,6 +34,9 @@ import {
   RoleStyleDot,
   StyledDisplayName,
 } from "~/components/styled-name"
+import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
+import { NameplateBackground } from "~/components/cosmetics/nameplate"
+import { ProfileCardChrome } from "~/components/cosmetics/profile-decorations"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
@@ -88,6 +91,7 @@ import {
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useMembersStore } from "~/stores/members"
 import type { PresenceStatus } from "~/lib/gateway/events"
 import { effectiveSelfStatus, usePresenceStore } from "~/stores/presence"
@@ -214,6 +218,15 @@ function MemberRow({
   const presence = usePresenceStore(
     (state) => state.statusByUser[member.user_id]
   )
+  const cosmeticsSlots = useCosmeticsStore(
+    (s) =>
+      (member.user_id === selfId ? s.loadout : s.equippedByUser[member.user_id]) ??
+      {},
+  )
+  const avatarFrame = cosmeticsSlots.avatar_frame
+  const nameplate = cosmeticsSlots.nameplate
+  const profileBorder = cosmeticsSlots.profile_border
+  const profileEffect = cosmeticsSlots.profile_effect
   const isSelf = member.user_id === selfId
   const status: PresenceStatus | undefined = isSelf
     ? effectiveSelfStatus()
@@ -413,7 +426,7 @@ function MemberRow({
       <ContextMenu>
         <ContextMenuTrigger
           className={cn(
-            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/70",
+            "relative flex w-full items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/70",
             online ? "text-foreground/90" : "opacity-50"
           )}
           onClick={(event) => {
@@ -427,22 +440,25 @@ function MemberRow({
             )
           }}
         >
-          <span className="relative shrink-0">
-            <Avatar className="size-7 rounded-full after:rounded-full after:border-0">
-              {avatarSrc && (
-                <AvatarImage
-                  src={avatarSrc}
-                  alt={name}
-                  className="rounded-full object-cover"
-                />
-              )}
-              <AvatarFallback className="rounded-full text-[10px]">
-                {nameInitials(name)}
-              </AvatarFallback>
-            </Avatar>
+          <NameplateBackground nameplate={nameplate} />
+          <span className="relative z-[1] shrink-0">
+            <AvatarWithFrame frame={avatarFrame} sizeClass="size-7">
+              <Avatar className="size-7 rounded-full after:rounded-full after:border-0">
+                {avatarSrc && (
+                  <AvatarImage
+                    src={avatarSrc}
+                    alt={name}
+                    className="rounded-full object-cover"
+                  />
+                )}
+                <AvatarFallback className="rounded-full text-[10px]">
+                  {nameInitials(name)}
+                </AvatarFallback>
+              </Avatar>
+            </AvatarWithFrame>
             <span
               className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-background",
+                "absolute -right-0.5 -bottom-0.5 z-[3] size-2 rounded-full ring-2 ring-background",
                 presenceDotClass(status)
               )}
             />
@@ -450,18 +466,18 @@ function MemberRow({
           <StyledDisplayName
             name={name}
             style={nameStyle}
-            className="min-w-0 flex-1 truncate text-[13px]"
+            className="relative z-[1] min-w-0 flex-1 truncate text-[13px]"
           />
           {member.is_owner && (
             <CrownIcon
               aria-label="服务器所有者"
-              className="size-3.5 shrink-0 text-amber-500"
+              className="relative z-[1] size-3.5 shrink-0 text-amber-500"
             />
           )}
           {!member.is_owner && isAdmin && (
             <ShieldIcon
               aria-label="管理员"
-              className="size-3.5 shrink-0 text-sky-500"
+              className="relative z-[1] size-3.5 shrink-0 text-sky-500"
             />
           )}
         </ContextMenuTrigger>
@@ -473,7 +489,13 @@ function MemberRow({
           sideOffset={8}
         >
           {/* —— 精简资料卡：仅展示信息；操作在右上角 —— */}
-          <div className="relative">
+          <ProfileCardChrome
+            border={profileBorder}
+            effect={profileEffect}
+            size="compact"
+            playAudio
+            className="relative"
+          >
             <div
               className={cn(
                 "h-28 w-full",
@@ -724,22 +746,24 @@ function MemberRow({
             <div className="relative px-4 pb-4">
               {/* 圆形头像压在横幅下沿 */}
               <div className="relative -mt-10 mb-3 size-20">
-                <Avatar className="size-20 rounded-full ring-4 ring-popover after:rounded-full after:border-0">
-                  {avatarSrc ? (
-                    <AvatarImage
-                      src={avatarSrc}
-                      alt={name}
-                      className="rounded-full object-cover"
-                    />
-                  ) : null}
-                  <AvatarFallback className="rounded-full text-xl font-semibold">
-                    {nameInitials(name)}
-                  </AvatarFallback>
-                </Avatar>
+                <AvatarWithFrame frame={avatarFrame} sizeClass="size-20">
+                  <Avatar className="size-20 rounded-full ring-4 ring-popover after:rounded-full after:border-0">
+                    {avatarSrc ? (
+                      <AvatarImage
+                        src={avatarSrc}
+                        alt={name}
+                        className="rounded-full object-cover"
+                      />
+                    ) : null}
+                    <AvatarFallback className="rounded-full text-xl font-semibold">
+                      {nameInitials(name)}
+                    </AvatarFallback>
+                  </Avatar>
+                </AvatarWithFrame>
                 <span
                   title={presenceLabel(status)}
                   className={cn(
-                    "absolute -right-0.5 -bottom-0.5 size-4 rounded-full ring-[3px] ring-popover",
+                    "absolute -right-0.5 -bottom-0.5 z-[3] size-4 rounded-full ring-[3px] ring-popover",
                     presenceDotClass(status)
                   )}
                 />
@@ -797,7 +821,7 @@ function MemberRow({
                 </div>
               ) : null}
             </div>
-          </div>
+          </ProfileCardChrome>
         </ContextMenuContent>
       </ContextMenu>
 

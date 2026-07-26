@@ -69,5 +69,11 @@ export const SECTION_TOC: Record<SettingsSection, SettingsTocItem[]> = {
     { id: "stickers-owned", label: "我创建的包" },
     { id: "stickers-library", label: "已安装" },
   ],
+  "cosmetics-shop": [
+    { id: "cosmetics-shop", label: "商店" },
+  ],
+  "cosmetics-inventory": [
+    { id: "cosmetics-inventory", label: "库存与装备" },
+  ],
   about: [{ id: "about-oss", label: "开源信息" }],
 }

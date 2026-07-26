@@ -31,8 +31,13 @@ import {
   userDisplayName,
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
+import {
+  AvatarFrameOverlay,
+  AvatarWithFrame,
+} from "~/components/cosmetics/avatar-frame"
 import { SwitchAccountDialog } from "~/components/switch-account-dialog"
 import { useAuthStore } from "~/stores/auth"
+import { useCosmeticsStore } from "~/stores/cosmetics"
 import { setManualPresence, usePresenceStore } from "~/stores/presence"
 import { useSettingsStore, type ManualPresenceStatus } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
@@ -83,6 +88,8 @@ export function NavUser() {
   const gatewayStatus = useUIStore((state) => state.gatewayStatus)
   const manualStatus = useSettingsStore((state) => state.presence.manualStatus)
   const autoIdle = usePresenceStore((state) => state.autoIdle)
+  // 本人头像框（loadout 单槽订阅；COSMETIC_LOADOUT_UPDATE 实时生效）
+  const avatarFrame = useCosmeticsStore((state) => state.loadout.avatar_frame)
   const [switchOpen, setSwitchOpen] = React.useState(false)
 
   if (!user) return null
@@ -134,18 +141,21 @@ export function NavUser() {
             <DropdownMenuGroup>
               <DropdownMenuLabel className="p-0 font-normal">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                  <Avatar className="size-8 rounded-lg after:rounded-lg after:border-0">
-                    {avatarSrc ? (
-                      <AvatarImage
-                        src={avatarSrc}
-                        alt={display}
-                        className="rounded-lg object-cover"
-                      />
-                    ) : null}
-                    <AvatarFallback className="rounded-lg text-xs">
-                      {nameInitials(display)}
-                    </AvatarFallback>
-                  </Avatar>
+                  {/* 下拉头部头像：正常内嵌头像框（无裁切问题） */}
+                  <AvatarWithFrame frame={avatarFrame} sizeClass="size-8">
+                    <Avatar className="size-8 rounded-lg after:rounded-lg after:border-0">
+                      {avatarSrc ? (
+                        <AvatarImage
+                          src={avatarSrc}
+                          alt={display}
+                          className="rounded-lg object-cover"
+                        />
+                      ) : null}
+                      <AvatarFallback className="rounded-lg text-xs">
+                        {nameInitials(display)}
+                      </AvatarFallback>
+                    </Avatar>
+                  </AvatarWithFrame>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{display}</span>
                     <span className="truncate text-xs text-muted-foreground">
@@ -213,6 +223,16 @@ export function NavUser() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {/* 装扮头像框：主按钮为方形 overflow-hidden，框放按钮内会被裁切；
+            参照 presence 点的做法，在 SidebarMenuItem 层级绝对定位叠在按钮外沿 */}
+        {avatarFrame ? (
+          <span
+            className="pointer-events-none absolute inset-0 z-[5]"
+            aria-hidden
+          >
+            <AvatarFrameOverlay frame={avatarFrame} />
+          </span>
+        ) : null}
         {/* Presence 状态点：独立于头像区块，叠在按钮右下角外沿，不被 overflow 裁切 */}
         <span
           aria-label={statusLabel(gatewayStatus)}

@@ -92,6 +92,12 @@ export const GatewayEvents = {
   StickerLibraryUpdate: "STICKER_LIBRARY_UPDATE",
   GuildStickerPackBanAdd: "GUILD_STICKER_PACK_BAN_ADD",
   GuildStickerPackBanRemove: "GUILD_STICKER_PACK_BAN_REMOVE",
+
+  // 平台装扮商店
+  CosmeticCatalogUpdate: "COSMETIC_CATALOG_UPDATE",
+  CosmeticInventoryUpdate: "COSMETIC_INVENTORY_UPDATE",
+  CosmeticLoadoutUpdate: "COSMETIC_LOADOUT_UPDATE",
+  CosmeticPointsUpdate: "COSMETIC_POINTS_UPDATE",
 } as const
 
 export type GatewayEventName =
