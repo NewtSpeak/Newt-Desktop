@@ -264,6 +264,9 @@ export function ChannelSettingsPanel() {
   const [topic, setTopic] = useState("")
   const [rateLimit, setRateLimit] = useState(0)
   const [rateLimitExemptRoleIds, setRateLimitExemptRoleIds] = useState<string[]>([])
+  const [allowRestricted, setAllowRestricted] = useState(true)
+  const [forceDefaultVisibility, setForceDefaultVisibility] = useState(false)
+  const [defaultVisibleRoleIds, setDefaultVisibleRoleIds] = useState<string[]>([])
   const [userLimit, setUserLimit] = useState(0)
   const [voiceNote, setVoiceNote] = useState("")
   const [locked, setLocked] = useState(false)
@@ -298,6 +301,9 @@ export function ChannelSettingsPanel() {
     setTopic(channel.topic ?? "")
     setRateLimit(channel.rate_limit_per_user ?? 0)
     setRateLimitExemptRoleIds(channel.rate_limit_exempt_role_ids ?? [])
+    setAllowRestricted(channel.allow_restricted_visibility !== false)
+    setForceDefaultVisibility(Boolean(channel.force_default_visibility))
+    setDefaultVisibleRoleIds(channel.default_visible_role_ids ?? [])
     setUserLimit(channel.user_limit ?? 0)
     setVoiceNote(channel.voice_note ?? "")
     setLocked(Boolean(channel.locked))
@@ -487,6 +493,9 @@ export function ChannelSettingsPanel() {
           ? {
               rate_limit_per_user: rateLimit,
               rate_limit_exempt_role_ids: rateLimitExemptRoleIds,
+              allow_restricted_visibility: allowRestricted,
+              force_default_visibility: forceDefaultVisibility,
+              default_visible_role_ids: defaultVisibleRoleIds,
             }
           : {}),
         ...(channel.type === "VOICE"
@@ -806,16 +815,7 @@ export function ChannelSettingsPanel() {
                                   ? [...rateLimitExemptRoleIds.filter((id) => id !== role.id), role.id]
                                   : rateLimitExemptRoleIds.filter((id) => id !== role.id)
                                 setRateLimitExemptRoleIds(ids)
-                                setDirty(
-                                  !sameStringSet(ids, channel.rate_limit_exempt_role_ids ?? []) ||
-                                    name !== channel.name ||
-                                    topic !== (channel.topic ?? "") ||
-                                    rateLimit !== (channel.rate_limit_per_user ?? 0) ||
-                                    userLimit !== (channel.user_limit ?? 0) ||
-                                    voiceNote !== (channel.voice_note ?? "") ||
-                                    locked !== Boolean(channel.locked) ||
-                                    (locked && password.length > 0),
-                                )
+                                setDirty(true)
                               }}
                             />
                             <span className="truncate">
@@ -826,6 +826,74 @@ export function ChannelSettingsPanel() {
                       })}
                     </div>
                   </fieldset>
+                  <div className="flex flex-col gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      消息可见范围
+                    </span>
+                    <p className="text-xs text-muted-foreground">
+                      成员可发送「仅自己 + 指定身份组可见」的消息；版主仍可审核。
+                    </p>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={allowRestricted}
+                        disabled={!canManageChannel || forceDefaultVisibility}
+                        onCheckedChange={(next) => {
+                          setAllowRestricted(Boolean(next))
+                          setDirty(true)
+                        }}
+                      />
+                      允许成员发送限定可见消息
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={forceDefaultVisibility}
+                        disabled={!canManageChannel}
+                        onCheckedChange={(next) => {
+                          const on = Boolean(next)
+                          setForceDefaultVisibility(on)
+                          if (on) setAllowRestricted(true)
+                          setDirty(true)
+                        }}
+                      />
+                      强制使用下方默认可见范围（忽略发送时选择）
+                    </label>
+                    <div className="grid max-h-40 gap-1 overflow-y-auto sm:grid-cols-2">
+                      {(roles ?? [])
+                        .filter((role) => !role.is_everyone)
+                        .map((role) => {
+                          const checked = defaultVisibleRoleIds.includes(role.id)
+                          return (
+                            <label
+                              key={role.id}
+                              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+                            >
+                              <Checkbox
+                                checked={checked}
+                                disabled={!canManageChannel}
+                                onCheckedChange={(next) => {
+                                  const ids = Boolean(next)
+                                    ? [
+                                        ...defaultVisibleRoleIds.filter(
+                                          (id) => id !== role.id,
+                                        ),
+                                        role.id,
+                                      ]
+                                    : defaultVisibleRoleIds.filter(
+                                        (id) => id !== role.id,
+                                      )
+                                  setDefaultVisibleRoleIds(ids)
+                                  setDirty(true)
+                                }}
+                              />
+                              <span className="truncate">{role.name}</span>
+                            </label>
+                          )
+                        })}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      默认身份组为空表示默认公开；强制 + 空默认 = 强制全员可见。
+                    </p>
+                  </div>
                 </div>
               )}
               {channel.type === "VOICE" && (

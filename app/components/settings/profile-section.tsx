@@ -8,8 +8,9 @@ import { toast } from "sonner"
 import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
-import { Input } from "~/components/ui/input"
+import { EmojiTextField } from "~/components/ui/emoji-text-field"
 import { ApiError } from "~/lib/api/http"
+import { codePointLength } from "~/lib/text-length"
 import {
   deleteAvatar,
   deleteBanner,
@@ -82,11 +83,11 @@ export function ProfileSection() {
 
   const saveText = async () => {
     const name = displayName.trim()
-    if (name && (name.length < 1 || [...name].length > 32)) {
+    if (name && (codePointLength(name) < 1 || codePointLength(name) > 32)) {
       setTextError("显示名长度为 1–32 个字符")
       return
     }
-    if ([...bio.trim()].length > 190) {
+    if (codePointLength(bio.trim()) > 190) {
       setTextError("个性签名不能超过 190 个字符")
       return
     }
@@ -223,34 +224,33 @@ export function ProfileSection() {
           <label htmlFor="profile-display-name" className="mb-1.5 block text-sm font-medium">
             显示名
           </label>
-          <Input
+          <EmojiTextField
             id="profile-display-name"
             value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onChange={setDisplayName}
             placeholder={user.username}
-            maxLength={32}
+            maxChars={32}
+            showCount
             aria-describedby="profile-display-name-hint"
           />
           <p id="profile-display-name-hint" className="mt-1 text-xs text-muted-foreground">
-            1–32 个字符；留空则展示用户名「{user.username}」
+            1–32 个字符，可插入表情；留空则展示用户名「{user.username}」
           </p>
         </div>
         <div>
           <label htmlFor="profile-bio" className="mb-1.5 block text-sm font-medium">
             个性签名
           </label>
-          <textarea
+          <EmojiTextField
             id="profile-bio"
+            multiline
             value={bio}
-            onChange={(event) => setBio(event.target.value)}
+            onChange={setBio}
             placeholder="介绍一下自己…"
-            maxLength={190}
+            maxChars={190}
             rows={3}
-            className="w-full resize-none rounded-2xl border border-transparent bg-input/50 px-3 py-2 text-sm outline-none transition-[color,box-shadow,background-color] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+            showCount
           />
-          <p className="mt-1 text-xs text-muted-foreground">
-            {[...bio].length}/190
-          </p>
         </div>
         {textError && <p className="text-sm text-destructive">{textError}</p>}
         <div className="flex justify-end">

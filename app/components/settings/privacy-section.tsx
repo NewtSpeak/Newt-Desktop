@@ -27,6 +27,7 @@ import {
   useSettingsStore,
   type DmFrom,
   type FriendRequestFrom,
+  type ShowActivityTo,
 } from "~/stores/settings"
 import { GroupLabel, SectionTitle, SettingRow } from "./section"
 
@@ -45,6 +46,8 @@ function syncPrivacy(
     body.show_mutual_guilds = patch.showMutualGuilds
   if (patch.publicProfileToNonFriends !== undefined)
     body.public_profile_to_non_friends = patch.publicProfileToNonFriends
+  if (patch.showActivityTo !== undefined)
+    body.show_activity_to = patch.showActivityTo
   void patchPrivacyApi(body as never).catch((error) => {
     toast.error(
       error instanceof ApiError ? error.message : "同步隐私设置失败",
@@ -98,6 +101,25 @@ const DM_FROM: { value: DmFrom; label: string; desc: string }[] = [
     desc: "关闭所有新私信（既有会话不受影响）",
   },
 ]
+
+const SHOW_ACTIVITY: { value: ShowActivityTo; label: string; desc: string }[] =
+  [
+    {
+      value: "everyone",
+      label: "所有能看到我在线状态的人",
+      desc: "共同服务器成员与好友均可看到你的活动",
+    },
+    {
+      value: "friends",
+      label: "仅好友",
+      desc: "默认；只有好友能看到你正在玩/听什么",
+    },
+    {
+      value: "nobody",
+      label: "无人",
+      desc: "不向任何人展示活动状态（在线状态点不受影响）",
+    },
+  ]
 
 function BlockedList() {
   const items = useRelationshipsStore((s) => s.items)
@@ -200,6 +222,31 @@ export function PrivacySection() {
               className="mt-1"
               checked={privacy.dmFrom === opt.value}
               onChange={() => syncPrivacy({ dmFrom: opt.value })}
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{opt.label}</p>
+              <p className="text-xs text-muted-foreground">{opt.desc}</p>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      <GroupLabel id="privacy-activity">谁可以看到你的活动状态</GroupLabel>
+      <p className="mb-2 text-xs text-muted-foreground">
+        控制「正在玩 / 正在听」等活动的可见范围；隐身时对外一律不展示活动。
+      </p>
+      <div className="mb-4 flex flex-col gap-2">
+        {SHOW_ACTIVITY.map((opt) => (
+          <label
+            key={opt.value}
+            className="flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2.5"
+          >
+            <input
+              type="radio"
+              name="showActivityTo"
+              className="mt-1"
+              checked={(privacy.showActivityTo ?? "friends") === opt.value}
+              onChange={() => syncPrivacy({ showActivityTo: opt.value })}
             />
             <div className="min-w-0">
               <p className="text-sm font-medium">{opt.label}</p>

@@ -5,7 +5,7 @@
 //     无权限时降级为「仅听」（recvonly transceiver）；
 //   - 下行 ontrack 按 user_id（约定 = 远端 MediaStream id）挂到隐藏 <audio> 池播放；
 //     首个下行音频轨到达时回调 onFirstRemoteAudio（迁移接收侧就绪信号，FR-04.4）；
-//   - 每用户音量 0–200%：≤100% 用 audio.volume，>100% 经 WebAudio GainNode 放大
+//   - 每用户音量 0–500%：≤100% 用 audio.volume，>100% 经 WebAudio GainNode 放大
 //     （元素静音、Gain 输出，FR-21）；
 //   - 播放侧主静音 setPlaybackMuted：迁移期旧链路下行整体静音防双声；
 //   - ICE restart（FR-15）：restartIce() 在现有 PC 上生成 iceRestart offer；
@@ -16,6 +16,7 @@
 // ice_servers 服务端当前恒为空数组，RTCPeerConnection 用默认配置。
 
 import { vlog, vwarn } from "./log"
+import { USER_VOLUME_MAX } from "~/lib/moderation"
 import { useSettingsStore } from "~/stores/settings"
 import {
   createNsAudioContext,
@@ -28,6 +29,9 @@ import {
   type NsHandle,
   type WasmNsModelId,
 } from "~/lib/noise-suppression"
+
+/** 每用户音量倍率上限（500% = 5） */
+const USER_VOLUME_GAIN_MAX = USER_VOLUME_MAX / 100
 
 function voiceDfnTuning(): DfnTuningParams {
   const voice = useSettingsStore.getState().voice
@@ -168,7 +172,7 @@ export class VoiceRtc {
   /** CUTOVER 后旧链路上行永久停止 */
   private uplinkStopped = false
 
-  // 每用户音量（0–2；1 = 100%）与下行处理链（放大 / 本地降噪）
+  // 每用户音量（0–5；1 = 100%，上限 500%）与下行处理链（放大 / 本地降噪）
   private volumes = new Map<string, number>()
   private gainPipes = new Map<string, PlaybackPipe>()
   private playbackContext: AudioContext | null = null
@@ -1039,9 +1043,9 @@ export class VoiceRtc {
     this.applyPlayback(userId)
   }
 
-  /** 每用户音量（0–2，1 = 100%；>1 经 GainNode 放大） */
+  /** 每用户音量（0–USER_VOLUME_GAIN_MAX，1 = 100%；>1 经 GainNode 放大） */
   setUserVolume(userId: string, volume: number) {
-    const clamped = Math.min(2, Math.max(0, volume))
+    const clamped = Math.min(USER_VOLUME_GAIN_MAX, Math.max(0, volume))
     this.volumes.set(userId, clamped)
     this.applyPlayback(userId)
   }
@@ -1049,7 +1053,10 @@ export class VoiceRtc {
   /** 批量预置音量（链路建立时重放持久化配置，FR-21） */
   setUserVolumes(volumes: Record<string, number>) {
     for (const [userId, volume] of Object.entries(volumes)) {
-      this.volumes.set(userId, Math.min(2, Math.max(0, volume)))
+      this.volumes.set(
+        userId,
+        Math.min(USER_VOLUME_GAIN_MAX, Math.max(0, volume)),
+      )
     }
   }
 
@@ -1208,7 +1215,7 @@ export class VoiceRtc {
     if (!el) return
     const muted =
       this.playbackMuted || this.deafened || this.locallyMuted.has(userId)
-    // 用户单独音量 × 全局输出音量（均 0–2）
+    // 用户单独音量（0–5）× 全局输出音量（0–2）
     const volume = (this.volumes.get(userId) ?? 1) * this.masterOutputVolume
     // 决议 R1：ns 总开关关闭时暂停下行降噪（直通），localNs 名单保留；
     // FR-R04 P1：每用户模型覆盖优先于全局模型
@@ -1233,12 +1240,13 @@ export class VoiceRtc {
     el.muted = true
     const pipe = this.ensureGainPipe(userId)
     if (!pipe) {
-      // WebAudio 不可用时退化为原音量直出（不降噪）
+      // WebAudio 不可用时退化为原音量直出（不降噪）；>100% 时无法放大
       el.muted = muted
       el.volume = 1
       return
     }
-    pipe.gain.gain.value = muted ? 0 : Math.min(2, volume)
+    // 单用户上限 5× + 主输出 2×，安全封顶 10（=1000%）
+    pipe.gain.gain.value = muted ? 0 : Math.min(10, Math.max(0, volume))
     this.syncPipeNs(userId, pipe, wantNsModel, nsStrength)
   }
 

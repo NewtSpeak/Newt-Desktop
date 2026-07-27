@@ -19,6 +19,8 @@ import {
 import { toast } from "sonner"
 
 import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
+import { ActivityLine } from "~/components/activity-line"
+import { CustomStatusLine } from "~/components/custom-status-line"
 import { presenceDotClass } from "~/components/nav-user"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
@@ -47,7 +49,7 @@ import { cn } from "~/lib/utils"
 import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useGuildsStore } from "~/stores/guilds"
 import { usePrivateChannelsStore } from "~/stores/private-channels"
-import { usePresenceStore } from "~/stores/presence"
+import { hasCustomStatus, usePresenceStore } from "~/stores/presence"
 import {
   blockedOf,
   friendsOf,
@@ -109,6 +111,8 @@ function FriendCard({
   const avatarFrame = useCosmeticsStore(
     (s) => s.equippedByUser[rel.user.id]?.avatar_frame,
   )
+  const customPresence = usePresenceStore((s) => s.customByUser[rel.user.id])
+  const activities = usePresenceStore((s) => s.activitiesByUser[rel.user.id])
   const name = displayName(rel)
   const av = resolveProfileAssetUrl(rel.user.avatar_url)
   const userId = rel.user.id
@@ -277,17 +281,27 @@ function FriendCard({
               <p className="mt-1.5 truncate text-[11px] font-medium text-muted-foreground/90">
                 {relationHint}
               </p>
-            ) : bio ? (
-              <p
-                className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground"
-                title={bio}
-              >
-                {bio}
-              </p>
             ) : (
-              <p className="mt-1.5 truncate text-[11px] text-muted-foreground/55">
-                暂无个性签名
-              </p>
+              <>
+                <CustomStatusLine
+                  custom={customPresence}
+                  className="mt-1.5 text-[11px]"
+                />
+                <ActivityLine activities={activities} className="mt-1 text-[11px]" />
+                {bio ? (
+                  <p
+                    className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground"
+                    title={bio}
+                  >
+                    {bio}
+                  </p>
+                ) : !hasCustomStatus(customPresence) &&
+                  !(activities && activities.length > 0) ? (
+                  <p className="mt-1.5 truncate text-[11px] text-muted-foreground/55">
+                    暂无个性签名
+                  </p>
+                ) : null}
+              </>
             )}
           </div>
         </div>

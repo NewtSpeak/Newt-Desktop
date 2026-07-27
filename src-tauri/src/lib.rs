@@ -5,6 +5,9 @@
 // 深链：tauri-plugin-deep-link 注册 owlspeak://；
 // 单实例：二次启动/深链唤起时聚焦已有窗口，并把 argv 中的 URL 发给前端。
 
+mod activity;
+mod discord_rpc;
+
 use tauri::{AppHandle, Emitter, Manager};
 
 const SECURE_STORAGE_SERVICE: &str = "com.owlspeak.desktop";
@@ -88,9 +91,20 @@ pub fn run() {
           }
         }
       }
+      // Discord RPC 兼容监听（无 Discord 占用管道时生效）
+      discord_rpc::start_discord_rpc_server();
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![secure_get, secure_set, secure_delete])
+    .invoke_handler(tauri::generate_handler![
+      secure_get,
+      secure_set,
+      secure_delete,
+      activity::list_running_apps,
+      activity::get_now_playing,
+      activity::get_foreground_app,
+      activity::extract_app_icon,
+      discord_rpc::get_rpc_activity,
+    ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

@@ -75,7 +75,7 @@ export type VoiceLinkOptions = {
    * unsubscribe kinds=["video"]，实现「不点观看不拉视频流」（协议 §2.1 kinds）。
    */
   watchedVideo: Record<string, true>
-  /** 每用户音量快照（百分比 0–200，FR-21） */
+  /** 每用户音量快照（百分比 0–500，FR-21） */
   userVolumes: Record<string, number>
   /** 日志关联用（迁移链路带 migration_id） */
   migrationId?: string | null
@@ -338,7 +338,7 @@ export class VoiceLink {
     }
   }
 
-  /** 每用户音量（百分比 0–200） */
+  /** 每用户音量（百分比 0–500） */
   setUserVolume(userId: string, percent: number) {
     this.rtc.setUserVolume(userId, percent / 100)
   }
@@ -504,7 +504,7 @@ export class VoiceLink {
     this.rtc.setMicEnabled(this.micWanted && this.uplinkAllowed)
   }
 
-  /** 百分比音量 → 0–2 倍率 */
+  /** 百分比音量 → 0–5 倍率（100% = 1） */
   private scaleVolumes(
     percents: Record<string, number>
   ): Record<string, number> {

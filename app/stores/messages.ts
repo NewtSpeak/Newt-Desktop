@@ -135,6 +135,8 @@ export type PendingMessage = {
     mark?: string
     asset_url?: string
   }[]
+  /** 限定可见身份组；空/省略 = 公开 */
+  visibleRoleIds?: string[]
   createdAt: string
   status: "sending" | "failed"
   errorMessage?: string
@@ -172,6 +174,8 @@ export type SendInput = {
   /** 贴图消息：恰 1 张，与 content/attachments 互斥（docs 17） */
   stickerItems?: { item_id: string }[]
   stickerPreview?: PendingMessage["stickerPreview"]
+  /** 限定可见身份组；空/省略 = 公开 */
+  visibleRoleIds?: string[]
   /** 不传则自动生成；调用方（composer）需要 nonce 用于失败后定向清理 */
   nonce?: string
 }
@@ -200,6 +204,12 @@ type MessagesState = {
   discardPending: (channelId: string, nonce: string) => void
 
   edit: (channelId: string, messageId: string, content: string) => Promise<void>
+  /** 仅改可见范围（作者）；[] = 公开 */
+  editVisibility: (
+    channelId: string,
+    messageId: string,
+    visibleRoleIds: string[],
+  ) => Promise<void>
   remove: (channelId: string, messageId: string) => Promise<void>
   toggleReaction: (
     channelId: string,
@@ -591,6 +601,10 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
             : undefined,
         sticker_items: isSticker ? pending.stickerItems : undefined,
         nonce: pending.nonce,
+        visible_role_ids:
+          pending.visibleRoleIds && pending.visibleRoleIds.length > 0
+            ? pending.visibleRoleIds
+            : undefined,
       })
       ackPending(channelId, pending.nonce, message)
     } catch (error) {
@@ -837,6 +851,7 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
         attachments: input.attachments ?? [],
         stickerItems: input.stickerItems,
         stickerPreview: input.stickerPreview,
+        visibleRoleIds: input.visibleRoleIds,
         createdAt: new Date().toISOString(),
         status: "sending",
       }
@@ -870,6 +885,13 @@ export const useMessagesStore = create<MessagesState>()((set, get) => {
 
     edit: async (channelId, messageId, content) => {
       const updated = await apiEditMessage(channelId, messageId, content)
+      get().applyMessageUpdate(updated)
+    },
+
+    editVisibility: async (channelId, messageId, visibleRoleIds) => {
+      const updated = await apiEditMessage(channelId, messageId, {
+        visible_role_ids: visibleRoleIds,
+      })
       get().applyMessageUpdate(updated)
     },
 

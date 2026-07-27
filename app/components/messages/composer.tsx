@@ -10,7 +10,9 @@ import {
   useState,
 } from "react"
 import {
+  CheckIcon,
   CrownIcon,
+  EyeIcon,
   FileIcon,
   HashIcon,
   LockIcon,
@@ -29,6 +31,7 @@ import {
   MESSAGE_TYPE_SYSTEM_ADMIN,
   type Channel,
   type GuildMember,
+  type Role,
 } from "~/lib/api/types"
 import {
   memberDisplayName,
@@ -39,6 +42,7 @@ import { cn } from "~/lib/utils"
 import { useChannelsStore } from "~/stores/channels"
 import { useMembersStore } from "~/stores/members"
 import { useMessagesStore, type ChatMessage } from "~/stores/messages"
+import { useRolesStore } from "~/stores/roles"
 import { formatBytes } from "./attachments"
 import {
   TipTapComposerEditor,
@@ -203,6 +207,16 @@ export function Composer({
   const members = useMembersStore((state) => state.byGuild[guildId]) ?? []
   const guildChannels =
     useChannelsStore((state) => state.byGuild[guildId]) ?? []
+  const roles = useRolesStore((state) => state.byGuild[guildId]) ?? []
+  const fetchRoles = useRolesStore((state) => state.fetchRoles)
+  const channelMeta = useChannelsStore((state) =>
+    guildId
+      ? state.byGuild[guildId]?.find((ch) => ch.id === channelId)
+      : undefined,
+  )
+  const allowRestricted = channelMeta?.allow_restricted_visibility !== false
+  const forceDefault = Boolean(channelMeta?.force_default_visibility)
+  const channelDefaultRoleIds = channelMeta?.default_visible_role_ids ?? []
 
   const [value, setValue] = useState("")
   const [uploads, setUploads] = useState<UploadItem[]>([])
@@ -213,9 +227,63 @@ export function Composer({
   const [mentionIndex, setMentionIndex] = useState(0)
   /** 发送失败后从错误码推断的对端拉黑（本地 relationships 看不到对方拉黑我） */
   const [peerBlockHint, setPeerBlockHint] = useState(false)
+  /** 限定可见身份组；空 = 公开（所有人） */
+  const [visibleRoleIds, setVisibleRoleIds] = useState<string[]>([])
+  const [visibilityOpen, setVisibilityOpen] = useState(false)
 
   const tipTapRef = useRef<TipTapComposerHandle | null>(null)
   const lastTypingRef = useRef(0)
+  const visibilityPanelRef = useRef<HTMLDivElement | null>(null)
+
+  // 服内文本频道：确保角色列表可用（可见范围选择器）
+  useEffect(() => {
+    if (!guildId) return
+    void fetchRoles(guildId).catch(() => undefined)
+  }, [guildId, fetchRoles])
+
+  // 频道切换时重置可见范围
+  useEffect(() => {
+    setVisibleRoleIds([])
+    setVisibilityOpen(false)
+  }, [channelId])
+
+  // 点击外部关闭可见范围面板
+  useEffect(() => {
+    if (!visibilityOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (visibilityPanelRef.current?.contains(target)) return
+      setVisibilityOpen(false)
+    }
+    document.addEventListener("mousedown", onPointerDown)
+    return () => document.removeEventListener("mousedown", onPointerDown)
+  }, [visibilityOpen])
+
+  const selectableRoles = useMemo(
+    () =>
+      roles
+        .filter((role) => !role.is_everyone)
+        .slice()
+        .sort((a, b) => b.position - a.position),
+    [roles],
+  )
+
+  const visibilityLabel = useMemo(() => {
+    if (visibleRoleIds.length === 0) return "所有人"
+    if (visibleRoleIds.length === 1) {
+      const role = roles.find((item) => item.id === visibleRoleIds[0])
+      return role?.name ?? "1 个身份组"
+    }
+    return `${visibleRoleIds.length} 个身份组`
+  }, [visibleRoleIds, roles])
+
+  const toggleVisibleRole = (roleId: string) => {
+    setVisibleRoleIds((current) =>
+      current.includes(roleId)
+        ? current.filter((id) => id !== roleId)
+        : [...current, roleId],
+    )
+  }
   const uploadsRef = useRef(uploads)
   uploadsRef.current = uploads
 
@@ -543,6 +611,8 @@ export function Composer({
             asset_url: item.asset_url,
           },
         ],
+        visibleRoleIds:
+          guildId && visibleRoleIds.length > 0 ? visibleRoleIds : undefined,
       })
       onCancelReply()
     } catch (error) {
@@ -621,6 +691,8 @@ export function Composer({
         replyToId: replyTo?.id,
         attachmentIds: attachments.map((attachment) => attachment.id),
         attachments,
+        visibleRoleIds:
+          guildId && visibleRoleIds.length > 0 ? visibleRoleIds : undefined,
       })
     } catch (error) {
       if (error instanceof ApiError) {
@@ -857,6 +929,128 @@ export function Composer({
                 onRemove={() => removeUpload(item.localId)}
               />
             ))}
+          </div>
+        )}
+
+        {/* 可见范围：服内频道可选限定身份组（频道策略可关闭/强制） */}
+        {guildId && !isBlocked && (allowRestricted || forceDefault) && (
+          <div className="relative flex items-center gap-2 px-3 py-1.5" ref={visibilityPanelRef}>
+            {forceDefault ? (
+              <span
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground"
+                title="频道已强制默认可见范围"
+              >
+                <LockIcon className="size-3.5 shrink-0" aria-hidden />
+                <span className="truncate">
+                  可见：
+                  {channelDefaultRoleIds.length === 0
+                    ? "所有人（频道强制）"
+                    : `频道默认 ${channelDefaultRoleIds.length} 个身份组`}
+                </span>
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setVisibilityOpen((open) => !open)}
+                  className={cn(
+                    "inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
+                    visibleRoleIds.length > 0
+                      ? "bg-amber-500/15 text-amber-800 hover:bg-amber-500/20 dark:text-amber-200"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
+                  title="选择谁能看到这条消息"
+                  aria-expanded={visibilityOpen}
+                  aria-haspopup="listbox"
+                >
+                  {visibleRoleIds.length > 0 ? (
+                    <LockIcon className="size-3.5 shrink-0" aria-hidden />
+                  ) : (
+                    <EyeIcon className="size-3.5 shrink-0" aria-hidden />
+                  )}
+                  <span className="truncate">可见：{visibilityLabel}</span>
+                </button>
+                {visibleRoleIds.length > 0 && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setVisibleRoleIds([])}
+                  >
+                    恢复公开
+                  </button>
+                )}
+                {visibilityOpen && (
+                  <div
+                    role="listbox"
+                    aria-label="选择可见身份组"
+                    className="absolute bottom-full left-3 z-30 mb-1 max-h-56 w-64 overflow-y-auto rounded-lg border-0 bg-popover p-1 shadow-none"
+                  >
+                    <p className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+                      仅自己与勾选身份组可见；版主（管理消息）仍可审核
+                      {channelDefaultRoleIds.length > 0
+                        ? "；不选则使用频道默认"
+                        : ""}
+                    </p>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={visibleRoleIds.length === 0}
+                      onClick={() => {
+                        setVisibleRoleIds([])
+                        setVisibilityOpen(false)
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                        visibleRoleIds.length === 0 && "bg-muted",
+                      )}
+                    >
+                      <EyeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="flex-1">所有人</span>
+                      {visibleRoleIds.length === 0 && (
+                        <CheckIcon className="size-3.5 text-primary" />
+                      )}
+                    </button>
+                    {selectableRoles.length === 0 ? (
+                      <p className="px-2 py-2 text-xs text-muted-foreground">
+                        暂无可选身份组
+                      </p>
+                    ) : (
+                      selectableRoles.map((role: Role) => {
+                        const selected = visibleRoleIds.includes(role.id)
+                        return (
+                          <button
+                            key={role.id}
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => toggleVisibleRole(role.id)}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                              selected && "bg-muted",
+                            )}
+                          >
+                            <span
+                              className="size-2.5 shrink-0 rounded-full"
+                              style={{
+                                backgroundColor:
+                                  role.color || "var(--muted-foreground)",
+                              }}
+                              aria-hidden
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {role.name}
+                            </span>
+                            {selected && (
+                              <CheckIcon className="size-3.5 shrink-0 text-primary" />
+                            )}
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 

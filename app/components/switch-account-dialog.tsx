@@ -452,8 +452,8 @@ export function SwitchAccountDialog({
                   <li
                     key={account.id}
                     className={cn(
-                      "flex items-center gap-2 rounded-lg border border-transparent px-2 py-2",
-                      isActive && "border-border bg-muted/60",
+                      "flex items-center gap-2 rounded-lg px-2 py-2",
+                      isActive && "bg-muted/60",
                     )}
                   >
                     <button

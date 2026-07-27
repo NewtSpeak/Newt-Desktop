@@ -566,7 +566,7 @@ class VoiceConnectionManager {
     vlog("本地降噪", userId, "→", enabled)
   }
 
-  /** 每用户本地音量（百分比 0–200）；持久化，重连/迁移后重放（FR-21） */
+  /** 每用户本地音量（百分比 0–500）；持久化，重连/迁移后重放（FR-21） */
   setUserVolume(userId: string, percent: number) {
     useVoiceStore.getState().setUserVolume(userId, percent)
     this.activeLink?.setUserVolume(userId, percent)

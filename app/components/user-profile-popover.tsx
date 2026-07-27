@@ -12,6 +12,8 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { ActivityCard } from "~/components/activity-line"
+import { CustomStatusLine } from "~/components/custom-status-line"
 import { presenceDotClass } from "~/components/nav-user"
 import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { ProfileCardChrome } from "~/components/cosmetics/profile-decorations"
@@ -105,6 +107,8 @@ export function UserProfilePopover({
   const avatarFrame = cosmeticsSlots.avatar_frame
   const profileBorder = cosmeticsSlots.profile_border
   const profileEffect = cosmeticsSlots.profile_effect
+  const customPresence = usePresenceStore((s) => s.customByUser[userId])
+  const activities = usePresenceStore((s) => s.activitiesByUser[userId])
   const relItems = useRelationshipsStore((s) => s.items)
   const isFriend = friendsOf(relItems).some((r) => r.user.id === userId)
   const isBlocked = blockedOf(relItems).some((r) => r.user.id === userId)
@@ -404,6 +408,11 @@ export function UserProfilePopover({
               : null}
             {loading ? " · 加载中…" : null}
           </p>
+          <CustomStatusLine
+            custom={customPresence}
+            className="mt-1 text-[12px] text-foreground/80"
+          />
+          <ActivityCard activities={activities} />
           {bio ? (
             <p className="mt-2 line-clamp-3 text-[12px] leading-relaxed text-foreground/90">
               {bio}

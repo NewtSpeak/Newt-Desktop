@@ -5,7 +5,7 @@
 //   - session：当前语音会话（频道、状态机阶段、caps、self_mute/self_deaf、错误）；
 //   - speaking：SFU speaking 事件驱动的说话人集合 + 本地检测的自我说话指示；
 //   - localMuted：每用户本地静音集合（= 真实退订），持久化 localStorage，重连后重放；
-//   - userVolumes：每用户本地音量（0–200%），持久化 localStorage，重连/迁移后重放（FR-21）。
+//   - userVolumes：每用户本地音量（0–500%），持久化 localStorage，重连/迁移后重放（FR-21）。
 //
 // 连接编排（进出房、信令、重连）在 app/lib/voice/connection.ts；本 store 只存状态。
 
@@ -14,6 +14,7 @@ import { create } from "zustand"
 import { listVoiceStates } from "~/lib/api/voice"
 import type { VoiceState } from "~/lib/api/types"
 import type { VoiceStateUpdatePayload } from "~/lib/gateway/events"
+import { USER_VOLUME_MAX } from "~/lib/moderation"
 import { useStageStore } from "~/stores/stage"
 
 const LOCAL_MUTES_KEY = "owl.voice.local_mutes"
@@ -86,7 +87,7 @@ function saveLocalMutes(map: Record<string, true>) {
   }
 }
 
-/** 每用户音量（百分比 0–200，100 = 原音量） */
+/** 每用户音量（百分比 0–500，100 = 原音量） */
 function loadUserVolumes(): Record<string, number> {
   if (typeof window === "undefined") return {}
   try {
@@ -97,7 +98,7 @@ function loadUserVolumes(): Record<string, number> {
     const result: Record<string, number> = {}
     for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
       if (typeof value === "number" && Number.isFinite(value)) {
-        result[id] = Math.min(200, Math.max(0, Math.round(value)))
+        result[id] = Math.min(USER_VOLUME_MAX, Math.max(0, Math.round(value)))
       }
     }
     return result
@@ -135,7 +136,7 @@ type VoiceStoreState = {
   selfSpeaking: boolean
   /** 每用户本地静音集合（= 已退订），持久化 */
   localMuted: Record<string, true>
-  /** 每用户本地音量（百分比 0–200，缺省 100），持久化 */
+  /** 每用户本地音量（百分比 0–500，缺省 100），持久化 */
   userVolumes: Record<string, number>
   /**
    * 当前会话所在频道是否被提示「正在音频审计」（CHANNEL_AUDIT_NOTICE）。
@@ -162,7 +163,7 @@ type VoiceStoreState = {
   setSpeakingUserIds: (userIds: string[]) => void
   setSelfSpeaking: (speaking: boolean) => void
   setLocalMuted: (userId: string, muted: boolean) => void
-  /** 设置每用户音量（百分比 0–200；100 时移除记录回落默认） */
+  /** 设置每用户音量（百分比 0–500；100 时移除记录回落默认） */
   setUserVolume: (userId: string, volume: number) => void
 
   reset: () => void
@@ -312,7 +313,7 @@ export const useVoiceStore = create<VoiceStoreState>()((set) => ({
 
   setUserVolume: (userId, volume) =>
     set((state) => {
-      const clamped = Math.min(200, Math.max(0, Math.round(volume)))
+      const clamped = Math.min(USER_VOLUME_MAX, Math.max(0, Math.round(volume)))
       const next = { ...state.userVolumes }
       if (clamped === 100) delete next[userId]
       else next[userId] = clamped

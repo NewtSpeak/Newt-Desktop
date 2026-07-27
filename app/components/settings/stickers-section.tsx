@@ -1,6 +1,6 @@
 // 用户设置 · 我的贴图库（docs 17 §15）：自建包管理、Install 管理、软删恢复倒计时。
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useGSAP } from "@gsap/react"
 import gsap from "gsap"
 import {
@@ -51,6 +51,7 @@ import {
   stickerAssetUrl,
 } from "~/lib/stickers/format"
 import { cn } from "~/lib/utils"
+import { useAuthStore } from "~/stores/auth"
 import { useGuildsStore } from "~/stores/guilds"
 import { useStickersStore } from "~/stores/stickers"
 import { useUIStore } from "~/stores/ui"
@@ -73,7 +74,17 @@ export function StickersSection() {
   const refreshLibrary = useStickersStore((s) => s.refreshLibrary)
   const invalidate = useStickersStore((s) => s.invalidateAvailable)
   const guilds = useGuildsStore((s) => s.guilds)
+  const userId = useAuthStore((s) => s.user?.id)
   const selectedGuildId = useUIStore((s) => s.selectedGuildId)
+
+  /** 仅「我是服主」的服务器可创建服独属包 */
+  const ownedGuilds = useMemo(
+    () =>
+      guilds.filter(
+        (g) => Boolean(userId) && g.owner_user_id === userId,
+      ),
+    [guilds, userId],
+  )
 
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState("")
@@ -86,18 +97,33 @@ export function StickersSection() {
   const [expandedPackId, setExpandedPackId] = useState<string | null>(null)
   const [packItems, setPackItems] = useState<StickerItem[]>([])
   const [itemsLoading, setItemsLoading] = useState(false)
+  const [editingItemId, setEditingItemId] = useState<string | null>(null)
+  const [editName, setEditName] = useState("")
+  const [renameSaving, setRenameSaving] = useState(false)
+  const [uploadingPackId, setUploadingPackId] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState("")
+  const [confirmDeleteItemId, setConfirmDeleteItemId] = useState<string | null>(
+    null,
+  )
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploadPackRef = useRef<StickerPack | null>(null)
+  const skipRenameBlurRef = useRef(false)
 
-  // 打开设置时默认选中当前服（便于建服独属包）
+  // 默认选中：当前服（若你是服主）或你拥有的第一服
   useEffect(() => {
     if (
       selectedGuildId &&
       selectedGuildId !== "@me" &&
-      guilds.some((g) => g.id === selectedGuildId)
+      ownedGuilds.some((g) => g.id === selectedGuildId)
     ) {
       setGuildId(selectedGuildId)
+      return
     }
-  }, [selectedGuildId, guilds])
+    if (guildId && ownedGuilds.some((g) => g.id === guildId)) return
+    setGuildId(ownedGuilds[0]?.id ?? "")
+  }, [selectedGuildId, ownedGuilds, guildId])
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -136,13 +162,15 @@ export function StickersSection() {
       toast.error("请输入包名称")
       return
     }
-    if (scope === "guild" && !guildId) {
-      toast.error("服独属包必须选择服务器")
-      return
+    if (scope === "guild") {
+      if (!guildId || !ownedGuilds.some((g) => g.id === guildId)) {
+        toast.error("请选择你拥有的服务器")
+        return
+      }
     }
     if (scope === "guild" && !allowBrowse) {
       const ok = window.confirm(
-        "关闭完整浏览后，他人无法 Install 或 Copy，基本仅你自己可在本服使用。确定创建？",
+        "关掉「允许别人收藏」后，别人基本用不了这个包，确定继续？",
       )
       if (!ok) return
     }
@@ -157,7 +185,7 @@ export function StickersSection() {
       })
       setName("")
       toast.success(
-        scope === "guild" ? "已创建服独属贴图包" : "已创建账号级贴图包",
+        scope === "guild" ? "好了，这个包归你的服务器用" : "好了，这个包归你自己用",
       )
       invalidate()
       await reload()
@@ -214,69 +242,134 @@ export function StickersSection() {
     void loadPackItems(pack.id)
   }
 
+  // 同步栈内打开文件选择器；禁止先 prompt 再 click（会丢 user activation）
   const onUpload = (pack: StickerPack) => {
-    const defaultName = ""
-    const name = window.prompt("表情名称（显示在选择器下方）", defaultName)
-    if (name === null) return // 取消
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = STICKER_UPLOAD_ACCEPT
-    input.onchange = () => {
-      const file = input.files?.[0]
-      if (!file) return
-      void (async () => {
-        try {
-          const trimmed = name.trim()
-          await uploadStickerItem(pack.id, file, {
-            name:
-              trimmed ||
-              file.name.replace(/\.[^.]+$/, "") ||
-              undefined,
-            filename: file.name,
-          })
-          toast.success("已上传")
-          invalidate()
-          await reload()
-          if (expandedPackId === pack.id) await loadPackItems(pack.id)
-        } catch (err) {
-          toast.error(err instanceof ApiError ? err.message : "上传失败")
-        }
-      })()
+    if (uploadingPackId) {
+      toast.message("正在上传，请稍候…")
+      return
     }
+    uploadPackRef.current = pack
+    const input = fileInputRef.current
+    if (!input) return
+    input.value = ""
     input.click()
   }
 
-  const onRenameItem = async (pack: StickerPack, item: StickerItem) => {
-    const next = window.prompt(
-      "修改表情名称",
-      itemDisplayName(item),
-    )
-    if (next === null) return
-    const trimmed = next.trim()
+  const onFileChosen = (fileList: FileList | null) => {
+    const pack = uploadPackRef.current
+    uploadPackRef.current = null
+    if (!pack || !fileList?.length) return
+    const files = Array.from(fileList)
+    void (async () => {
+      setUploadingPackId(pack.id)
+      setUploadProgress(`0/${files.length}`)
+      let ok = 0
+      let fail = 0
+      const errors: string[] = []
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i]!
+          setUploadProgress(`${i + 1}/${files.length}`)
+          try {
+            const defaultName = file.name.replace(/\.[^.]+$/, "").trim()
+            await uploadStickerItem(pack.id, file, {
+              name: defaultName || undefined,
+              filename: file.name,
+            })
+            ok++
+          } catch (err) {
+            fail++
+            const msg =
+              err instanceof ApiError ? err.message : "上传失败"
+            errors.push(`${file.name}: ${msg}`)
+          }
+        }
+        invalidate()
+        await reload()
+        if (expandedPackId === pack.id) await loadPackItems(pack.id)
+        if (fail === 0) {
+          toast.success(
+            ok === 1
+              ? "已上传 1 张（点击名称可改展示名）"
+              : `已批量上传 ${ok} 张`,
+          )
+        } else if (ok === 0) {
+          toast.error(errors[0] ?? `全部失败（${fail} 张）`)
+        } else {
+          toast.warning(
+            `成功 ${ok} 张，失败 ${fail} 张${errors[0] ? `：${errors[0]}` : ""}`,
+          )
+        }
+      } finally {
+        setUploadingPackId(null)
+        setUploadProgress("")
+      }
+    })()
+  }
+
+  const startRenameItem = (item: StickerItem) => {
+    skipRenameBlurRef.current = false
+    setEditingItemId(item.id)
+    setEditName(itemDisplayName(item))
+  }
+
+  const cancelRenameItem = () => {
+    if (renameSaving) return
+    skipRenameBlurRef.current = true
+    setEditingItemId(null)
+    setEditName("")
+  }
+
+  const commitRenameItem = async (pack: StickerPack, item: StickerItem) => {
+    if (renameSaving) return
+    if (skipRenameBlurRef.current) {
+      skipRenameBlurRef.current = false
+      return
+    }
+    const trimmed = editName.trim()
     if (!trimmed) {
       toast.error("名称不能为空")
       return
     }
+    if (trimmed === itemDisplayName(item)) {
+      setEditingItemId(null)
+      setEditName("")
+      return
+    }
+    setRenameSaving(true)
     try {
       await patchStickerItem(pack.id, item.id, { name: trimmed })
       toast.success("已重命名")
       invalidate()
+      setEditingItemId(null)
+      setEditName("")
       if (expandedPackId === pack.id) await loadPackItems(pack.id)
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "重命名失败")
+    } finally {
+      setRenameSaving(false)
     }
   }
 
   const onDeleteItem = async (pack: StickerPack, item: StickerItem) => {
-    if (!window.confirm(`删除表情「${itemDisplayName(item)}」？`)) return
+    if (confirmDeleteItemId !== item.id) {
+      setConfirmDeleteItemId(item.id)
+      return
+    }
+    if (deletingItemId) return
+    setDeletingItemId(item.id)
     try {
       await deleteStickerItem(pack.id, item.id)
       toast.success("已删除")
+      setConfirmDeleteItemId(null)
+      setPackItems((prev) => prev.filter((i) => i.id !== item.id))
       invalidate()
       await reload()
       if (expandedPackId === pack.id) await loadPackItems(pack.id)
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "删除失败")
+    } finally {
+      setDeletingItemId(null)
     }
   }
 
@@ -326,6 +419,16 @@ export function StickersSection() {
 
   return (
     <div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={STICKER_UPLOAD_ACCEPT}
+        multiple
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        onChange={(e) => onFileChosen(e.target.files)}
+      />
       <SectionTitle>我的贴图库</SectionTitle>
       <p className="mb-4 text-sm text-muted-foreground text-pretty">
         管理自建小表情 / 贴图包，以及 Install 的引用包。发送时仅可用库内集合。
@@ -364,33 +467,47 @@ export function StickersSection() {
           </Select>
         </SettingRow>
         <SettingRow
-          label="作用域"
-          description="账号级可跨服；服独属仅本服可用，且禁止他人 Copy"
+          label="给谁用"
+          description="为自己创建可跨服；为服务器创建仅本服，且须你是服主"
         >
           <Select
             value={scope}
             onValueChange={(v) => setScope(v as StickerPackScope)}
           >
-            <SelectTrigger className="w-40 border-0 bg-background/80 shadow-none">
+            <SelectTrigger className="w-48 border-0 bg-background/80 shadow-none">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="account">账号级（跨服）</SelectItem>
-              <SelectItem value="guild">服独属（仅本服）</SelectItem>
+              <SelectItem value="account">为自己创建（跨服）</SelectItem>
+              <SelectItem value="guild">为服务器创建（仅本服）</SelectItem>
             </SelectContent>
           </Select>
         </SettingRow>
         {scope === "guild" && (
           <SettingRow
-            label="所属服务器"
-            description="须为该服成员；仅在该服上下文可发送"
+            label="挂在哪个服务器"
+            description={
+              ownedGuilds.length === 0
+                ? "你还没有自己当服主的服务器"
+                : "只列出你拥有的服务器"
+            }
           >
-            <Select value={guildId} onValueChange={(v) => setGuildId(v ?? "")}>
+            <Select
+              value={guildId}
+              onValueChange={(v) => setGuildId(v ?? "")}
+              disabled={ownedGuilds.length === 0}
+            >
               <SelectTrigger className="w-52 border-0 bg-background/80 shadow-none">
-                <SelectValue placeholder="选择服务器" />
+                <SelectValue
+                  placeholder={
+                    ownedGuilds.length === 0
+                      ? "暂无可选服务器"
+                      : "选你拥有的服务器"
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {guilds.map((g) => (
+                {ownedGuilds.map((g) => (
                   <SelectItem key={g.id} value={g.id}>
                     {g.name}
                   </SelectItem>
@@ -400,8 +517,8 @@ export function StickersSection() {
           </SettingRow>
         )}
         <SettingRow
-          label="允许完整浏览"
-          description="关闭后禁止 Install；账号级仍可单条 Copy，服独属关闭则仅作者可用"
+          label="允许别人收藏"
+          description="关掉后别人基本装不进贴图库"
         >
           <button
             type="button"
@@ -551,10 +668,18 @@ export function StickersSection() {
                         size="sm"
                         variant="secondary"
                         onClick={() => onUpload(pack)}
+                        disabled={uploadingPackId === pack.id}
                         className="border-0 active:scale-[0.96] shadow-none"
+                        title="可一次选择多张图片/视频批量上传"
                       >
-                        <UploadIcon className="size-3.5" />
-                        上传
+                        {uploadingPackId === pack.id ? (
+                          <Loader2Icon className="size-3.5 animate-spin" />
+                        ) : (
+                          <UploadIcon className="size-3.5" />
+                        )}
+                        {uploadingPackId === pack.id
+                          ? `上传中 ${uploadProgress}`
+                          : "上传"}
                       </Button>
                       <Button
                         size="sm"
@@ -621,20 +746,61 @@ export function StickersSection() {
                               draggable={false}
                             />
                           )}
+                          {editingItemId === item.id ? (
+                            <Input
+                              value={editName}
+                              disabled={renameSaving}
+                              autoFocus
+                              maxLength={100}
+                              className="h-7 w-full rounded-lg px-2 text-center text-xs"
+                              aria-label="表情名称"
+                              onChange={(e) => setEditName(e.target.value)}
+                              onBlur={() => void commitRenameItem(pack, item)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault()
+                                  void commitRenameItem(pack, item)
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault()
+                                  cancelRenameItem()
+                                }
+                              }}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startRenameItem(item)}
+                              className="max-w-full truncate text-center text-xs font-medium text-foreground underline-offset-2 hover:underline active:scale-[0.96]"
+                              title="点击重命名"
+                            >
+                              {itemDisplayName(item)}
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => void onRenameItem(pack, item)}
-                            className="max-w-full truncate text-center text-xs font-medium text-foreground underline-offset-2 hover:underline active:scale-[0.96]"
-                            title="点击重命名"
+                            disabled={deletingItemId === item.id}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void onDeleteItem(pack, item)
+                            }}
+                            className={cn(
+                              "text-[10px] transition-colors",
+                              confirmDeleteItemId === item.id
+                                ? "font-semibold text-destructive"
+                                : "text-destructive/80 hover:text-destructive",
+                              deletingItemId === item.id && "opacity-60",
+                            )}
+                            title={
+                              confirmDeleteItemId === item.id
+                                ? "再点一次确认删除"
+                                : "删除此表情"
+                            }
                           >
-                            {itemDisplayName(item)}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void onDeleteItem(pack, item)}
-                            className="text-[10px] text-destructive/80 hover:text-destructive"
-                          >
-                            删除
+                            {deletingItemId === item.id
+                              ? "删除中…"
+                              : confirmDeleteItemId === item.id
+                                ? "再点确认删除"
+                                : "删除"}
                           </button>
                         </li>
                       ))}

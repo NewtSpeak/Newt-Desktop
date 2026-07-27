@@ -1,6 +1,6 @@
 // 单条消息渲染：作者分组首条/后续两种形态、悬停操作条（反应/回复/编辑/撤回）、
-// 右键菜单（复制/回复/编辑/撤回/反应/复制 ID）、反应胶囊、内联编辑态、
-// 回复引用摘要、(已编辑) 标记、本人被提及高亮。
+// 右键菜单（复制/回复/编辑/撤回/反应/复制 ID）、反应 chip（圆角矩形；贴图贴齐上/下/左）、
+// 内联编辑态、回复引用摘要、(已编辑) 标记、本人被提及高亮。
 
 import {
   memo,
@@ -19,6 +19,7 @@ import {
   HashIcon,
   HistoryIcon,
   LinkIcon,
+  LockIcon,
   PencilIcon,
   ReplyIcon,
   SmilePlusIcon,
@@ -50,6 +51,7 @@ import {
   MESSAGE_TYPE_SYSTEM_ADMIN,
   type Channel,
   type GuildMember,
+  type Role,
 } from "~/lib/api/types"
 import { ApiError } from "~/lib/api/http"
 import { copyText } from "~/lib/clipboard"
@@ -144,6 +146,32 @@ export function groupTime(iso: string): string {
 
 function fullTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN")
+}
+
+/** 限定可见范围角标：仅作者 + 指定身份组（及管理消息权限）可见 */
+function RestrictedVisibilityBadge({
+  roleIds,
+  roles,
+}: {
+  roleIds: string[]
+  roles: Role[] | undefined
+}) {
+  const names = roleIds.map((id) => {
+    const role = roles?.find((item) => item.id === id)
+    return role?.name ?? "未知身份组"
+  })
+  const title = `仅自己与身份组可见：${names.join("、")}`
+  const label =
+    names.length === 1 ? names[0] : names.length > 1 ? `${names.length} 个身份组` : "限定"
+  return (
+    <span
+      className="ml-1 inline-flex items-center gap-0.5 align-baseline text-[10px] text-amber-700 select-none dark:text-amber-300"
+      title={title}
+    >
+      <LockIcon className="size-3" aria-hidden />
+      {label}
+    </span>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +290,7 @@ function ReplyCornerIcon({ className }: { className?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// 反应胶囊
+// 反应 chip（圆角矩形；贴图贴齐上/下/左，仅右侧为计数留边）
 // ---------------------------------------------------------------------------
 
 function ReactionGlyph({ emoji }: { emoji: string }) {
@@ -270,11 +298,20 @@ function ReactionGlyph({ emoji }: { emoji: string }) {
     const itemId = parseCustomReactionItemId(emoji)
     if (itemId) {
       return (
-        <CustomEmoteImg itemId={itemId} reaction className="rounded-sm" />
+        <CustomEmoteImg
+          itemId={itemId}
+          reaction
+          // 填满左侧方格；圆角与 chip 同档（左侧贴边时与 chip 同心）
+          className="size-full rounded-md object-cover"
+        />
       )
     }
   }
-  return <span className="text-sm leading-none">{emoji}</span>
+  return (
+    <span className="flex size-full items-center justify-center text-[15px] leading-none">
+      {emoji}
+    </span>
+  )
 }
 
 function ReactionPills({
@@ -301,7 +338,7 @@ function ReactionPills({
   }
 
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1">
+    <div className="mt-1 flex flex-wrap items-center gap-1.5">
       {message.reactions.map((entry) => {
         const mine = selfId !== undefined && entry.userIds.includes(selfId)
         const label = isCustomReactionKey(entry.emoji)
@@ -318,7 +355,10 @@ function ReactionPills({
               )
             }
             className={cn(
-              "flex min-h-7 items-center gap-1 rounded-full px-2 py-0.5",
+              // 圆角矩形；overflow-hidden 让贴图贴合左圆角
+              "relative flex h-7 items-center overflow-hidden rounded-md",
+              // 上/下/左无内边距；仅右侧给计数文字留边
+              "pr-2",
               "transition-[background-color,transform] duration-150",
               "active:scale-[0.96] cursor-pointer",
               mine
@@ -326,8 +366,11 @@ function ReactionPills({
                 : "bg-muted hover:bg-muted/80",
             )}
           >
-            <ReactionGlyph emoji={entry.emoji} />
-            <span className="text-xs text-muted-foreground tabular-nums">
+            {/* 贴图区：高满 chip、正方形、贴齐上/下/左；圆角裁切 */}
+            <span className="h-full w-7 shrink-0 overflow-hidden rounded-md">
+              <ReactionGlyph emoji={entry.emoji} />
+            </span>
+            <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">
               {entry.userIds.length}
             </span>
           </button>
@@ -348,7 +391,7 @@ function ReactionPills({
         <button
           type="button"
           aria-label="添加反应"
-          className="min-h-7 rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground active:scale-[0.96] cursor-pointer"
+          className="flex h-7 items-center rounded-md bg-muted px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground active:scale-[0.96] cursor-pointer"
         >
           +
         </button>
@@ -1286,10 +1329,12 @@ export const MessageRow = memo(function MessageRow({
   // 连发合并时不因 reply_to 强制展开头像栏——回复引用条已单独展示
   const showHeader = !grouped && !groupSystem
   const remove = useMessagesStore((state) => state.remove)
+  const editVisibility = useMessagesStore((state) => state.editVisibility)
   const toggleReaction = useMessagesStore((state) => state.toggleReaction)
   const [ctxDeleteOpen, setCtxDeleteOpen] = useState(false)
   const [ctxDeleteError, setCtxDeleteError] = useState<string | null>(null)
   const [editHistoryOpen, setEditHistoryOpen] = useState(false)
+  const isRestricted = (message.visible_role_ids?.length ?? 0) > 0
   const authorMember = useMembersStore((state) =>
     guildId
       ? state.byGuild[guildId]?.find((m) => m.user_id === message.author_id)
@@ -1436,13 +1481,21 @@ export const MessageRow = memo(function MessageRow({
               onDone={onStopEdit}
             />
           ) : (
-            <MessageStreamBody
-              message={message}
-              resolveName={resolveName}
-              resolveAvatarUrl={resolveAvatarUrl}
-              selfId={selfId}
-              guildId={guildId ?? message.guild_id}
-            />
+            <>
+              <MessageStreamBody
+                message={message}
+                resolveName={resolveName}
+                resolveAvatarUrl={resolveAvatarUrl}
+                selfId={selfId}
+                guildId={guildId ?? message.guild_id}
+              />
+              {(message.visible_role_ids?.length ?? 0) > 0 && (
+                <RestrictedVisibilityBadge
+                  roleIds={message.visible_role_ids!}
+                  roles={roles}
+                />
+              )}
+            </>
           )}
           <ReactionPills
             message={message}
@@ -1519,6 +1572,18 @@ export const MessageRow = memo(function MessageRow({
             >
               <SmilePlusIcon />
               添加 👍 反应
+            </ContextMenuItem>
+          )}
+          {isOwn && isRestricted && (
+            <ContextMenuItem
+              onClick={() =>
+                void editVisibility(channelId, message.id, []).catch(
+                  () => undefined,
+                )
+              }
+            >
+              <LockIcon />
+              改为所有人可见
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
@@ -1611,6 +1676,7 @@ export function PendingRow({
   content,
   attachments,
   stickerPreview,
+  visibleRoleIds,
   status,
   errorMessage,
   selfName,
@@ -1631,6 +1697,7 @@ export function PendingRow({
     mark?: string
     asset_url?: string
   }[]
+  visibleRoleIds?: string[]
   status: "sending" | "failed"
   errorMessage?: string
   selfName: string
@@ -1642,6 +1709,9 @@ export function PendingRow({
   const retryPending = useMessagesStore((state) => state.retryPending)
   const discardPending = useMessagesStore((state) => state.discardPending)
   const selfUser = useAuthStore((state) => state.user)
+  const roles = useRolesStore((state) =>
+    guildId ? state.byGuild[guildId] : undefined,
+  )
   const failed = status === "failed"
   const attachmentList = attachments ?? []
   const resolvedAvatar =
@@ -1712,6 +1782,12 @@ export function PendingRow({
                     .join("、")}
                   ]
                 </p>
+              )}
+              {(visibleRoleIds?.length ?? 0) > 0 && (
+                <RestrictedVisibilityBadge
+                  roleIds={visibleRoleIds!}
+                  roles={roles}
+                />
               )}
             </div>
             {/* 发送失败：红色感叹号 */}

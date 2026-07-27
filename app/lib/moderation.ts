@@ -155,5 +155,10 @@ export async function adminDisconnectVoice(
   }
 }
 
-/** 音量预设（%） */
-export const VOLUME_PRESETS = [0, 25, 50, 75, 100, 125, 150, 200] as const
+/** 每用户本地音量上限（百分比，100 = 原音量；>100 经 GainNode 放大） */
+export const USER_VOLUME_MAX = 500
+
+/** 音量快捷预设（%） */
+export const VOLUME_PRESETS = [
+  0, 25, 50, 75, 100, 125, 150, 200, 300, 400, 500,
+] as const

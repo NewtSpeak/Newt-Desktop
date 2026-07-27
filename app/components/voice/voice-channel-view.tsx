@@ -63,6 +63,7 @@ import {
   stopScreenShareOfUser,
 } from "~/lib/api/stage"
 import type { VoiceState } from "~/lib/api/types"
+import { USER_VOLUME_MAX } from "~/lib/moderation"
 import {
   nameInitials,
   resolveProfileAssetUrl,
@@ -476,7 +477,7 @@ function FreeVoiceCard({
               </span>
               <Slider
                 min={0}
-                max={200}
+                max={USER_VOLUME_MAX}
                 value={[volume]}
                 onValueChange={(value) => {
                   const next = Array.isArray(value) ? value[0] : value
@@ -903,7 +904,7 @@ function ParticipantTile({
               </span>
               <Slider
                 min={0}
-                max={200}
+                max={USER_VOLUME_MAX}
                 value={[volume]}
                 onValueChange={(value) => {
                   const next = Array.isArray(value) ? value[0] : value

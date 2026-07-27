@@ -21,6 +21,11 @@ export type SendMessageInput = {
    * 小表情请写入 content 的 `<e:item_id:mark>` wire，勿放此字段。
    */
   sticker_items?: { item_id: string }[]
+  /**
+   * 限定可见身份组（服内文本频道）；空/省略 = 公开。
+   * 非空时仅自己 + 指定角色成员 + 管理消息权限可见。
+   */
+  visible_role_ids?: string[]
 }
 
 /** 发送贴图消息（一条恰好一张） */
@@ -62,12 +67,28 @@ export const listMessages = (channelId: string, params: ListMessagesParams = {})
 export const getMessage = (channelId: string, messageId: string) =>
   api<Message>(`/channels/${channelId}/messages/${messageId}`)
 
+/** 编辑消息（仅作者）：正文与/或可见范围 */
+export type EditMessageInput = {
+  content?: string
+  /** 省略不改；[] = 公开；非空 = 限定身份组 */
+  visible_role_ids?: string[]
+}
+
 /** 编辑消息正文（仅作者可编辑） */
-export const editMessage = (channelId: string, messageId: string, content: string) =>
-  api<Message>(`/channels/${channelId}/messages/${messageId}`, {
+export const editMessage = (
+  channelId: string,
+  messageId: string,
+  contentOrInput: string | EditMessageInput,
+) => {
+  const body: EditMessageInput =
+    typeof contentOrInput === "string"
+      ? { content: contentOrInput }
+      : contentOrInput
+  return api<Message>(`/channels/${channelId}/messages/${messageId}`, {
     method: "PATCH",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
   })
+}
 
 /** 删除消息（作者或 MANAGE_MESSAGES；软删） */
 export const deleteMessage = (channelId: string, messageId: string) =>

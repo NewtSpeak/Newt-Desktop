@@ -186,6 +186,12 @@ export type UpdateChannelInput = {
   user_limit?: number
   rate_limit_per_user?: number
   rate_limit_exempt_role_ids?: string[]
+  /** 是否允许限定可见消息 */
+  allow_restricted_visibility?: boolean
+  /** 默认可见身份组；传 [] 清空 */
+  default_visible_role_ids?: string[]
+  /** 强制使用默认可见范围 */
+  force_default_visibility?: boolean
   /** null = 移出分类 */
   parent_id?: string | null
   /** 设置/更换访问密码 */

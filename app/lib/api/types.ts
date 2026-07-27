@@ -122,6 +122,12 @@ export type Channel = {
   rate_limit_per_user?: number
   /** 慢速模式豁免角色；为空表示对所有成员生效 */
   rate_limit_exempt_role_ids?: string[]
+  /** 是否允许发送限定可见消息（默认 true） */
+  allow_restricted_visibility?: boolean
+  /** 发送时未指定可见范围则套用的默认身份组 */
+  default_visible_role_ids?: string[]
+  /** 强制使用默认可见范围，忽略客户端选择 */
+  force_default_visibility?: boolean
   /** 服务端当前模型未含 position 字段，预留：缺失时按 0 处理 */
   position?: number
   /** 所属分类（CATEGORY 的 id）；仅 TEXT/VOICE */
@@ -386,6 +392,10 @@ export type Message = {
    * 此类消息不计未读、不可回复/反应、刷新后仍在（历史按 viewer 过滤）。
    */
   visible_to?: string[]
+   * 限定可见身份组；空/省略 = 公开（频道 VIEW 即可）。
+   * 非空时仅作者、持有任一角色的成员、MANAGE_MESSAGES 可见。
+   */
+  visible_role_ids?: string[]
   edit_count: number
   edited_at?: string
   nonce?: string

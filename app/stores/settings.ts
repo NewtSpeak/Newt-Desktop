@@ -200,6 +200,40 @@ export type ManualPresenceStatus = "online" | "idle" | "dnd" | "invisible"
 export type PresenceSettings = {
   /** 手动选择的状态，连接建立后上报恢复（docs 01 FR-18/§9.2） */
   manualStatus: ManualPresenceStatus
+  /** 自定义状态文本（docs 01 FR-23；连接后随 PRESENCE 重放） */
+  customText: string
+  /** 自定义状态 emoji（Unicode） */
+  customEmoji: string
+  /** 自定义状态过期时间 ISO；null = 不过期 */
+  customExpiresAt: string | null
+  /** 手动活动开关（Server-18） */
+  activityEnabled: boolean
+  /** 活动类型：playing / listening / watching / … */
+  activityType: string
+  /** 活动名称（必填才展示） */
+  activityName: string
+  /** 活动详情（可选） */
+  activityDetails: string
+  /** 活动开始时间 epoch ms；null = 未设置 */
+  activityStartedAt: number | null
+  /** 活动封面 URL（https，游戏/专辑图） */
+  activityCoverUrl: string
+  /** 封面悬停文案（可选，默认活动名） */
+  activityCoverText: string
+  /**
+   * 手动活动覆盖自动检测（Server-18 M2）：
+   * true = 展示/上报手填活动，忽略进程/媒体检测。
+   */
+  activityManualOverride: boolean
+  /**
+   * 自动捕捉焦点游戏（仅 Desktop）：跟随前台窗口实时更新，无需手选。
+   * 开启后内部约 1.5s 轮询，不受 detectIntervalSec 限制。
+   */
+  detectGames: boolean
+  /** 自动检测正在播放的音乐（macOS / Windows SMTC / Linux playerctl） */
+  detectMedia: boolean
+  /** 其它检测轮询间隔秒数 5–30（仅音乐时使用；游戏焦点固定 ~1.5s） */
+  detectIntervalSec: number
 }
 
 /**
@@ -226,6 +260,8 @@ export type FriendRequestFrom =
   | "nobody"
 export type DmFrom = "everyone" | "friends" | "mutual_guilds" | "nobody"
 
+export type ShowActivityTo = "everyone" | "friends" | "nobody"
+
 export type PrivacySettings = {
   friendRequestFrom: FriendRequestFrom
   dmFrom: DmFrom
@@ -233,6 +269,8 @@ export type PrivacySettings = {
   messageRequestFilter: boolean
   showMutualGuilds: boolean
   publicProfileToNonFriends: boolean
+  /** 活动（正在玩/听）对谁可见（Server-18；默认 friends） */
+  showActivityTo: ShowActivityTo
 }
 
 export type SettingsSection =
@@ -308,6 +346,20 @@ const DEFAULT_NOTIFICATIONS: NotificationSettings = {
 
 const DEFAULT_PRESENCE: PresenceSettings = {
   manualStatus: "online",
+  customText: "",
+  customEmoji: "",
+  customExpiresAt: null,
+  activityEnabled: false,
+  activityType: "playing",
+  activityName: "",
+  activityDetails: "",
+  activityStartedAt: null,
+  activityCoverUrl: "",
+  activityCoverText: "",
+  activityManualOverride: false,
+  detectGames: false,
+  detectMedia: false,
+  detectIntervalSec: 10,
 }
 
 /** 安全默认：仅同服可加好友、仅好友可私信、请求箱开（Server-16 BM.1） */
@@ -317,6 +369,7 @@ const DEFAULT_PRIVACY: PrivacySettings = {
   messageRequestFilter: true,
   showMutualGuilds: true,
   publicProfileToNonFriends: true,
+  showActivityTo: "friends",
 }
 
 export const FONT_SIZE_STEPS = [12, 14, 15, 16, 18, 20, 24] as const

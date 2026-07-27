@@ -400,11 +400,51 @@ export type ReadStateUpdatePayload = {
 
 export type PresenceStatus = "online" | "idle" | "dnd" | "invisible" | "offline"
 
+/** 结构化活动类型（Server-18） */
+export type ActivityType =
+  | "playing"
+  | "listening"
+  | "watching"
+  | "streaming"
+  | "competing"
+  | "custom"
+
+export type ActivitySource =
+  | "detected"
+  | "media"
+  | "spotify"
+  | "rpc"
+  | "manual"
+
+/** PRESENCE / READY 中的活动条目 */
+export type PresenceActivity = {
+  type: ActivityType
+  name: string
+  details?: string
+  state?: string
+  application_id?: string
+  url?: string
+  assets?: {
+    large_image?: string
+    large_text?: string
+    small_image?: string
+    small_text?: string
+  }
+  timestamps?: {
+    start?: number
+    end?: number
+  }
+  source: ActivitySource
+}
+
 /** PRESENCE_UPDATE：他人载荷不会出现 invisible（服务端已掩码为 offline） */
 export type PresenceUpdatePayload = {
   user_id: string
   status: PresenceStatus
   custom_text?: string
+  custom_emoji?: string
+  custom_expires_at?: string | null
+  activities?: PresenceActivity[]
   event_at: string
 }
 
@@ -565,6 +605,9 @@ export type PresenceEntry = {
   user_id: string
   status: PresenceStatus
   custom_text?: string
+  custom_emoji?: string
+  custom_expires_at?: string | null
+  activities?: PresenceActivity[]
 }
 
 /** READY read_states 条目（服务端为每个可见频道下发精确未读数） */

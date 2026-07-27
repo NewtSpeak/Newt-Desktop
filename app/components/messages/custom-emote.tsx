@@ -1,4 +1,4 @@
-// 自定义小表情 / 贴图缩略：消息内联、反应胶囊统一高度。
+// 自定义小表情 / 贴图缩略：消息内联、反应 chip（反应模式填满外层 120% 容器）。
 
 import { useEffect, useState } from "react"
 
@@ -74,8 +74,13 @@ export function CustomEmoteImg({
     }
   }, [itemId, assetUrlProp, cached?.asset_url, cacheItems])
 
-  const dim = reaction ? REACTION_EMOTE_PX : size
+  // 反应模式由外层 chip 控制 120% 高度，媒体填满容器
+  const fillParent = Boolean(reaction)
+  const dim = fillParent ? undefined : size
   const label = alt || mark || "自定义表情"
+  const boxStyle = fillParent
+    ? { width: "100%", height: "100%" }
+    : { width: dim, height: dim }
 
   if (failed || !url) {
     return (
@@ -84,7 +89,7 @@ export function CustomEmoteImg({
           "inline-flex items-center justify-center rounded-md bg-muted text-[10px] text-muted-foreground",
           className,
         )}
-        style={{ width: dim, height: dim }}
+        style={boxStyle}
         title={label}
         aria-label={label}
       >
@@ -97,8 +102,8 @@ export function CustomEmoteImg({
   const media = isVideo ? (
     <video
       src={url}
-      width={dim}
-      height={dim}
+      width={fillParent ? undefined : dim}
+      height={fillParent ? undefined : dim}
       autoPlay
       loop
       muted
@@ -107,27 +112,29 @@ export function CustomEmoteImg({
       onError={() => setFailed(true)}
       className={cn(
         "inline-block object-contain align-middle",
+        fillParent && "size-full",
         onClick && "cursor-pointer",
         className,
       )}
-      style={{ width: dim, height: dim }}
+      style={boxStyle}
       aria-label={label}
     />
   ) : (
     <img
       src={url}
       alt={label}
-      width={dim}
-      height={dim}
+      width={fillParent ? undefined : dim}
+      height={fillParent ? undefined : dim}
       draggable={false}
       loading="lazy"
       onError={() => setFailed(true)}
       className={cn(
         "inline-block object-contain align-middle",
+        fillParent && "size-full",
         onClick && "cursor-pointer",
         className,
       )}
-      style={{ width: dim, height: dim }}
+      style={boxStyle}
     />
   )
 
@@ -146,7 +153,7 @@ export function CustomEmoteImg({
   return media
 }
 
-/** 贴图消息主体（大图，可点开包预览） */
+/** 贴图消息主体：无背景卡片、无点击动效，可点开包预览 */
 export function StickerMessageBody({
   itemId,
   packId,
@@ -165,13 +172,10 @@ export function StickerMessageBody({
       type="button"
       onClick={() => packId && onOpenPack?.(packId, itemId)}
       className={cn(
-        "group relative mt-0.5 block max-w-[min(100%,11rem)] cursor-pointer",
-        "rounded-2xl p-1.5",
-        "bg-muted/40 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_4px_12px_rgba(0,0,0,0.04)]",
-        "transition-[transform,box-shadow,background-color] duration-200",
-        "hover:bg-muted/70 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]",
-        "active:scale-[0.96]",
-        "focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
+        "relative mt-0.5 block max-w-[min(100%,12rem)]",
+        "cursor-pointer rounded-xl bg-transparent p-0 shadow-none",
+        "hover:bg-transparent active:scale-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
       )}
       aria-label={mark ? `贴图 ${mark}` : "贴图"}
     >

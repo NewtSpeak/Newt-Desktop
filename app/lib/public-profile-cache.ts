@@ -39,6 +39,12 @@ export function loadPublicProfile(
   return task
 }
 
+/** 单用户失效（USER_UPDATE 后调用，避免好友卡 bio/显示名过期） */
+export function invalidatePublicProfile(userId: string) {
+  cache.delete(userId)
+  inflight.delete(userId)
+}
+
 /** 测试 / 登出时清空 */
 export function clearPublicProfileCache() {
   cache.clear()

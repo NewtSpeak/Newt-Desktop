@@ -20,6 +20,8 @@ import {
 } from "~/components/ui/sidebar"
 import {
   CircleUserRoundIcon,
+  Gamepad2Icon,
+  MessageCircleIcon,
   SettingsIcon,
   UsersIcon,
 } from "lucide-react"
@@ -35,10 +37,23 @@ import {
   AvatarFrameOverlay,
   AvatarWithFrame,
 } from "~/components/cosmetics/avatar-frame"
+import { ActivityDialog } from "~/components/activity-dialog"
+import { ActivityLine } from "~/components/activity-line"
+import { CustomStatusDialog } from "~/components/custom-status-dialog"
+import { CustomStatusLine } from "~/components/custom-status-line"
+import { CustomEmoteImg } from "~/components/messages/custom-emote"
 import { SwitchAccountDialog } from "~/components/switch-account-dialog"
 import { useAuthStore } from "~/stores/auth"
 import { useCosmeticsStore } from "~/stores/cosmetics"
-import { setManualPresence, usePresenceStore } from "~/stores/presence"
+import {
+  customStatusTitle,
+  effectiveSelfActivities,
+  formatPrimaryActivity,
+  hasCustomStatus,
+  setManualPresence,
+  statusEmoteItemId,
+  usePresenceStore,
+} from "~/stores/presence"
 import { useSettingsStore, type ManualPresenceStatus } from "~/stores/settings"
 import { useUIStore } from "~/stores/ui"
 
@@ -87,15 +102,53 @@ export function NavUser() {
   const accounts = useAuthStore((state) => state.accounts)
   const gatewayStatus = useUIStore((state) => state.gatewayStatus)
   const manualStatus = useSettingsStore((state) => state.presence.manualStatus)
+  const customText = useSettingsStore((state) => state.presence.customText)
+  const customEmoji = useSettingsStore((state) => state.presence.customEmoji)
+  const customExpiresAt = useSettingsStore(
+    (state) => state.presence.customExpiresAt,
+  )
   const autoIdle = usePresenceStore((state) => state.autoIdle)
   // 本人头像框（loadout 单槽订阅；COSMETIC_LOADOUT_UPDATE 实时生效）
   const avatarFrame = useCosmeticsStore((state) => state.loadout.avatar_frame)
+  const activityEnabled = useSettingsStore((s) => s.presence.activityEnabled)
+  const activityName = useSettingsStore((s) => s.presence.activityName)
+  const activityType = useSettingsStore((s) => s.presence.activityType)
+  const activityDetails = useSettingsStore((s) => s.presence.activityDetails)
+  const activityStartedAt = useSettingsStore((s) => s.presence.activityStartedAt)
+  const activityCoverUrl = useSettingsStore((s) => s.presence.activityCoverUrl)
+  const detectGames = useSettingsStore((s) => s.presence.detectGames)
+  const detectMedia = useSettingsStore((s) => s.presence.detectMedia)
+  const manualOverride = useSettingsStore((s) => s.presence.activityManualOverride)
+  const detectedActivities = usePresenceStore((s) => s.detectedActivities)
   const [switchOpen, setSwitchOpen] = React.useState(false)
+  const [statusOpen, setStatusOpen] = React.useState(false)
+  const [activityOpen, setActivityOpen] = React.useState(false)
 
   if (!user) return null
 
   const display = userDisplayName(user)
   const avatarSrc = resolveProfileAssetUrl(user.avatar_url)
+  const selfCustom = {
+    text: customText,
+    emoji: customEmoji,
+    expiresAt: customExpiresAt,
+  }
+  const hasCustom = hasCustomStatus(selfCustom)
+  const customTitle = customStatusTitle(selfCustom)
+  // 订阅 settings 字段以触发重绘
+  void activityEnabled
+  void activityName
+  void activityType
+  void activityDetails
+  void activityStartedAt
+  void activityCoverUrl
+  void detectGames
+  void detectMedia
+  void manualOverride
+  void detectedActivities
+  const selfActivities = effectiveSelfActivities()
+  const activityLabel = formatPrimaryActivity(selfActivities)
+  const customItemId = statusEmoteItemId(selfCustom)
 
   // 本人有效状态：手动 online 时叠加空闲检测；未连接时按离线灰点
   const selfStatus =
@@ -158,9 +211,28 @@ export function NavUser() {
                   </AvatarWithFrame>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{display}</span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      @{user.username}
-                    </span>
+                    {hasCustom ? (
+                      <CustomStatusLine
+                        custom={selfCustom}
+                        className="text-xs"
+                        emoteSize={12}
+                      />
+                    ) : activityLabel ? (
+                      <ActivityLine
+                        activities={selfActivities}
+                        className="text-xs"
+                      />
+                    ) : (
+                      <span className="truncate text-xs text-muted-foreground">
+                        @{user.username}
+                      </span>
+                    )}
+                    {hasCustom && activityLabel ? (
+                      <ActivityLine
+                        activities={selfActivities}
+                        className="text-xs"
+                      />
+                    ) : null}
                   </div>
                   <span
                     title={statusLabel(gatewayStatus)}
@@ -197,6 +269,45 @@ export function NavUser() {
                   </div>
                 </DropdownMenuItem>
               ))}
+              <DropdownMenuItem onClick={() => setStatusOpen(true)}>
+                {customItemId ? (
+                  <CustomEmoteImg
+                    itemId={customItemId}
+                    size={16}
+                    className="shrink-0"
+                    alt=""
+                  />
+                ) : (
+                  <MessageCircleIcon />
+                )}
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span>自定义状态</span>
+                  {hasCustom ? (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {customTitle}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      选小表情并写一句话
+                    </span>
+                  )}
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setActivityOpen(true)}>
+                <Gamepad2Icon />
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span>活动状态</span>
+                  {activityLabel ? (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {activityLabel}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      正在玩 / 正在听
+                    </span>
+                  )}
+                </div>
+              </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
@@ -242,6 +353,8 @@ export function NavUser() {
           )}
         />
         <SwitchAccountDialog open={switchOpen} onOpenChange={setSwitchOpen} />
+        <CustomStatusDialog open={statusOpen} onOpenChange={setStatusOpen} />
+        <ActivityDialog open={activityOpen} onOpenChange={setActivityOpen} />
       </SidebarMenuItem>
     </SidebarMenu>
   )

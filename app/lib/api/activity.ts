@@ -1,6 +1,7 @@
 // 活跃度（每日活跃分 / 等级 / 每日积分奖励）用户端 API。
 
-import { api, qs } from "./http"
+import type { GameCatalogEntry } from "~/lib/activity/game-catalog"
+import { api, apiBaseURL, ensureAccessToken, qs } from "./http"
 
 /** 今日实时计数（未结算，score_estimate 为预估分） */
 export type ActivityToday = {
@@ -63,3 +64,57 @@ export type MyActivity = {
 
 export const getMyActivity = (days = 14) =>
   api<MyActivity>(`/users/@me/activity${qs({ days })}`)
+
+// ---- 活动封面 / 游戏目录（Server-18 Rich Presence）----
+
+export type GameCatalogResponse = {
+  version: number
+  games: GameCatalogEntry[]
+}
+
+export type ResolveCoverResponse = {
+  kind: "game" | "music"
+  name?: string
+  details?: string
+  cover_url?: string
+  source?: string
+}
+
+export const getGameCatalog = () =>
+  api<GameCatalogResponse>("/activity/game-catalog")
+
+export const resolveCover = (params: {
+  kind: "game" | "music"
+  name: string
+  artist?: string
+}) => {
+  const q = new URLSearchParams({ kind: params.kind, name: params.name })
+  if (params.artist) q.set("artist", params.artist)
+  return api<ResolveCoverResponse>(`/activity/resolve-cover?${q.toString()}`)
+}
+
+/** 上传活动封面（PNG/JPEG/WebP），返回相对路径 /public-assets/activity/... */
+export async function uploadActivityCover(
+  pngBase64: string,
+  filename = "icon.png",
+): Promise<string | null> {
+  try {
+    const binary = atob(pngBase64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    const blob = new Blob([bytes], { type: "image/png" })
+    const form = new FormData()
+    form.append("file", blob, filename)
+    const token = await ensureAccessToken()
+    const res = await fetch(`${apiBaseURL()}/activity/cover`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { cover_url?: string }
+    return data.cover_url ?? null
+  } catch {
+    return null
+  }
+}

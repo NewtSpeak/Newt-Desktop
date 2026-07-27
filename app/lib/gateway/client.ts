@@ -46,6 +46,17 @@ class GatewayClient {
   private desired = false
   private lastAckAt = 0
   private heartbeatIntervalMs = IDENTIFY_FALLBACK_INTERVAL_MS
+  /**
+   * IDENTIFY 时附带的本端期望状态（online/idle/dnd/invisible）。
+   * 由 presence 层注入；省略时服务端默认 online。
+   * 目的：隐身用户重连时不先广播 online 再改状态（隐私，docs 01 FR-20）。
+   */
+  private identifyStatusProvider: (() => PresenceStatus) | null = null
+  /** IDENTIFY 时附带的自定义状态与活动（可选） */
+  private identifyExtrasProvider: (() => {
+    custom?: { text?: string; emoji?: string; expiresAt?: string | null }
+    activities?: import("~/lib/gateway/events").PresenceActivity[]
+  }) | null = null
 
   // ---- resume 状态（docs 14 §3.1 FR-03/04）----
   private sessionId: string | null = null
@@ -151,7 +162,18 @@ class GatewayClient {
             }),
           )
         } else {
-          socket.send(JSON.stringify({ op: "IDENTIFY", d: { token } }))
+          // 携带当前有效状态/自定义/活动，避免隐身先闪 online、活动重连丢失
+          const status = this.identifyStatusProvider?.()
+          const extras = this.identifyExtrasProvider?.()
+          const d: Record<string, unknown> = { token }
+          if (status) d.status = status
+          if (extras?.custom) {
+            d.custom_text = extras.custom.text ?? ""
+            d.custom_emoji = extras.custom.emoji ?? ""
+            d.custom_expires_at = extras.custom.expiresAt ?? null
+          }
+          if (extras?.activities) d.activities = extras.activities
+          socket.send(JSON.stringify({ op: "IDENTIFY", d }))
         }
         this.startHeartbeat(socket)
         break
@@ -195,10 +217,51 @@ class GatewayClient {
   // 上行帧
   // -------------------------------------------------------------------------
 
-  /** 上行 Presence：设置本端在线状态（docs 01 §3.4）。未连接时静默忽略。 */
-  sendPresence(status: PresenceStatus) {
+  /**
+   * 上行 Presence：本端在线状态 + 可选自定义状态 + 可选活动（docs 01 / Server-18）。
+   * activities：undefined = 不改服务端该 session 活动；[] = 清空；非空 = 替换。
+   * 未连接时静默忽略。
+   */
+  sendPresence(
+    status: PresenceStatus,
+    custom?: {
+      text?: string
+      emoji?: string
+      expiresAt?: string | null
+    },
+    activities?: import("~/lib/gateway/events").PresenceActivity[] | null,
+  ) {
     if (this.socket?.readyState !== WebSocket.OPEN) return
-    this.socket.send(JSON.stringify({ op: "PRESENCE", d: { status } }))
+    const d: Record<string, unknown> = { status }
+    if (custom) {
+      // 始终写入字段：服务端按整表覆盖 custom，缺省 JSON 会变成空串并清掉状态
+      d.custom_text = custom.text ?? ""
+      d.custom_emoji = custom.emoji ?? ""
+      d.custom_expires_at = custom.expiresAt ?? null
+    }
+    // null/undefined 均表示「不改 activities」；仅显式数组（含 []）才下发
+    if (activities !== undefined && activities !== null) {
+      d.activities = activities
+    }
+    this.socket.send(JSON.stringify({ op: "PRESENCE", d }))
+  }
+
+  /**
+   * 注入 IDENTIFY 初始 status 提供者（由 presence store 在绑定 Gateway 时设置）。
+   * 返回值须为可设置状态：online / idle / dnd / invisible。
+   */
+  setIdentifyStatusProvider(provider: (() => PresenceStatus) | null) {
+    this.identifyStatusProvider = provider
+  }
+
+  /** 注入 IDENTIFY 自定义状态与活动（Server-18） */
+  setIdentifyExtrasProvider(
+    provider: (() => {
+      custom?: { text?: string; emoji?: string; expiresAt?: string | null }
+      activities?: import("~/lib/gateway/events").PresenceActivity[]
+    }) | null,
+  ) {
+    this.identifyExtrasProvider = provider
   }
 
   // -------------------------------------------------------------------------

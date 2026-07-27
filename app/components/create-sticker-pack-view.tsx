@@ -1,18 +1,19 @@
-// 创建贴图包分步向导：类型 → 作用域 → 命名 → 添加表情并命名。
+// 创建贴图包分步向导：类型 → 给谁用 → 命名 → 添加表情并命名。
 // 对齐 docs 17 与设置页「创建包」字段。
 
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useNavigate } from "react-router"
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
   CheckIcon,
   ImageIcon,
-  ImagePlusIcon,
   Loader2Icon,
   PackageIcon,
+  ServerIcon,
   SmileIcon,
   UploadIcon,
+  UserIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -47,6 +48,7 @@ import {
 } from "~/lib/stickers/format"
 import { STICKERS_PATH } from "~/lib/stickers-route"
 import { cn } from "~/lib/utils"
+import { useAuthStore } from "~/stores/auth"
 import { useGuildsStore } from "~/stores/guilds"
 import { useStickersStore } from "~/stores/stickers"
 import { useUIStore } from "~/stores/ui"
@@ -55,7 +57,7 @@ type Step = 1 | 2 | 3 | 4
 
 const STEPS: { id: Step; label: string }[] = [
   { id: 1, label: "类型" },
-  { id: 2, label: "作用域" },
+  { id: 2, label: "给谁用" },
   { id: 3, label: "命名" },
   { id: 4, label: "添加表情" },
 ]
@@ -63,10 +65,20 @@ const STEPS: { id: Step; label: string }[] = [
 export function CreateStickerPackView() {
   const navigate = useNavigate()
   const guilds = useGuildsStore((s) => s.guilds)
+  const userId = useAuthStore((s) => s.user?.id)
   const selectedGuildId = useUIStore((s) => s.selectedGuildId)
   const invalidate = useStickersStore((s) => s.invalidateAvailable)
   const refreshMyPacks = useStickersStore((s) => s.refreshMyPacks)
   const cacheItems = useStickersStore((s) => s.cacheItems)
+
+  /** 仅「我是服主」的服务器可创建服独属包 */
+  const ownedGuilds = useMemo(
+    () =>
+      guilds.filter(
+        (g) => Boolean(userId) && g.owner_user_id === userId,
+      ),
+    [guilds, userId],
+  )
 
   const [step, setStep] = useState<Step>(1)
   const [kind, setKind] = useState<StickerKind>("emote")
@@ -92,16 +104,18 @@ export function CreateStickerPackView() {
   }, [])
 
   useEffect(() => {
+    // 只允许落到「我拥有」的服务器上
     if (
       selectedGuildId &&
       selectedGuildId !== "@me" &&
-      guilds.some((g) => g.id === selectedGuildId)
+      ownedGuilds.some((g) => g.id === selectedGuildId)
     ) {
       setGuildId(selectedGuildId)
-    } else if (!guildId && guilds[0]) {
-      setGuildId(guilds[0].id)
+      return
     }
-  }, [selectedGuildId, guilds, guildId])
+    if (guildId && ownedGuilds.some((g) => g.id === guildId)) return
+    setGuildId(ownedGuilds[0]?.id ?? "")
+  }, [selectedGuildId, ownedGuilds, guildId])
 
   const goLibrary = () => {
     useUIStore.getState().selectGuild(null)
@@ -112,7 +126,9 @@ export function CreateStickerPackView() {
     step === 1
       ? true
       : step === 2
-        ? scope === "account" || Boolean(guildId)
+        ? scope === "account" ||
+          (Boolean(guildId) &&
+            ownedGuilds.some((g) => g.id === guildId))
         : step === 3
           ? name.trim().length > 0
           : true
@@ -123,13 +139,15 @@ export function CreateStickerPackView() {
       toast.error("请输入包名称")
       return
     }
-    if (scope === "guild" && !guildId) {
-      toast.error("服独属包必须选择服务器")
-      return
+    if (scope === "guild") {
+      if (!guildId || !ownedGuilds.some((g) => g.id === guildId)) {
+        toast.error("请选择你拥有的服务器")
+        return
+      }
     }
     if (scope === "guild" && !allowBrowse) {
       const ok = window.confirm(
-        "关闭完整浏览后，他人无法 Install 或 Copy，基本仅你自己可在本服使用。确定创建？",
+        "关掉「允许别人收藏」后，别人基本用不了这个包，确定继续？",
       )
       if (!ok) return
     }
@@ -147,7 +165,7 @@ export function CreateStickerPackView() {
       invalidate()
       void refreshMyPacks()
       toast.success(
-        scope === "guild" ? "已创建服独属贴图包" : "已创建账号级贴图包",
+        scope === "guild" ? "好了，这个包归你的服务器用" : "好了，这个包归你自己用",
       )
       setStep(4)
     } catch (err) {
@@ -297,9 +315,9 @@ export function CreateStickerPackView() {
           {step === 1 ? (
             <section className="flex flex-col gap-4">
               <div>
-                <h2 className="text-base font-semibold">选择贴图包类型</h2>
+                <h2 className="text-base font-semibold">想做哪种？</h2>
                 <p className="mt-1 text-[13px] text-muted-foreground text-pretty">
-                  创建后类型不可更改，且包内禁止混装小表情与贴图。
+                  选好了就不能改啦，一个包里也别混装两种。
                 </p>
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -307,14 +325,14 @@ export function CreateStickerPackView() {
                   active={kind === "emote"}
                   icon={<SmileIcon className="size-6" />}
                   title="小表情"
-                  desc="可在输入框连发、与文字混排，也可作反应。"
+                  desc="打字时能和文字一起发，也能当反应点一下。"
                   onClick={() => setKind("emote")}
                 />
                 <TypeCard
                   active={kind === "sticker"}
                   icon={<ImageIcon className="size-6" />}
                   title="贴图"
-                  desc="点选单独发送，禁止与正文混排；一条消息一张。"
+                  desc="点一下单独发出去，一张消息就一张，不跟文字混。"
                   onClick={() => setKind("sticker")}
                 />
               </div>
@@ -324,59 +342,72 @@ export function CreateStickerPackView() {
           {step === 2 ? (
             <section className="flex flex-col gap-4">
               <div>
-                <h2 className="text-base font-semibold">选择作用域与浏览策略</h2>
+                <h2 className="text-base font-semibold">
+                  为自己创建，为服务器创建！
+                </h2>
                 <p className="mt-1 text-[13px] text-muted-foreground text-pretty">
-                  账号级可跨服使用；服独属仅本服可用，且他人不可单条复制。
+                  给自己用的，走到哪都能带；给服务器用的，只在你当服主的那几个服里用。
                 </p>
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <TypeCard
                   active={scope === "account"}
-                  icon={<PackageIcon className="size-6" />}
-                  title="账号级"
-                  desc="跨服可用；他人可 Install 或单条 Copy（视浏览开关）。"
+                  icon={<UserIcon className="size-6" />}
+                  title="为自己创建"
+                  desc="跟着你的账号走，换服务器也能用；别人能不能收藏看下面开关。"
                   onClick={() => setScope("account")}
                 />
                 <TypeCard
                   active={scope === "guild"}
-                  icon={<ImagePlusIcon className="size-6" />}
-                  title="服独属"
-                  desc="仅本服上下文可用；禁止他人 Copy，仅能本服 Install。"
+                  icon={<ServerIcon className="size-6" />}
+                  title="为服务器创建"
+                  desc="只在你指定的服务器里用。只有你当服主的服务器可选。"
                   onClick={() => setScope("guild")}
                 />
               </div>
               {scope === "guild" ? (
                 <div className="rounded-2xl bg-muted/40 p-3">
                   <p className="mb-2 text-[12px] font-medium text-muted-foreground">
-                    所属服务器
+                    挂在哪个服务器？（仅你的服）
                   </p>
                   <Select
                     value={guildId}
                     onValueChange={(v) => setGuildId(v ?? "")}
+                    disabled={ownedGuilds.length === 0}
                   >
                     <SelectTrigger className="w-full border-0 bg-background/80 shadow-none">
-                      <SelectValue placeholder="选择服务器" />
+                      <SelectValue
+                        placeholder={
+                          ownedGuilds.length === 0
+                            ? "暂无可选服务器"
+                            : "选一个你拥有的服务器"
+                        }
+                      />
                     </SelectTrigger>
                     <SelectContent>
-                      {guilds.map((g) => (
+                      {ownedGuilds.map((g) => (
                         <SelectItem key={g.id} value={g.id}>
                           {g.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  {guilds.length === 0 ? (
+                  {ownedGuilds.length === 0 ? (
                     <p className="mt-2 text-[12px] text-destructive">
-                      你还没有加入任何服务器，无法创建服独属包。
+                      你还没有自己当服主的服务器，没法给服务器建包。先建个服，或选「为自己创建」。
                     </p>
-                  ) : null}
+                  ) : (
+                    <p className="mt-2 text-[12px] text-muted-foreground">
+                      只列出你拥有的服务器，加入别人的服不在这里。
+                    </p>
+                  )}
                 </div>
               ) : null}
               <div className="flex items-center justify-between gap-3 rounded-2xl bg-muted/40 px-3 py-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">允许完整浏览（可收藏）</p>
+                  <p className="text-sm font-medium">允许别人收藏这个包</p>
                   <p className="mt-0.5 text-[12px] text-muted-foreground text-pretty">
-                    关闭后禁止他人 Install；账号级仍可单条 Copy，服独属关闭则基本仅作者可用。
+                    开着：别人能装进自己的贴图库。关着：基本只有你自己好用。
                   </p>
                 </div>
                 <button
@@ -406,11 +437,14 @@ export function CreateStickerPackView() {
           {step === 3 ? (
             <section className="flex flex-col gap-4">
               <div>
-                <h2 className="text-base font-semibold">为贴图包命名</h2>
+                <h2 className="text-base font-semibold">起个好听的名字</h2>
                 <p className="mt-1 text-[13px] text-muted-foreground text-pretty">
-                  名称可在创建后修改。类型：
-                  {kind === "emote" ? "小表情" : "贴图"} · 作用域：
-                  {scope === "guild" ? "服独属" : "账号级"}
+                  以后还能改。现在是：
+                  {kind === "emote" ? "小表情" : "贴图"} ·{" "}
+                  {scope === "guild" ? "为服务器创建" : "为自己创建"}
+                  {scope === "guild" && guildId
+                    ? ` · ${ownedGuilds.find((g) => g.id === guildId)?.name ?? ""}`
+                    : ""}
                 </p>
               </div>
               <div className="flex flex-col gap-3 rounded-2xl bg-muted/40 p-4">
@@ -421,7 +455,7 @@ export function CreateStickerPackView() {
                   <Input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="例如：日常小表情"
+                    placeholder="比如：日常小表情、摸鱼贴图"
                     maxLength={100}
                     className="h-10 border-0 bg-background/80 shadow-none focus-visible:ring-2 focus-visible:ring-ring/30"
                     autoFocus
@@ -434,7 +468,7 @@ export function CreateStickerPackView() {
                   <Input
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="简单介绍这个包"
+                    placeholder="随便写两句介绍就行"
                     maxLength={200}
                     className="h-10 border-0 bg-background/80 shadow-none focus-visible:ring-2 focus-visible:ring-ring/30"
                   />
@@ -447,15 +481,11 @@ export function CreateStickerPackView() {
             <section className="flex flex-col gap-4">
               <div>
                 <h2 className="text-base font-semibold">
-                  添加{kind === "emote" ? "小表情" : "贴图"}
+                  往「{createdPack.name}」里塞点
+                  {kind === "emote" ? "小表情" : "贴图"}吧
                 </h2>
                 <p className="mt-1 text-[13px] text-muted-foreground text-pretty">
-                  上传图片并为每张命名（展示名，非 shortcode）。可跳过稍后再加。
-                  当前包：
-                  <span className="font-medium text-foreground">
-                    {" "}
-                    {createdPack.name}
-                  </span>
+                  一次可以多选。名字点一下就能改，跳过也行，以后再加。
                 </p>
               </div>
 

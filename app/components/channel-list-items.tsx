@@ -60,6 +60,7 @@ import {
 } from "~/components/ui/dropdown-menu"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
+import { Slider } from "~/components/ui/slider"
 import { Switch } from "~/components/ui/switch"
 import { NotifyOverrideMenuItems } from "~/components/notify-override-menu"
 import { presenceDotClass } from "~/components/nav-user"
@@ -71,7 +72,7 @@ import {
 import { ApiError } from "~/lib/api/http"
 import type { Channel, ChannelType, VoiceState } from "~/lib/api/types"
 import { copyText } from "~/lib/clipboard"
-import { VOLUME_PRESETS } from "~/lib/moderation"
+import { USER_VOLUME_MAX, VOLUME_PRESETS } from "~/lib/moderation"
 import { hasPermission, Permissions } from "~/lib/permissions"
 import {
   nameInitials,
@@ -844,10 +845,40 @@ function VoiceParticipantRow({
             <ContextMenuLabel className="px-2 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
               本地音频 · 当前 {userVolume}%
             </ContextMenuLabel>
+            {/* 连续滑杆 0–500%：拖动时不关闭菜单 */}
+            <div
+              className="flex flex-col gap-1.5 px-3 py-2"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <span className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <Volume2Icon className="size-3.5" />
+                  用户音量
+                </span>
+                <span className="tabular-nums">{userVolume}%</span>
+              </span>
+              <Slider
+                min={0}
+                max={USER_VOLUME_MAX}
+                step={1}
+                value={[userVolume]}
+                onValueChange={(value) => {
+                  const next = Array.isArray(value) ? value[0] : value
+                  if (typeof next === "number")
+                    voiceConnection.setUserVolume(state.user_id, next)
+                }}
+              />
+              <span className="flex justify-between text-[10px] text-muted-foreground/70">
+                <span>0%</span>
+                <span>100%</span>
+                <span>{USER_VOLUME_MAX}%</span>
+              </span>
+            </div>
             <ContextMenuSub>
               <ContextMenuSubTrigger>
                 <Volume2Icon />
-                用户音量
+                音量快捷档位
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="min-w-36">
                 {VOLUME_PRESETS.map((percent) => (
@@ -865,6 +896,7 @@ function VoiceParticipantRow({
                     {percent}%
                     {percent === 0 ? "（耳机静音）" : ""}
                     {percent === 100 ? "（默认）" : ""}
+                    {percent === USER_VOLUME_MAX ? "（最大）" : ""}
                   </ContextMenuItem>
                 ))}
               </ContextMenuSubContent>

@@ -131,6 +131,7 @@ export function RoleBadgePill({
     badge.strikethrough && "line-through",
   )
 
+  // 纯色文字标签：胶囊
   if (!badge.badgeCustom && !iconUrl && !hasGradient && !hasBgImage) {
     return (
       <span
@@ -179,11 +180,21 @@ export function RoleBadgePill({
           color: badge.badgeTextColor || "#fff",
         }
 
+  const nameVisible = showName || !iconUrl
+  // 有 icon：上/下/左无边距；仅右侧为文字留边（纯 icon 时为正圆）
+  const shapeClass = iconUrl
+    ? nameVisible
+      ? "pr-1.5"
+      : "w-3.5"
+    : "px-1.5"
+
   return (
     <span
       title={badge.name}
       className={cn(
-        "inline-flex h-3.5 max-w-20 items-center gap-0.5 truncate rounded-full px-1.5 text-[9px] font-medium text-white",
+        // 胶囊；overflow-hidden 让 icon 贴合左侧圆弧
+        "relative inline-flex h-3.5 max-w-20 items-center overflow-hidden rounded-full text-[9px] font-medium text-white",
+        shapeClass,
         animated && "name-gradient-animated",
         className,
       )}
@@ -193,12 +204,13 @@ export function RoleBadgePill({
         <img
           src={iconUrl}
           alt=""
-          className="size-2.5 shrink-0 rounded-sm object-contain"
+          // 贴齐上/下/左，正方形填满高度；左侧圆弧由胶囊裁切
+          className="h-full w-3.5 shrink-0 rounded-full object-cover"
           draggable={false}
         />
       ) : null}
-      {showName || !iconUrl ? (
-        <span className={textClass}>{badge.name}</span>
+      {nameVisible ? (
+        <span className={cn(textClass, iconUrl && "ml-1")}>{badge.name}</span>
       ) : null}
     </span>
   )

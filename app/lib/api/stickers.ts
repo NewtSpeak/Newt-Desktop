@@ -68,6 +68,10 @@ export const getStickerPack = (
     pack: StickerPack
     can_install: boolean
     can_copy: boolean
+    /** 当前用户是否为包作者 */
+    is_owner?: boolean
+    /** 是否已在贴图库（自建包恒为 true） */
+    already_installed?: boolean
   }>(`/sticker-packs/${packId}${qs(params)}`)
 
 export const getStickerItem = (itemId: string) =>

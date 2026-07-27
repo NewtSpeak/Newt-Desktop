@@ -65,8 +65,12 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu"
+import { ActivityCard, ActivityLine } from "~/components/activity-line"
+import { CustomStatusLine } from "~/components/custom-status-line"
+import { EmojiTextField } from "~/components/ui/emoji-text-field"
 import { Input } from "~/components/ui/input"
 import { presenceDotClass } from "~/components/nav-user"
+import { sliceByCodePoints } from "~/lib/text-length"
 import {
   assignMemberRole,
   banUser,
@@ -94,7 +98,12 @@ import { useAuthStore } from "~/stores/auth"
 import { useCosmeticsStore } from "~/stores/cosmetics"
 import { useMembersStore } from "~/stores/members"
 import type { PresenceStatus } from "~/lib/gateway/events"
-import { effectiveSelfStatus, usePresenceStore } from "~/stores/presence"
+import {
+  effectiveSelfActivities,
+  hasCustomStatus,
+  memberListStatus,
+  usePresenceStore,
+} from "~/stores/presence"
 import { usePrivateChannelsStore } from "~/stores/private-channels"
 import {
   friendsOf,
@@ -227,11 +236,55 @@ function MemberRow({
   const nameplate = cosmeticsSlots.nameplate
   const profileBorder = cosmeticsSlots.profile_border
   const profileEffect = cosmeticsSlots.profile_effect
+  const customPresence = usePresenceStore(
+    (state) => state.customByUser[member.user_id]
+  )
+  const activitiesPresence = usePresenceStore(
+    (state) => state.activitiesByUser[member.user_id]
+  )
+  // 本人状态必须订阅 settings + autoIdle，切换后立即重绘（不必等 Gateway 回执）
+  const manualStatus = useSettingsStore((s) => s.presence.manualStatus)
+  const selfCustomText = useSettingsStore((s) => s.presence.customText)
+  const selfCustomEmoji = useSettingsStore((s) => s.presence.customEmoji)
+  const selfCustomExpires = useSettingsStore((s) => s.presence.customExpiresAt)
+  const selfActivityEnabled = useSettingsStore((s) => s.presence.activityEnabled)
+  const selfActivityName = useSettingsStore((s) => s.presence.activityName)
+  const selfActivityType = useSettingsStore((s) => s.presence.activityType)
+  const selfActivityDetails = useSettingsStore((s) => s.presence.activityDetails)
+  const selfActivityStartedAt = useSettingsStore(
+    (s) => s.presence.activityStartedAt,
+  )
+  const selfActivityCoverUrl = useSettingsStore((s) => s.presence.activityCoverUrl)
+  const autoIdle = usePresenceStore((s) => s.autoIdle)
   const isSelf = member.user_id === selfId
+  const selfStatus: PresenceStatus =
+    manualStatus === "online" && autoIdle ? "idle" : manualStatus
+  /** 状态点：本人用本地有效状态（含隐身灰点）；他人用 presence 表 */
   const status: PresenceStatus | undefined = isSelf
-    ? effectiveSelfStatus()
+    ? selfStatus
     : presence
-  const online = isSelf || Boolean(presence)
+  const customForDisplay = isSelf
+    ? {
+        text: selfCustomText,
+        emoji: selfCustomEmoji,
+        expiresAt: selfCustomExpires,
+      }
+    : customPresence
+  const showCustom = hasCustomStatus(customForDisplay)
+  void selfActivityEnabled
+  void selfActivityName
+  void selfActivityType
+  void selfActivityDetails
+  void selfActivityStartedAt
+  void selfActivityCoverUrl
+  const activitiesForDisplay = isSelf
+    ? effectiveSelfActivities()
+    : (activitiesPresence ?? [])
+  const showActivity = (activitiesForDisplay?.length ?? 0) > 0
+  /** 列表明暗：隐身/离线沉底灰显；在线/闲置/勿扰保持不透明 */
+  const online = isSelf
+    ? selfStatus !== "invisible"
+    : Boolean(presence)
   const isAdmin = memberIsAdmin(member, roles)
   const name = displayName(member)
   /** 最高位角色的用户名样式（纯色 / 渐变） */
@@ -294,7 +347,7 @@ function MemberRow({
   const saveNickname = async () => {
     setNickPending(true)
     const previous = member.nickname
-    const next = nickDraft.trim()
+    const next = sliceByCodePoints(nickDraft.trim(), 32)
     useMembersStore.getState().upsertMember(guildId, {
       user_id: member.user_id,
       nickname: next,
@@ -464,23 +517,39 @@ function MemberRow({
               )}
             />
           </span>
-          <StyledDisplayName
-            name={name}
-            style={nameStyle}
-            className="relative z-[1] min-w-0 flex-1 truncate text-[13px]"
-          />
-          {member.is_owner && (
-            <CrownIcon
-              aria-label="服务器所有者"
-              className="relative z-[1] size-3.5 shrink-0 text-amber-500"
-            />
-          )}
-          {!member.is_owner && isAdmin && (
-            <ShieldIcon
-              aria-label="管理员"
-              className="relative z-[1] size-3.5 shrink-0 text-sky-500"
-            />
-          )}
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-1">
+              <StyledDisplayName
+                name={name}
+                style={nameStyle}
+                className="min-w-0 flex-1 truncate text-[13px]"
+              />
+              {member.is_owner && (
+                <CrownIcon
+                  aria-label="服务器所有者"
+                  className="size-3.5 shrink-0 text-amber-500"
+                />
+              )}
+              {!member.is_owner && isAdmin && (
+                <ShieldIcon
+                  aria-label="管理员"
+                  className="size-3.5 shrink-0 text-sky-500"
+                />
+              )}
+            </span>
+            {showCustom && online ? (
+              <CustomStatusLine
+                custom={customForDisplay}
+                className="mt-0.5 text-[11px]"
+              />
+            ) : null}
+            {showActivity && online ? (
+              <ActivityLine
+                activities={activitiesForDisplay}
+                className="mt-0.5 text-[11px]"
+              />
+            ) : null}
+          </span>
         </ContextMenuTrigger>
 
         <ContextMenuContent
@@ -804,6 +873,19 @@ function MemberRow({
                       ? " · 管理员"
                       : null}
                 </p>
+                {showCustom ? (
+                  <CustomStatusLine
+                    custom={customForDisplay}
+                    className="mt-1 text-xs text-foreground/80"
+                    emoteSize={16}
+                  />
+                ) : null}
+                {showActivity ? (
+                  <ActivityCard
+                    activities={activitiesForDisplay}
+                    className="mt-2"
+                  />
+                ) : null}
               </div>
 
               {member.bio?.trim() ? (
@@ -839,11 +921,11 @@ function MemberRow({
               服务器昵称仅在本服显示，优先于系统显示名。留空则清除昵称。
             </DialogDescription>
           </DialogHeader>
-          <Input
+          <EmojiTextField
             value={nickDraft}
-            onChange={(event) => setNickDraft(event.target.value)}
+            onChange={setNickDraft}
             placeholder={globalDisplay || username || "昵称"}
-            maxLength={32}
+            maxChars={32}
             autoFocus
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -882,6 +964,14 @@ function GroupDmMembersPanel({ channelId }: { channelId: string }) {
     s.channels.find((c) => c.id === channelId)
   )
   const statusByUser = usePresenceStore((s) => s.statusByUser)
+  const customByUser = usePresenceStore((s) => s.customByUser)
+  const manualStatus = useSettingsStore((s) => s.presence.manualStatus)
+  const selfCustomText = useSettingsStore((s) => s.presence.customText)
+  const selfCustomEmoji = useSettingsStore((s) => s.presence.customEmoji)
+  const selfCustomExpires = useSettingsStore((s) => s.presence.customExpiresAt)
+  const autoIdle = usePresenceStore((s) => s.autoIdle)
+  const selfEffective: PresenceStatus =
+    manualStatus === "online" && autoIdle ? "idle" : manualStatus
   const navigate = useNavigate()
 
   if (!channel || channel.type !== "GROUP_DM") return null
@@ -903,9 +993,27 @@ function GroupDmMembersPanel({ channelId }: { channelId: string }) {
       : people
 
   const sorted = [...list].sort((a, b) => {
-    const aOn = a.id === selfId || Boolean(statusByUser[a.id])
-    const bOn = b.id === selfId || Boolean(statusByUser[b.id])
-    if (aOn !== bOn) return aOn ? -1 : 1
+    const aSt = memberListStatus(
+      a.id,
+      selfId,
+      statusByUser,
+      a.id === selfId ? selfEffective : undefined
+    )
+    const bSt = memberListStatus(
+      b.id,
+      selfId,
+      statusByUser,
+      b.id === selfId ? selfEffective : undefined
+    )
+    const rank: Record<string, number> = {
+      online: 0,
+      idle: 1,
+      dnd: 2,
+      offline: 3,
+    }
+    const ar = rank[aSt] ?? 3
+    const br = rank[bSt] ?? 3
+    if (ar !== br) return ar - br
     const an = a.display_name?.trim() || a.username
     const bn = b.display_name?.trim() || b.username
     return an.localeCompare(bn, "zh-Hans-CN")
@@ -921,13 +1029,23 @@ function GroupDmMembersPanel({ channelId }: { channelId: string }) {
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {sorted.map((p) => {
           const isSelf = p.id === selfId
-          const status = isSelf ? effectiveSelfStatus() : statusByUser[p.id]
+          const status = isSelf ? selfEffective : statusByUser[p.id]
           const name = p.display_name?.trim() || p.username
           const av = resolveProfileAssetUrl(p.avatar_url)
+          const dimmed =
+            memberListStatus(
+              p.id,
+              selfId,
+              statusByUser,
+              isSelf ? selfEffective : undefined
+            ) === "offline"
           return (
             <div
               key={p.id}
-              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors hover:bg-muted/70"
+              className={cn(
+                "flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors hover:bg-muted/70",
+                dimmed && "opacity-50"
+              )}
             >
               <span className="relative size-7 shrink-0">
                 <Avatar className="size-7 rounded-full after:rounded-full after:border-0">
@@ -949,12 +1067,28 @@ function GroupDmMembersPanel({ channelId }: { channelId: string }) {
                   )}
                 />
               </span>
-              <span className="min-w-0 flex-1 truncate font-medium">
-                {name}
-                {isSelf ? (
-                  <span className="ml-1 text-[11px] font-normal text-muted-foreground">
-                    （你）
-                  </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">
+                  {name}
+                  {isSelf ? (
+                    <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                      （你）
+                    </span>
+                  ) : null}
+                </span>
+                {!dimmed ? (
+                  <CustomStatusLine
+                    custom={
+                      isSelf
+                        ? {
+                            text: selfCustomText,
+                            emoji: selfCustomEmoji,
+                            expiresAt: selfCustomExpires,
+                          }
+                        : customByUser[p.id]
+                    }
+                    className="mt-0.5 text-[11px]"
+                  />
                 ) : null}
               </span>
               {!isSelf ? (
@@ -999,6 +1133,12 @@ function DmProfilePanel({ channelId }: { channelId: string }) {
     channel?.recipients.find((r) => r.id !== selfId) ?? channel?.recipients[0]
   const presence = usePresenceStore((s) =>
     peer?.id ? s.statusByUser[peer.id] : undefined
+  )
+  const customPresence = usePresenceStore((s) =>
+    peer?.id ? s.customByUser[peer.id] : undefined
+  )
+  const peerActivities = usePresenceStore((s) =>
+    peer?.id ? s.activitiesByUser[peer.id] : undefined
   )
   const relItems = useRelationshipsStore((s) => s.items)
   const isFriend = peer
@@ -1161,6 +1301,8 @@ function DmProfilePanel({ channelId }: { channelId: string }) {
             {presenceLabel(presence)}
             {isFriend ? " · 好友" : isBlocked ? " · 已屏蔽" : null}
           </p>
+          <CustomStatusLine custom={customPresence} className="mt-1 text-[12px]" />
+          <ActivityCard activities={peerActivities} />
         </div>
       </div>
     </MemberPanelShell>
@@ -1196,6 +1338,11 @@ export function MemberPanel() {
     guildId && !isDm ? state.byGuild[guildId] : undefined
   )
   const statusByUser = usePresenceStore((state) => state.statusByUser)
+  // 本人状态变更须驱动分组重算（与 MemberRow 一致）
+  const manualStatus = useSettingsStore((s) => s.presence.manualStatus)
+  const autoIdle = usePresenceStore((s) => s.autoIdle)
+  const selfEffective: PresenceStatus =
+    manualStatus === "online" && autoIdle ? "idle" : manualStatus
 
   const [confirm, setConfirm] = useState<ConfirmState>(null)
   const [banReason, setBanReason] = useState("")
@@ -1220,23 +1367,50 @@ export function MemberPanel() {
 
   const { presenceGroups, roleGroups, self } = useMemo(() => {
     const list = members ?? []
-    const online: GuildMember[] = []
-    const offline: GuildMember[] = []
-    for (const member of list) {
-      if (member.user_id === selfId || statusByUser[member.user_id])
-        online.push(member)
-      else offline.push(member)
-    }
     const byName = (a: GuildMember, b: GuildMember) =>
       displayName(a).localeCompare(displayName(b), "zh-Hans-CN")
+
+    // 在线状态分组顺序：在线 → 闲置 → 勿扰 → 离线（docs 01 四态；隐身归离线）
+    const presenceOrder = ["online", "idle", "dnd", "offline"] as const
+    const presenceLabels: Record<(typeof presenceOrder)[number], string> = {
+      online: "在线",
+      idle: "闲置",
+      dnd: "勿扰",
+      offline: "离线",
+    }
+    const buckets: Record<(typeof presenceOrder)[number], GuildMember[]> = {
+      online: [],
+      idle: [],
+      dnd: [],
+      offline: [],
+    }
+    const resolveStatus = (member: GuildMember) =>
+      memberListStatus(
+        member.user_id,
+        selfId,
+        statusByUser,
+        member.user_id === selfId ? selfEffective : undefined
+      )
+    for (const member of list) {
+      buckets[resolveStatus(member)].push(member)
+    }
+    for (const key of presenceOrder) {
+      buckets[key].sort(byName)
+    }
+
+    // 组内排序：在线系优先（online > idle > dnd > offline），再按名称
+    const presenceRank: Record<string, number> = {
+      online: 0,
+      idle: 1,
+      dnd: 2,
+      offline: 3,
+    }
     const byPresenceThenName = (a: GuildMember, b: GuildMember) => {
-      const aOnline = a.user_id === selfId || Boolean(statusByUser[a.user_id])
-      const bOnline = b.user_id === selfId || Boolean(statusByUser[b.user_id])
-      if (aOnline !== bOnline) return aOnline ? -1 : 1
+      const ar = presenceRank[resolveStatus(a)] ?? 3
+      const br = presenceRank[resolveStatus(b)] ?? 3
+      if (ar !== br) return ar - br
       return byName(a, b)
     }
-    online.sort(byName)
-    offline.sort(byName)
 
     // 身份组分组：成员出现在其每一个 hoist 身份组内，方便按组查看。
     // 没有任何 hoist 身份组的成员归入「成员」。
@@ -1287,15 +1461,19 @@ export function MemberPanel() {
       })
     }
 
+    // 按状态分组：始终展示全部支持的状态分组（含空组，便于识别全部分类）
+    const presenceGroups: MemberGroup[] = presenceOrder.map((key) => ({
+      key,
+      label: presenceLabels[key],
+      members: buckets[key],
+    }))
+
     return {
-      presenceGroups: [
-        { key: "online", label: "在线", members: online },
-        { key: "offline", label: "离线", members: offline },
-      ] satisfies MemberGroup[],
+      presenceGroups,
       roleGroups: groupedByRole,
       self: list.find((member) => member.user_id === selfId),
     }
-  }, [members, roles, statusByUser, selfId])
+  }, [members, roles, statusByUser, selfId, selfEffective])
 
   // 私信：1:1 资料卡 / 群成员列表
   if (isDm) return <DmSidePanel />
@@ -1335,8 +1513,10 @@ export function MemberPanel() {
     }
   }
 
-  const renderGroup = (group: MemberGroup) =>
-    group.members.length > 0 && (
+  const renderGroup = (group: MemberGroup, opts?: { showEmpty?: boolean }) => {
+    // 身份组模式隐藏空组；状态模式始终展示全部支持的在线状态分组
+    if (!opts?.showEmpty && group.members.length === 0) return null
+    return (
       <div key={group.key} className="flex flex-col gap-0.5">
         <p className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground select-none">
           <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -1357,6 +1537,19 @@ export function MemberPanel() {
                 style={{ backgroundColor: group.color }}
                 aria-hidden
               />
+            ) : group.key === "online" ||
+              group.key === "idle" ||
+              group.key === "dnd" ||
+              group.key === "offline" ? (
+              <span
+                className={cn(
+                  "size-2.5 shrink-0 rounded-full",
+                  presenceDotClass(
+                    group.key === "offline" ? undefined : group.key
+                  )
+                )}
+                aria-hidden
+              />
             ) : null}
             <span className="truncate">{group.label}</span>
             <span className="tabular-nums">— {group.members.length}</span>
@@ -1375,6 +1568,7 @@ export function MemberPanel() {
         ))}
       </div>
     )
+  }
 
   const total = members?.length ?? 0
 
@@ -1400,7 +1594,7 @@ export function MemberPanel() {
             }
             title={
               groupingMode === "role"
-                ? "当前按身份组分组，点击切换为在线/离线"
+                ? "当前按身份组分组，点击切换为在线/闲置/勿扰/离线"
                 : "当前按在线状态分组，点击切换为身份组"
             }
             onClick={() =>
@@ -1427,7 +1621,10 @@ export function MemberPanel() {
           <p className="px-2 pt-3 text-xs text-muted-foreground">暂无成员</p>
         ) : (
           (groupingMode === "role" ? roleGroups : presenceGroups).map(
-            renderGroup
+            (group) =>
+              renderGroup(group, {
+                showEmpty: groupingMode === "presence",
+              })
           )
         )}
       </div>

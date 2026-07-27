@@ -14,7 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog"
-import { Input } from "~/components/ui/input"
+import { EmojiTextField } from "~/components/ui/emoji-text-field"
+import { sliceByCodePoints } from "~/lib/text-length"
 import { RadioGroup, RadioGroupItem } from "~/components/ui/radio-group"
 import { Switch } from "~/components/ui/switch"
 import {
@@ -283,7 +284,7 @@ export function GuildPersonalPanel() {
 
   const saveNickname = async () => {
     if (!selfMember) return
-    const next = nickname.trim().slice(0, 32)
+    const next = sliceByCodePoints(nickname.trim(), 32)
     if (next === (selfMember.nickname ?? "")) return
     setSavingNickname(true)
     // 乐观更新：失败回滚（docs 17 §7.2）
@@ -332,13 +333,13 @@ export function GuildPersonalPanel() {
           <div className="flex min-w-0 flex-col gap-6 pr-5">
           <Group title="概览 · 服内昵称">
             <div className="flex min-w-0 items-center gap-2">
-              <Input
+              <EmojiTextField
                 value={nickname}
-                maxLength={32}
+                maxChars={32}
                 className="min-w-0 flex-1"
                 placeholder={selfMember?.display_name || selfMember?.username || ""}
                 disabled={!canChangeNickname || savingNickname}
-                onChange={(event) => setNickname(event.target.value)}
+                onChange={setNickname}
                 onBlur={() => void saveNickname()}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void saveNickname()

@@ -401,6 +401,7 @@ function MessageList({
               content={item.content}
               attachments={item.attachments}
               stickerPreview={item.stickerPreview}
+              visibleRoleIds={item.visibleRoleIds}
               status={item.status}
               errorMessage={item.errorMessage}
               selfName={selfName}

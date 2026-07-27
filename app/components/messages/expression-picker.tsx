@@ -122,14 +122,13 @@ function NamedCell({
       title={label}
       className={cn(
         "flex flex-col items-center gap-0.5 rounded-xl p-1",
-        "transition-[background-color,transform] duration-150",
-        "hover:bg-muted active:scale-[0.96]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        "cursor-pointer",
+        "cursor-pointer bg-transparent",
+        "hover:bg-transparent active:scale-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         className,
       )}
     >
-      <span className="flex size-11 items-center justify-center text-2xl leading-none">
+      <span className="flex size-11 items-center justify-center overflow-hidden rounded-xl text-2xl leading-none">
         {children}
       </span>
       {showCaption ? (
@@ -137,6 +136,49 @@ function NamedCell({
           {caption}
         </span>
       ) : null}
+    </button>
+  )
+}
+
+/**
+ * 贴图网格：auto-fill 响应式列数，单元格均分剩余宽度，间距极小。
+ * minmax 下限控制「最小图」；1fr 避免末列留下不合时宜的空白。
+ */
+const STICKER_GRID_CLASS =
+  "grid w-full gap-0.5 [grid-template-columns:repeat(auto-fill,minmax(4rem,1fr))]"
+
+/** 贴图 / 大表情格子：填满格子、仅圆角图，无卡片底/名称/悬停缩放 */
+function FlatMediaCell({
+  label,
+  onClick,
+  onHoverEnter,
+  children,
+  className,
+}: {
+  label: string
+  onClick: () => void
+  onHoverEnter?: () => void
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      data-expr-cell
+      onClick={onClick}
+      onMouseEnter={() => onHoverEnter?.()}
+      onFocus={() => onHoverEnter?.()}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex aspect-square w-full min-w-0 items-center justify-center overflow-hidden rounded-xl",
+        "bg-transparent p-0 shadow-none",
+        "cursor-pointer hover:bg-transparent active:scale-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        className,
+      )}
+    >
+      {children}
     </button>
   )
 }
@@ -197,7 +239,7 @@ function OwnerAvatarBadge({
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <p className="sticky top-0 z-[1] bg-popover/95 px-1.5 py-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase backdrop-blur-sm select-none">
+    <p className="sticky top-0 z-[1] bg-popover/95 px-1.5 py-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase backdrop-blur-sm select-none">
       {children}
     </p>
   )
@@ -213,11 +255,21 @@ export function ExpressionPickerPanel({
   onPick,
 }: {
   guildId?: string
-  mode?: "composer" | "reaction"
+  /**
+   * - unicode：仅系统 emoji（资料字段）
+   * - emote：仅小表情贴图（自定义状态）
+   * - composer/reaction：贴图 + 表情
+   */
+  mode?: "composer" | "reaction" | "unicode" | "emote"
   onPick: (pick: ExpressionPick) => void
 }) {
   const initialUi = useMemo(() => loadExpressionPickerUi(), [])
-  const [mainTab, setMainTab] = useState<MainTab>(initialUi.mainTab)
+  const unicodeOnly = mode === "unicode"
+  const emoteOnly = mode === "emote"
+  // unicode/emote 模式固定表情 Tab；其余恢复上次 UI 选择
+  const [mainTab, setMainTab] = useState<MainTab>(
+    unicodeOnly || emoteOnly ? "emotes" : initialUi.mainTab,
+  )
   const [query, setQuery] = useState("")
   const [activeNav, setActiveNav] = useState<NavId>(
     () => initialUi.byTab[initialUi.mainTab]?.activeNav || "recent",
@@ -268,9 +320,14 @@ export function ExpressionPickerPanel({
   )
 
   useEffect(() => {
-    // 静默加载，不展示 spinner / 入场动画
+    // unicode 模式不需要贴图数据；其余静默加载
+    if (unicodeOnly) return
     void ensureAvailable(guildId)
-  }, [guildId, ensureAvailable])
+  }, [guildId, ensureAvailable, unicodeOnly])
+
+  useEffect(() => {
+    if ((unicodeOnly || emoteOnly) && mainTab !== "emotes") setMainTab("emotes")
+  }, [unicodeOnly, emoteOnly, mainTab])
 
   // 切换顶部 Tab：恢复该 Tab 记忆的分组与滚动，不清成「最近」
   const switchMainTab = useCallback(
@@ -350,15 +407,35 @@ export function ExpressionPickerPanel({
   const q = query.trim().toLowerCase()
   const searching = q.length > 0
 
-  // ---- 搜索：仅自定义小表情 / 贴图（name + mark + 包名）----
+  // ---- 搜索：emoji 分组关键词 + 字符；自定义：name + mark + 包名 ----
+  const filteredEmojis = useMemo(() => {
+    if (emoteOnly || !searching || mainTab !== "emotes") return [] as string[]
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const g of EMOJI_GROUPS) {
+      const groupHit =
+        g.label.toLowerCase().includes(q) ||
+        g.keywords.some((k) => k.toLowerCase().includes(q))
+      for (const e of g.emojis) {
+        if (groupHit || e.includes(q)) {
+          if (!seen.has(e)) {
+            seen.add(e)
+            out.push(e)
+          }
+        }
+      }
+    }
+    return out
+  }, [q, searching, mainTab, emoteOnly])
   const filteredEmotes = useMemo(() => {
-    if (!searching || mainTab !== "emotes") return [] as StickerItem[]
+    if (unicodeOnly || !searching || mainTab !== "emotes")
+      return [] as StickerItem[]
     return allItems.filter(
       (i) =>
         i.kind === "emote" &&
         matchesItemSearch(i, packById.get(i.pack_id), q),
     )
-  }, [allItems, packById, q, searching, mainTab])
+  }, [allItems, packById, q, searching, mainTab, unicodeOnly])
 
   const filteredStickers = useMemo(() => {
     if (!searching || mainTab !== "stickers") return [] as StickerItem[]
@@ -381,13 +458,25 @@ export function ExpressionPickerPanel({
       { id: "recent", label: "最近", kind: "recent" },
     ]
     if (mainTab === "emotes") {
-      for (const pack of emotePacks) {
-        list.push({
-          id: `emote-pack:${pack.id}`,
-          label: pack.name,
-          kind: "emote-pack",
-          coverUrl: packCoverUrl(pack, allItems),
-        })
+      if (!emoteOnly) {
+        for (const g of EMOJI_GROUPS) {
+          list.push({
+            id: g.id,
+            label: g.label,
+            kind: "emoji",
+            emojiIcon: g.icon,
+          })
+        }
+      }
+      if (!unicodeOnly) {
+        for (const pack of emotePacks) {
+          list.push({
+            id: `emote-pack:${pack.id}`,
+            label: pack.name,
+            kind: "emote-pack",
+            coverUrl: packCoverUrl(pack, allItems),
+          })
+        }
       }
     } else {
       for (const pack of stickerPacks) {
@@ -400,7 +489,7 @@ export function ExpressionPickerPanel({
       }
     }
     return list
-  }, [mainTab, emotePacks, stickerPacks, allItems])
+  }, [mainTab, emotePacks, stickerPacks, allItems, unicodeOnly, emoteOnly])
 
   // 若记忆的 activeNav 已不存在（包被删），回退最近
   useEffect(() => {
@@ -513,7 +602,14 @@ export function ExpressionPickerPanel({
   }
 
   const recentForTab = useMemo(() => {
-    // 仅自定义条目；系统 emoji 已移除
+    if (unicodeOnly) {
+      return recent.filter((e) => e.kind === "unicode")
+    }
+    if (emoteOnly) {
+      return recent.filter(
+        (e) => e.kind === "item" && e.itemKind === "emote",
+      )
+    }
     if (mainTab === "stickers") {
       return recent.filter(
         (e) => e.kind === "item" && e.itemKind === "sticker",
@@ -522,7 +618,7 @@ export function ExpressionPickerPanel({
     return recent.filter(
       (e) => e.kind === "item" && e.itemKind === "emote",
     )
-  }, [recent, mainTab])
+  }, [recent, mainTab, unicodeOnly, emoteOnly])
 
   const setSectionRef = (id: string) => (el: HTMLElement | null) => {
     sectionRefs.current[id] = el
@@ -543,53 +639,68 @@ export function ExpressionPickerPanel({
       : undefined
 
   return (
-    <div className="flex h-[min(72vh,30rem)] w-[min(100vw-2rem,36rem)] flex-col overflow-hidden">
-      {/* 顶部主分组：默认贴图 */}
-      <div
-        className="flex gap-1 bg-muted/40 px-2 pt-2 pb-1.5"
-        role="tablist"
-        aria-label="表情主分组"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mainTab === "stickers"}
-          onClick={() => switchMainTab("stickers")}
-          className={cn(
-            "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium",
-            "transition-[background-color,color,transform] duration-150",
-            "cursor-pointer active:scale-[0.96]",
-            mainTab === "stickers"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-          )}
+    <div
+      className={cn(
+        "flex w-[min(100vw-2rem,36rem)] flex-col overflow-hidden",
+        unicodeOnly || emoteOnly
+          ? "h-[min(70vh,28rem)]"
+          : "h-[min(78vh,34rem)]",
+      )}
+    >
+      {/* 顶部主分组：默认贴图；unicode/emote 专用模式隐藏 Tab（无描边/分割线） */}
+      {unicodeOnly || emoteOnly ? (
+        <div className="px-3 pt-2.5 pb-1">
+          <p className="text-xs font-medium text-muted-foreground">
+            {emoteOnly ? "选择小表情贴图" : "选择系统表情"}
+          </p>
+        </div>
+      ) : (
+        <div
+          className="flex gap-1 px-2 pt-2 pb-1.5"
+          role="tablist"
+          aria-label="表情主分组"
         >
-          <StickerIcon className="size-4 opacity-80" aria-hidden />
-          贴图
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mainTab === "emotes"}
-          onClick={() => switchMainTab("emotes")}
-          className={cn(
-            "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium",
-            "transition-[background-color,color,transform] duration-150",
-            "cursor-pointer active:scale-[0.96]",
-            mainTab === "emotes"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-          )}
-        >
-          <SmileIcon className="size-4 opacity-80" aria-hidden />
-          小表情
-        </button>
-      </div>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mainTab === "stickers"}
+            onClick={() => setMainTab("stickers")}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium",
+              "transition-[background-color,color,transform] duration-150",
+              "cursor-pointer active:scale-[0.96]",
+              mainTab === "stickers"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+            )}
+          >
+            <StickerIcon className="size-4 opacity-80" aria-hidden />
+            贴图
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mainTab === "emotes"}
+            onClick={() => setMainTab("emotes")}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium",
+              "transition-[background-color,color,transform] duration-150",
+              "cursor-pointer active:scale-[0.96]",
+              mainTab === "emotes"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+            )}
+          >
+            <SmileIcon className="size-4 opacity-80" aria-hidden />
+            表情
+          </button>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* 左侧导航 */}
+        {/* 左侧导航：无侧栏描边，仅用底色层次 */}
         <nav
-          className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto overscroll-contain bg-muted/30 py-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto overscroll-contain py-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           aria-label="表情子分组"
         >
           {navItems.map((item) => {
@@ -636,15 +747,19 @@ export function ExpressionPickerPanel({
 
         {/* 主内容 */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="relative px-2.5 py-2">
+          <div className="relative px-2.5 pt-1.5 pb-1">
             <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-muted-foreground" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={
-                mainTab === "stickers"
-                  ? "搜索贴图名称、mark 或包名…"
-                  : "搜索小表情名称、mark 或包名…"
+                unicodeOnly
+                  ? "搜索系统表情…"
+                  : emoteOnly
+                    ? "搜索小表情名称、mark 或包名…"
+                    : mainTab === "stickers"
+                      ? "搜索贴图名称、mark 或包名…"
+                      : "搜索 emoji、小表情名称 / mark / 包名…"
               }
               className={cn(
                 "h-9 w-full rounded-xl border-0 bg-muted/50 py-1.5 pr-3 pl-9 text-sm",
@@ -657,10 +772,10 @@ export function ExpressionPickerPanel({
 
           <div
             ref={scrollRef}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 pb-2"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 pb-2 pt-0"
           >
             {searching ? (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
                 {mainTab === "emotes" && (
                   <>
                     {filteredEmotes.length > 0 ? (
@@ -671,7 +786,6 @@ export function ExpressionPickerPanel({
                             <NamedCell
                               key={item.id}
                               label={itemDisplayName(item)}
-                              caption={itemDisplayName(item)}
                               onClick={() => pickItem(item)}
                               onHoverEnter={() =>
                                 setHover({
@@ -684,7 +798,7 @@ export function ExpressionPickerPanel({
                               <StickerMedia
                                 src={item.asset_url}
                                 alt=""
-                                className="size-9 object-contain"
+                                className="size-9 rounded-lg object-contain"
                                 draggable={false}
                               />
                             </NamedCell>
@@ -701,37 +815,27 @@ export function ExpressionPickerPanel({
                 {mainTab === "stickers" && (
                   <>
                     {filteredStickers.length > 0 ? (
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className={STICKER_GRID_CLASS}>
                         {filteredStickers.map((item) => (
-                          <button
+                          <FlatMediaCell
                             key={item.id}
-                            type="button"
-                            data-expr-cell
+                            label={itemDisplayName(item)}
                             onClick={() => pickItem(item)}
-                            onMouseEnter={() =>
+                            onHoverEnter={() =>
                               setHover({
                                 kind: "item",
                                 item,
                                 pack: packById.get(item.pack_id),
                               })
                             }
-                            aria-label={itemDisplayName(item)}
-                            className={cn(
-                              "flex flex-col items-center gap-1.5 rounded-2xl p-2",
-                              "bg-muted/40 transition-[background-color,transform] duration-150",
-                              "hover:bg-muted/70 active:scale-[0.96] cursor-pointer",
-                            )}
                           >
                             <StickerMedia
-                      src={item.asset_url}
-                      alt=""
-                      className="size-[4.5rem] object-contain"
-                      draggable={false}
-                    />
-                            <span className="max-w-full truncate text-[11px] text-muted-foreground">
-                              {itemDisplayName(item)}
-                            </span>
-                          </button>
+                              src={item.asset_url}
+                              alt=""
+                              className="size-full object-contain p-px"
+                              draggable={false}
+                            />
+                          </FlatMediaCell>
                         ))}
                       </div>
                     ) : (
@@ -743,12 +847,12 @@ export function ExpressionPickerPanel({
                 )}
               </div>
             ) : (
-              <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-0">
                 {/* 最近 */}
                 <section
                   ref={setSectionRef("recent")}
                   data-section="recent"
-                  className="scroll-mt-1"
+                  className="scroll-mt-0"
                 >
                   <SectionTitle>最近</SectionTitle>
                   {recentForTab.length === 0 ? (
@@ -756,38 +860,30 @@ export function ExpressionPickerPanel({
                       还没有最近使用
                     </p>
                   ) : mainTab === "stickers" ? (
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className={STICKER_GRID_CLASS}>
                       {recentForTab.map((entry, i) => {
                         if (entry.kind !== "item") return null
                         const item = resolveRecentItem(entry)
                         return (
-                          <button
+                          <FlatMediaCell
                             key={`r-${entry.itemId}-${i}`}
-                            type="button"
-                            data-expr-cell
+                            label={entry.name || entry.mark}
                             onClick={() => pickItem(item)}
-                            onMouseEnter={() =>
+                            onHoverEnter={() =>
                               setHover({
                                 kind: "item",
                                 item,
                                 pack: packById.get(item.pack_id),
                               })
                             }
-                            className={cn(
-                              "flex flex-col items-center gap-1.5 rounded-2xl p-2",
-                              "bg-muted/40 hover:bg-muted/70 active:scale-[0.96] cursor-pointer",
-                            )}
                           >
                             <StickerMedia
-                      src={entry.assetUrl}
-                      alt=""
-                      className="size-[4.5rem] object-contain"
-                      draggable={false}
-                    />
-                            <span className="max-w-full truncate text-[11px] text-muted-foreground">
-                              {entry.name || entry.mark}
-                            </span>
-                          </button>
+                              src={entry.assetUrl}
+                              alt=""
+                              className="size-full object-contain p-px"
+                              draggable={false}
+                            />
+                          </FlatMediaCell>
                         )
                       })}
                     </div>
@@ -799,7 +895,6 @@ export function ExpressionPickerPanel({
                           <NamedCell
                             key={`r-i-${entry.itemId}-${i}`}
                             label={entry.name || entry.mark}
-                            caption={entry.name || entry.mark}
                             onClick={() => pickItem(resolveRecentItem(entry))}
                             onHoverEnter={() => {
                               const item = resolveRecentItem(entry)
@@ -823,53 +918,79 @@ export function ExpressionPickerPanel({
                   )}
                 </section>
 
-                {/* 小表情 Tab：仅自定义包 */}
+                {/* 表情 Tab：Unicode + 小表情包；emote 模式仅小表情 */}
                 {mainTab === "emotes" && (
                   <>
-                    {emotePacks.map((pack) => {
-                      const items = emotesByPack.get(pack.id) ?? []
-                      const sectionId = `emote-pack:${pack.id}`
-                      return (
+                    {!emoteOnly &&
+                      EMOJI_GROUPS.map((group) => (
                         <section
-                          key={pack.id}
-                          ref={setSectionRef(sectionId)}
-                          data-section={sectionId}
-                          className="scroll-mt-1"
+                          key={group.id}
+                          ref={setSectionRef(group.id)}
+                          data-section={group.id}
+                          className="scroll-mt-0"
                         >
-                          <SectionTitle>{pack.name}</SectionTitle>
-                          {items.length === 0 ? (
-                            <p className="px-1.5 py-4 text-xs text-muted-foreground">
-                              包内暂无条目
-                            </p>
-                          ) : (
-                            <div className="grid grid-cols-8 gap-1">
-                              {items.map((item) => (
-                                <NamedCell
-                                  key={item.id}
-                                  label={itemDisplayName(item)}
-                                  caption={itemDisplayName(item)}
-                                  onClick={() => pickItem(item)}
-                                  onHoverEnter={() =>
-                                    setHover({ kind: "item", item, pack })
-                                  }
-                                >
-                                  <StickerMedia
-                      src={item.asset_url}
-                      alt=""
-                      className="size-9 object-contain"
-                      draggable={false}
-                    />
-                                </NamedCell>
-                              ))}
-                            </div>
-                          )}
+                          <SectionTitle>{group.label}</SectionTitle>
+                          <div className="grid grid-cols-8 gap-1">
+                            {group.emojis.map((emoji) => (
+                              <NamedCell
+                                key={`${group.id}-${emoji}`}
+                                label={emoji}
+                                onClick={() => pickUnicode(emoji)}
+                                onHoverEnter={() =>
+                                  setHover({ kind: "unicode", emoji })
+                                }
+                              >
+                                {emoji}
+                              </NamedCell>
+                            ))}
+                          </div>
                         </section>
-                      )
-                    })}
+                      ))}
 
-                    {emotePacks.length === 0 && (
+                    {!unicodeOnly &&
+                      emotePacks.map((pack) => {
+                        const items = emotesByPack.get(pack.id) ?? []
+                        const sectionId = `emote-pack:${pack.id}`
+                        return (
+                          <section
+                            key={pack.id}
+                            ref={setSectionRef(sectionId)}
+                            data-section={sectionId}
+                            className="scroll-mt-0"
+                          >
+                            <SectionTitle>{pack.name}</SectionTitle>
+                            {items.length === 0 ? (
+                              <p className="px-1.5 py-4 text-xs text-muted-foreground">
+                                包内暂无条目
+                              </p>
+                            ) : (
+                              <div className="grid grid-cols-8 gap-1">
+                                {items.map((item) => (
+                                  <NamedCell
+                                    key={item.id}
+                                    label={itemDisplayName(item)}
+                                    onClick={() => pickItem(item)}
+                                    onHoverEnter={() =>
+                                      setHover({ kind: "item", item, pack })
+                                    }
+                                  >
+                                    <StickerMedia
+                                      src={item.asset_url}
+                                      alt=""
+                                      className="size-9 rounded-lg object-contain"
+                                      draggable={false}
+                                    />
+                                  </NamedCell>
+                                ))}
+                              </div>
+                            )}
+                          </section>
+                        )
+                      })}
+
+                    {!unicodeOnly && emotePacks.length === 0 && (
                       <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                        暂无小表情包。可在「设置 → 我的贴图库」创建。
+                        暂无小表情包。可在「设置 → 我的贴图库」创建 kind=小表情 的包。
                       </p>
                     )}
                   </>
@@ -893,7 +1014,7 @@ export function ExpressionPickerPanel({
                           key={pack.id}
                           ref={setSectionRef(sectionId)}
                           data-section={sectionId}
-                          className="scroll-mt-1"
+                          className="scroll-mt-0"
                         >
                           <SectionTitle>
                             {pack.name}
@@ -908,33 +1029,23 @@ export function ExpressionPickerPanel({
                               包内暂无条目
                             </p>
                           ) : (
-                            <div className="grid grid-cols-4 gap-2">
+                            <div className={STICKER_GRID_CLASS}>
                               {items.map((item) => (
-                                <button
+                                <FlatMediaCell
                                   key={item.id}
-                                  type="button"
-                                  data-expr-cell
+                                  label={itemDisplayName(item)}
                                   onClick={() => pickItem(item)}
-                                  onMouseEnter={() =>
+                                  onHoverEnter={() =>
                                     setHover({ kind: "item", item, pack })
                                   }
-                                  aria-label={itemDisplayName(item)}
-                                  className={cn(
-                                    "flex flex-col items-center gap-1.5 rounded-2xl p-2",
-                                    "bg-muted/40 transition-[background-color,transform] duration-150",
-                                    "hover:bg-muted/70 active:scale-[0.96] cursor-pointer",
-                                  )}
                                 >
                                   <StickerMedia
-                      src={item.asset_url}
-                      alt=""
-                      className="size-[4.5rem] object-contain"
-                      draggable={false}
-                    />
-                                  <span className="max-w-full truncate text-[11px] text-muted-foreground">
-                                    {itemDisplayName(item)}
-                                  </span>
-                                </button>
+                                    src={item.asset_url}
+                                    alt=""
+                                    className="size-full object-contain p-px"
+                                    draggable={false}
+                                  />
+                                </FlatMediaCell>
                               ))}
                             </div>
                           )}
@@ -949,9 +1060,9 @@ export function ExpressionPickerPanel({
         </div>
       </div>
 
-      {/* 底部预览栏：失焦保留最后悬停项 */}
+      {/* 底部预览栏：失焦保留最后悬停项；无顶部分割线 */}
       <div
-        className="flex min-h-[3.75rem] items-center gap-3 bg-muted/45 px-3 py-2.5"
+        className="flex min-h-[3.75rem] items-center gap-3 bg-muted/30 px-3 py-2.5"
         aria-live="polite"
       >
         {hover ? (
@@ -1030,7 +1141,7 @@ export function ExpressionPickerPopover({
   side?: "top" | "bottom" | "left" | "right"
   align?: "start" | "center" | "end"
   guildId?: string
-  mode?: "composer" | "reaction"
+  mode?: "composer" | "reaction" | "unicode" | "emote"
 }) {
   const [innerOpen, setInnerOpen] = useState(false)
   const controlled = open !== undefined
@@ -1044,7 +1155,7 @@ export function ExpressionPickerPopover({
     <Popover open={actualOpen} onOpenChange={setOpen}>
       <PopoverTrigger render={children} />
       <PopoverContent
-        className="w-auto overflow-hidden rounded-2xl border-0 p-0 shadow-lg ring-0"
+        className="w-auto overflow-hidden rounded-2xl border-0 p-0 shadow-xl ring-0 dark:ring-0"
         side={side}
         align={align}
       >
@@ -1079,7 +1190,7 @@ export function EmojiPickerPopover({
   side?: "top" | "bottom" | "left" | "right"
   align?: "start" | "center" | "end"
   guildId?: string
-  mode?: "composer" | "reaction"
+  mode?: "composer" | "reaction" | "unicode" | "emote"
   onExpressionPick?: (pick: ExpressionPick) => void
 }) {
   return (

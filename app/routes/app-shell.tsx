@@ -35,6 +35,7 @@ import { initDockBadge } from "~/lib/notifications"
 import { initSettingsSync } from "~/lib/settings-sync"
 import { bindGatewayToStores } from "~/stores/gateway-bindings"
 import { useGuildsStore } from "~/stores/guilds"
+import { initActivityAutoDetect } from "~/lib/activity/auto-detect"
 import { initIdleWatcher } from "~/stores/presence"
 import { useReadStatesStore } from "~/stores/read-states"
 import { useSettingsStore } from "~/stores/settings"
@@ -53,6 +54,7 @@ export default function AppShell() {
     gateway.connect()
     initSettingsSync()
     initIdleWatcher()
+    initActivityAutoDetect()
     initDockBadge()
     void useGuildsStore
       .getState()

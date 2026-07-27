@@ -15,12 +15,15 @@ export type FriendRequestFrom =
 
 export type DmFrom = "everyone" | "friends" | "mutual_guilds" | "nobody"
 
+export type ShowActivityTo = "everyone" | "friends" | "nobody"
+
 export type PrivacySettings = {
   friend_request_from: FriendRequestFrom
   dm_from: DmFrom
   message_request_filter: boolean
   show_mutual_guilds: boolean
   public_profile_to_non_friends: boolean
+  show_activity_to: ShowActivityTo
   guild_overrides: Record<string, { allow_dm: boolean }>
 }
 
@@ -33,6 +36,7 @@ export const patchPrivacy = (
     message_request_filter: boolean
     show_mutual_guilds: boolean
     public_profile_to_non_friends: boolean
+    show_activity_to: ShowActivityTo
   }>,
 ) =>
   api<PrivacySettings>("/users/@me/privacy", {

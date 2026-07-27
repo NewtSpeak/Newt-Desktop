@@ -33,7 +33,13 @@ import { useChannelsStore } from "./channels"
 import { useGuildsStore } from "./guilds"
 import { useMembersStore } from "./members"
 import { useMessagesStore } from "./messages"
-import { reportSelfPresence, usePresenceStore } from "./presence"
+import {
+  effectiveSelfActivities,
+  effectiveSelfCustom,
+  effectiveSelfStatus,
+  reportSelfPresence,
+  usePresenceStore,
+} from "./presence"
 import {
   countIdsAfterLastRead,
   messageMentionsSelf,
@@ -105,6 +111,20 @@ export function bindGatewayToStores() {
   if (bound) return
   bound = true
 
+  // IDENTIFY 携带当前有效状态/自定义/活动，避免隐身先闪 online、活动重连丢失
+  gateway.setIdentifyStatusProvider(() => effectiveSelfStatus())
+  gateway.setIdentifyExtrasProvider(() => {
+    const custom = effectiveSelfCustom()
+    return {
+      custom: {
+        text: custom?.text ?? "",
+        emoji: custom?.emoji ?? "",
+        expiresAt: custom?.expiresAt ?? null,
+      },
+      activities: effectiveSelfActivities(),
+    }
+  })
+
   gateway.onStatusChange((status) => {
     useUIStore.getState().setGatewayStatus(status)
   })
@@ -166,6 +186,12 @@ export function bindGatewayToStores() {
         messageRequestFilter: ready.privacy.message_request_filter,
         showMutualGuilds: ready.privacy.show_mutual_guilds,
         publicProfileToNonFriends: ready.privacy.public_profile_to_non_friends,
+        showActivityTo:
+          ready.privacy.show_activity_to === "everyone" ||
+          ready.privacy.show_activity_to === "nobody" ||
+          ready.privacy.show_activity_to === "friends"
+            ? ready.privacy.show_activity_to
+            : "friends",
       })
     }
     if (ready.private_channels) {
@@ -511,6 +537,10 @@ export function bindGatewayToStores() {
       banner_url: payload.banner,
       bio: payload.bio,
     })
+    // 公开资料缓存失效，好友卡等下次拉取最新 bio/显示名
+    void import("~/lib/public-profile-cache").then((m) =>
+      m.invalidatePublicProfile(payload.id),
+    )
   })
   gateway.subscribe(GatewayEvents.GuildMemberRemove, (payload) => {
     const selfId = useAuthStore.getState().user?.id
