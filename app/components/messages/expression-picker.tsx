@@ -18,6 +18,8 @@ import { GuildAvatar } from "~/components/guild-avatar"
 import { UserProfilePopover } from "~/components/user-profile-popover"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover"
+import { EMOJI_GROUPS } from "~/lib/emoji/data"
+import { emojiShortcode } from "~/lib/emoji/shortcodes"
 import type { StickerItem, StickerPack } from "~/lib/api/types"
 import { StickerMedia } from "~/components/messages/sticker-media"
 import {
@@ -46,11 +48,17 @@ type MainTab = ExpressionPickerMainTab
 
 type NavId = string
 
-type HoverPreview = {
-  kind: "item"
-  item: StickerItem
-  pack?: StickerPack
-} | null
+type HoverPreview =
+  | {
+      kind: "unicode"
+      emoji: string
+    }
+  | {
+      kind: "item"
+      item: StickerItem
+      pack?: StickerPack
+    }
+  | null
 
 function packCoverUrl(
   pack: StickerPack,
@@ -446,13 +454,14 @@ export function ExpressionPickerPanel({
     )
   }, [allItems, packById, q, searching, mainTab])
 
-  // 左侧导航：最近 + 包（无系统 emoji 分组）
+  // 左侧导航：最近 + emoji 分组 + 包
   const navItems = useMemo(() => {
     type NavEntry = {
       id: NavId
       label: string
-      kind: "recent" | "emote-pack" | "sticker-pack"
+      kind: "recent" | "emoji" | "emote-pack" | "sticker-pack"
       coverUrl?: string
+      emojiIcon?: string
     }
     const list: NavEntry[] = [
       { id: "recent", label: "最近", kind: "recent" },
@@ -553,6 +562,18 @@ export function ExpressionPickerPanel({
     }, 400)
   }
 
+  const pickUnicode = useCallback(
+    (emoji: string) => {
+      setRecent(pushRecentExpression({ kind: "unicode", emoji }))
+      persistUi({
+        scrollTop: scrollRef.current?.scrollTop ?? 0,
+        activeNav,
+      })
+      onPick({ type: "unicode", emoji })
+    },
+    [onPick, persistUi, activeNav],
+  )
+
   const pickItem = useCallback(
     (item: StickerItem) => {
       setRecent(
@@ -624,17 +645,24 @@ export function ExpressionPickerPanel({
     sectionRefs.current[id] = el
   }
 
-  const hoverNameLine = hover ? customColonName(hover.item) : ""
+  const hoverNameLine = (() => {
+    if (!hover) return ""
+    if (hover.kind === "unicode") return emojiShortcode(hover.emoji)
+    return customColonName(hover.item)
+  })()
 
   const hoverSourceLine = (() => {
     if (!hover) return ""
+    if (hover.kind === "unicode") return "来源：系统 Emoji"
     const packName = hover.pack?.name
     if (packName) return `来源：${packName}`
     return hover.item.kind === "sticker" ? "来源：贴图" : "来源：小表情"
   })()
 
   const hoverGuild =
-    hover?.pack?.scope === "guild" && hover.pack.guild_id
+    hover?.kind === "item" &&
+    hover.pack?.scope === "guild" &&
+    hover.pack.guild_id
       ? guilds.find((g) => g.id === hover.pack!.guild_id)
       : undefined
 
@@ -725,6 +753,9 @@ export function ExpressionPickerPanel({
               >
                 {item.kind === "recent" && (
                   <ClockIcon className="size-4" aria-hidden />
+                )}
+                {item.kind === "emoji" && (
+                  <span className="text-lg leading-none">{item.emojiIcon}</span>
                 )}
                 {(item.kind === "emote-pack" ||
                   item.kind === "sticker-pack") &&
@@ -890,6 +921,20 @@ export function ExpressionPickerPanel({
                   ) : (
                     <div className="grid grid-cols-8 gap-1">
                       {recentForTab.map((entry, i) => {
+                        if (entry.kind === "unicode") {
+                          return (
+                            <NamedCell
+                              key={`r-u-${entry.emoji}-${i}`}
+                              label={entry.emoji}
+                              onClick={() => pickUnicode(entry.emoji)}
+                              onHoverEnter={() =>
+                                setHover({ kind: "unicode", emoji: entry.emoji })
+                              }
+                            >
+                              {entry.emoji}
+                            </NamedCell>
+                          )
+                        }
                         if (entry.kind !== "item") return null
                         return (
                           <NamedCell
@@ -1068,12 +1113,16 @@ export function ExpressionPickerPanel({
         {hover ? (
           <>
             <div className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-background/70">
-              <StickerMedia
-                src={hover.item.asset_url}
-                alt=""
-                className="size-10 object-contain"
-                draggable={false}
-              />
+              {hover.kind === "unicode" ? (
+                <span className="text-3xl leading-none">{hover.emoji}</span>
+              ) : (
+                <StickerMedia
+                  src={hover.item.asset_url}
+                  alt=""
+                  className="size-10 object-contain"
+                  draggable={false}
+                />
+              )}
             </div>
 
             <div className="min-w-0 flex-1">
@@ -1086,7 +1135,11 @@ export function ExpressionPickerPanel({
             </div>
 
             <div className="flex shrink-0 items-center justify-end pl-2">
-              {hoverGuild ? (
+              {hover.kind === "unicode" ? (
+                <span className="rounded-md bg-background/50 px-2 py-1 text-[11px] text-muted-foreground">
+                  系统
+                </span>
+              ) : hoverGuild ? (
                 <div
                   className="flex items-center gap-1.5"
                   title={hoverGuild.name}

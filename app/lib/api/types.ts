@@ -392,6 +392,7 @@ export type Message = {
    * 此类消息不计未读、不可回复/反应、刷新后仍在（历史按 viewer 过滤）。
    */
   visible_to?: string[]
+  /**
    * 限定可见身份组；空/省略 = 公开（频道 VIEW 即可）。
    * 非空时仅作者、持有任一角色的成员、MANAGE_MESSAGES 可见。
    */

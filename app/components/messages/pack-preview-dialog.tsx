@@ -26,6 +26,7 @@ import type { StickerPack } from "~/lib/api/types"
 import { loadPublicProfile } from "~/lib/public-profile-cache"
 import { itemDisplayName } from "~/lib/stickers/format"
 import { nameInitials, resolveProfileAssetUrl } from "~/lib/user-display"
+import { cn } from "~/lib/utils"
 import { useStickersStore } from "~/stores/stickers"
 
 /** 包作者：头像 + 名称，点击打开资料卡 */
