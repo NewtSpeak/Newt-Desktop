@@ -21,6 +21,13 @@ if (import.meta.env.DEV && typeof document !== "undefined") {
   import("react-grab")
 }
 
+/** 站点图标：来自 Newt-assets/logo.png 生成 */
+export const links: Route.LinksFunction = () => [
+  { rel: "icon", href: "/favicon.ico", sizes: "any" },
+  { rel: "icon", type: "image/png", href: "/favicon.png" },
+  { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
+]
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
