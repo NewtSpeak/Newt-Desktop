@@ -118,7 +118,7 @@ function normalizeBaseUrl(raw: string): string | null {
  *     2. {服务器域名}/invite/{code} —— 无协议，补法同上；
  *     3. {scheme}://invite?code={code}&server={url编码的服务器基址}&guild={guildId}
  *        深链（guild 参数可选）。
- * 深链 scheme 由服务端门户配置（默认 owlspeak），手动解析避免各 WebView
+ * 深链 scheme 由服务端门户配置（默认 newtspeak），手动解析避免各 WebView
  * 对非标准 scheme 的 URL 解析差异。无法识别时返回 null。
  */
 export function parseInviteLink(input: string): ParsedInviteLink | null {

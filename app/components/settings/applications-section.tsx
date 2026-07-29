@@ -113,7 +113,7 @@ export function ApplicationsSection() {
       <SectionTitle>已授权应用</SectionTitle>
       <p className="mb-4 text-sm text-muted-foreground">
         Owl CLI、MCP 与 AI 助手通过 OAuth 获得的访问。吊销后需重新{" "}
-        <code className="text-xs">owl login</code>。带{" "}
+        <code className="text-xs">newt login</code>。带{" "}
         <span className="text-destructive">platform.*</span> 的授权可管理平台级资源，请谨慎保留。
       </p>
 
@@ -191,7 +191,7 @@ export function ApplicationsSection() {
           <GroupLabel id="apps-revoke-all">全部吊销</GroupLabel>
           <SettingRow
             label="吊销全部 CLI / AI 授权"
-            description="所有 owl login 会话将立即失效"
+            description="所有 newt login 会话将立即失效"
           >
             <Button
               variant="destructive"

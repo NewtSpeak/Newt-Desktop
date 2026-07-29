@@ -343,7 +343,7 @@ const EXEC_BLACKLIST = new Set([
   "bash",
   "node",
   "node.exe",
-  "owl-desktop",
+  "newt-desktop",
   "owl desktop",
   "app",
   "electron",

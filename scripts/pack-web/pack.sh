@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="${VERSION:-0.0.0}"
 OUT_DIR="${OUT_DIR:-$ROOT/dist-web}"
-STAGE="$OUT_DIR/owl-desktop-web-${VERSION}"
-ZIP_NAME="owl-desktop-web-${VERSION}.zip"
+STAGE="$OUT_DIR/newt-desktop-web-${VERSION}"
+ZIP_NAME="newt-desktop-web-${VERSION}.zip"
 
 if [[ ! -f "$ROOT/build/client/index.html" ]]; then
   echo "missing build/client/index.html — run bun run build first" >&2
@@ -24,12 +24,12 @@ mkdir -p "$OUT_DIR"
   rm -f "$ZIP_NAME"
   # 进 STAGE 父目录打包，使 zip 内带顶层目录
   if command -v zip >/dev/null 2>&1; then
-    zip -r "$ZIP_NAME" "owl-desktop-web-${VERSION}"
+    zip -r "$ZIP_NAME" "newt-desktop-web-${VERSION}"
   else
     python3 - <<PY
 import shutil
-shutil.make_archive("owl-desktop-web-${VERSION}", "zip", ".", "owl-desktop-web-${VERSION}")
-print("created owl-desktop-web-${VERSION}.zip")
+shutil.make_archive("newt-desktop-web-${VERSION}", "zip", ".", "newt-desktop-web-${VERSION}")
+print("created newt-desktop-web-${VERSION}.zip")
 PY
   fi
   sha256sum "$ZIP_NAME" | tee "${ZIP_NAME}.sha256"

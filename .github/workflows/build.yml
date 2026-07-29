@@ -87,7 +87,7 @@ jobs:
       - name: Upload bundle artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: owl-desktop-${{ matrix.platform }}-${{ github.sha }}
+          name: newt-desktop-${{ matrix.platform }}-${{ github.sha }}
           path: |
             src-tauri/target/release/bundle/**
             src-tauri/target/universal-apple-darwin/release/bundle/**

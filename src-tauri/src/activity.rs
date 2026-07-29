@@ -288,7 +288,7 @@ fn macos_foreground() -> Option<ForegroundApp> {
   };
   // 过滤 Owl 自身
   let low = proc.to_lowercase();
-  if low.contains("owl-desktop") || low == "owl desktop" {
+  if low.contains("newt-desktop") || low == "owl desktop" {
     return None;
   }
   let display = if !title.is_empty() && title.len() < 80 {
@@ -496,7 +496,7 @@ Write-Output ($path + $us + $name + $us + $title)
   }
   let file = basename(path);
   let low = file.to_lowercase();
-  if low.contains("owl-desktop") || low == "explorer.exe" {
+  if low.contains("newt-desktop") || low == "explorer.exe" {
     return None;
   }
   let display = if !proc.is_empty() {

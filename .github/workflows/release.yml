@@ -81,10 +81,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-desktop-web-${{ needs.resolve-version.outputs.version }}
+          name: newt-desktop-web-${{ needs.resolve-version.outputs.version }}
           path: |
-            dist-web/owl-desktop-web-*.zip
-            dist-web/owl-desktop-web-*.sha256
+            dist-web/newt-desktop-web-*.zip
+            dist-web/newt-desktop-web-*.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -214,15 +214,15 @@ jobs:
           for f in collected/*; do
             [[ -f "$f" ]] || continue
             base="$(basename "$f")"
-            if [[ "$base" != owl-desktop-* ]]; then
-              mv -v "$f" "collected/owl-desktop-${VERSION}-${{ matrix.name }}-${base}"
+            if [[ "$base" != newt-desktop-* ]]; then
+              mv -v "$f" "collected/newt-desktop-${VERSION}-${{ matrix.name }}-${base}"
             fi
           done
           ls -lah collected
 
       - uses: actions/upload-artifact@v4
         with:
-          name: owl-desktop-${{ matrix.name }}-${{ needs.resolve-version.outputs.version }}
+          name: newt-desktop-${{ matrix.name }}-${{ needs.resolve-version.outputs.version }}
           path: collected/*
           if-no-files-found: error
           retention-days: 14
@@ -240,7 +240,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
-          pattern: owl-desktop-*
+          pattern: newt-desktop-*
           merge-multiple: true
 
       - name: Prepare checksums & list
@@ -248,8 +248,8 @@ jobs:
         run: |
           ls -lahR
           find . -type f ! -name '*.sha256' -print0 | sort -z | xargs -0 sha256sum \
-            > "SHA256SUMS-owl-desktop-${{ needs.resolve-version.outputs.version }}.txt"
-          cat "SHA256SUMS-owl-desktop-${{ needs.resolve-version.outputs.version }}.txt"
+            > "SHA256SUMS-newt-desktop-${{ needs.resolve-version.outputs.version }}.txt"
+          cat "SHA256SUMS-newt-desktop-${{ needs.resolve-version.outputs.version }}.txt"
 
       - name: Write extra notes
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.extra_notes != '' }}
@@ -273,7 +273,7 @@ jobs:
             echo "| 类型 | 说明 |"
             echo "|------|------|"
             echo "| 桌面安装包 | Windows / Linux / macOS（Universal） |"
-            echo "| \`owl-desktop-web-*.zip\` | **纯前端静态包**，可独立部署到 Nginx / CDN / 任意静态托管 |"
+            echo "| \`newt-desktop-web-*.zip\` | **纯前端静态包**，可独立部署到 Nginx / CDN / 任意静态托管 |"
             echo
           } | tee RELEASE_BODY.md
 

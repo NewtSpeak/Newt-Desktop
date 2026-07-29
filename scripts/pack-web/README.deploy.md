@@ -12,7 +12,7 @@
 server {
   listen 80;
   server_name chat.example.com;
-  root /var/www/owl-desktop-web;
+  root /var/www/newt-desktop-web;
   index index.html;
 
   # SPA：未知路径回退 index.html
