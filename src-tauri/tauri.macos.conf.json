@@ -4,7 +4,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Owl Desktop",
+        "title": "Newt Desktop",
         "width": 1280,
         "height": 720,
         "minWidth": 940,

@@ -44,7 +44,7 @@ export default function App() {
   useEffect(() => {
     initAppearance()
   }, [])
-  // Tauri：owlspeak://oauth/* 深链 → 授权页
+  // Tauri：newtspeak://oauth/* 深链 → 授权页
   useDeepLinkNavigation()
   return (
     <>

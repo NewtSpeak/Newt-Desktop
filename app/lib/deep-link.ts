@@ -1,4 +1,4 @@
-// 解析 owlspeak:// 深链，导航到对应路由。
+// 解析 newtspeak:// 深链，导航到对应路由。
 // 支持：oauth/device、oauth/authorize、register、invite（既有）。
 
 import {
@@ -14,14 +14,14 @@ export type DeepLinkAction =
   | null
 
 /**
- * 解析任意深链 URL（owlspeak://… 或 https 邀请链）。
+ * 解析任意深链 URL（newtspeak://… 或 https 邀请链）。
  * 返回前端应执行的导航动作。
  */
 export function parseDeepLink(raw: string): DeepLinkAction {
   const input = raw.trim()
   if (!input) return null
 
-  // 先尝试邀请/注册（含 owlspeak://invite|register）
+  // 先尝试邀请/注册（含 newtspeak://invite|register）
   const invite = parseInviteLink(input)
   if (invite) {
     // 交给现有添加服务器流程：用 query 传参到首页
@@ -33,7 +33,7 @@ export function parseDeepLink(raw: string): DeepLinkAction {
     return { kind: "navigate", path: `/?${q.toString()}` }
   }
 
-  // owlspeak://oauth/device?user_code=&server=
+  // newtspeak://oauth/device?user_code=&server=
   const oauthDevice = input.match(
     /^(?!https?:)[a-z][a-z0-9+.-]*:\/\/oauth\/device\/?(?:\?(.*))?$/i,
   )
@@ -45,7 +45,7 @@ export function parseDeepLink(raw: string): DeepLinkAction {
     return { kind: "oauth-device", userCode, server }
   }
 
-  // owlspeak://oauth/authorize?... 原样带到 /oauth/authorize
+  // newtspeak://oauth/authorize?... 原样带到 /oauth/authorize
   const oauthAuth = input.match(
     /^(?!https?:)[a-z][a-z0-9+.-]*:\/\/oauth\/authorize\/?(?:\?(.*))?$/i,
   )

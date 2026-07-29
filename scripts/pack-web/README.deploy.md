@@ -1,4 +1,4 @@
-# Owl Desktop Web 前端包
+# Newt Desktop Web 前端包
 
 本压缩包是 **Newt-Desktop** 的纯前端静态构建产物（SPA，`ssr: false`），可独立部署到任意静态站点托管。
 

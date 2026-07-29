@@ -1,7 +1,7 @@
 // 敏感值（refresh token 等）的安全存储封装。
 //
 // Tauri 桌面环境：走 Rust 侧 keyring command（macOS Keychain / Windows
-// Credential Manager / Linux Secret Service，service 名 com.owlspeak.desktop）。
+// Credential Manager / Linux Secret Service，service 名 com.newtspeak.desktop）。
 // 浏览器 dev 环境：回退 localStorage（同名键），仅供开发调试。
 
 import { invoke } from "@tauri-apps/api/core"

@@ -30,7 +30,7 @@ function isInsideSrcTauri(filePath: string): boolean {
  */
 function installFsWatchGuard(): void {
   const original = fs.watch
-  if ((original as typeof original & { __owlspeakPatched?: boolean }).__owlspeakPatched) {
+  if ((original as typeof original & { __newtspeakPatched?: boolean }).__newtspeakPatched) {
     return
   }
 
@@ -77,9 +77,9 @@ function installFsWatchGuard(): void {
       if (isBenignWatchError(err)) return makeNoopWatcher()
       throw err
     }
-  }) as typeof fs.watch & { __owlspeakPatched?: boolean }
+  }) as typeof fs.watch & { __newtspeakPatched?: boolean }
 
-  patched.__owlspeakPatched = true
+  patched.__newtspeakPatched = true
   fs.watch = patched
 }
 
@@ -88,7 +88,7 @@ installFsWatchGuard()
 /** 主 dev server：主动 unwatch src-tauri，并兜底吞掉 watcher EBUSY */
 function tauriWatchGuardPlugin(): Plugin {
   return {
-    name: "owlspeak:tauri-watch-guard",
+    name: "newtspeak:tauri-watch-guard",
     configureServer(server) {
       server.watcher.unwatch(srcTauriDir)
       server.watcher.unwatch(path.join(srcTauriDir, "**"))
@@ -109,7 +109,7 @@ function tauriWatchGuardPlugin(): Plugin {
  */
 function chromeDevtoolsJsonPlugin(): Plugin {
   return {
-    name: "owlspeak:chrome-devtools-json",
+    name: "newtspeak:chrome-devtools-json",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const pathname = (req.url ?? "").split("?")[0] ?? ""

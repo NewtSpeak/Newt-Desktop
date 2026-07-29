@@ -2,7 +2,7 @@
 // （macOS Keychain / Windows Credential Manager / Linux Secret Service）。
 // service 固定为应用标识，key 作为凭证的 user 字段。
 //
-// 深链：tauri-plugin-deep-link 注册 owlspeak://；
+// 深链：tauri-plugin-deep-link 注册 newtspeak://；
 // 单实例：二次启动/深链唤起时聚焦已有窗口，并把 argv 中的 URL 发给前端。
 
 mod activity;
@@ -10,7 +10,7 @@ mod discord_rpc;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-const SECURE_STORAGE_SERVICE: &str = "com.owlspeak.desktop";
+const SECURE_STORAGE_SERVICE: &str = "com.newtspeak.desktop";
 
 fn keyring_entry(key: &str) -> Result<keyring::Entry, String> {
   keyring::Entry::new(SECURE_STORAGE_SERVICE, key).map_err(|e| e.to_string())
@@ -52,7 +52,7 @@ fn forward_deep_link_args(app: &AppHandle, argv: &[String]) {
     .filter(|a| {
       let s = a.as_str();
       s.contains("://")
-        && (s.starts_with("owlspeak:")
+        && (s.starts_with("newtspeak:")
           || s.starts_with("http://")
           || s.starts_with("https://"))
     })

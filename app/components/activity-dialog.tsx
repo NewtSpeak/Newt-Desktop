@@ -346,7 +346,7 @@ export function ActivityDialog({
             </div>
           ) : (
             <p className="rounded-xl border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
-              自动检测仅在 Owl Desktop 客户端可用；网页端请手填活动。
+              自动检测仅在 Newt Desktop 客户端可用；网页端请手填活动。
             </p>
           )}
           {/* 封面预览 */}

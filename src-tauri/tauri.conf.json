@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "owl-desktop",
+  "productName": "newt-desktop",
   "version": "0.1.0",
-  "identifier": "com.owlspeak.desktop",
+  "identifier": "com.newtspeak.desktop",
   "build": {
     "frontendDist": "../build/client",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Owl Desktop",
+        "title": "Newt Desktop",
         "width": 1280,
         "height": 720,
         "minWidth": 940,
@@ -49,7 +49,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["owlspeak"]
+        "schemes": ["newtspeak"]
       }
     }
   }

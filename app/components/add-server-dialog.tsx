@@ -137,7 +137,7 @@ export function AddServerDialog({
             <Input
               id="server-invite-link"
               autoFocus
-              placeholder="https://example.com/register/xxxx、…/invite/xxxx 或 owlspeak:// 链接"
+              placeholder="https://example.com/register/xxxx、…/invite/xxxx 或 newtspeak:// 链接"
               value={link}
               onChange={(event) => setLink(event.target.value)}
               disabled={submitting}

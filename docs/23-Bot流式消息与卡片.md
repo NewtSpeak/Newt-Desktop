@@ -144,8 +144,8 @@ MESSAGE_UPDATE      d = 同一终态 messageView（兼容旧客户端）
 import { OwlBotClient } from "@newtspeak/bot-sdk"
 
 const bot = new OwlBotClient({
-  baseUrl: "https://owl.example.com",
-  token: process.env.OWL_BOT_TOKEN,
+  baseUrl: "https://newt.example.com",
+  token: process.env.NEWT_BOT_TOKEN,
 })
 
 const gateway = bot.connectGateway()
