@@ -13,7 +13,7 @@ export function AboutSection() {
           Owl
         </div>
         <div>
-          <p className="text-base font-semibold">OwlSpeak Desktop</p>
+          <p className="text-base font-semibold">NewtSpeak Desktop</p>
           <p className="text-sm text-muted-foreground">版本 {packageJson.version ?? "0.0.0"}</p>
         </div>
       </div>

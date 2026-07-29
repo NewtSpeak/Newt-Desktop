@@ -1,7 +1,7 @@
-# Owl-Desktop 发布：
+# Newt-Desktop 发布：
 # - Windows / Linux / macOS 桌面安装包
 # - 可独立部署的 Web 前端包
-# - 本仓 Release + 同步到 OwlSpeak/OwlSpeak
+# - 本仓 Release + 同步到 NewtSpeak/NewtSpeak
 #
 # 可选 Secrets（代码签名）：
 #   TAURI_SIGNING_* / APPLE_*
@@ -28,7 +28,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_HUB_REPO: OwlSpeak/OwlSpeak
+  RELEASE_HUB_REPO: NewtSpeak/NewtSpeak
 
 jobs:
   resolve-version:
@@ -266,7 +266,7 @@ jobs:
           EXTRA=""
           if [ -f EXTRA_NOTES.md ]; then EXTRA=EXTRA_NOTES.md; fi
           {
-            scripts/ci/generate-release-notes.sh "Owl-Desktop" "$EXTRA"
+            scripts/ci/generate-release-notes.sh "Newt-Desktop" "$EXTRA"
             echo
             echo "### 本版本产物"
             echo
@@ -296,7 +296,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.resolve-version.outputs.tag }}
-          name: Owl-Desktop ${{ needs.resolve-version.outputs.tag }}
+          name: Newt-Desktop ${{ needs.resolve-version.outputs.tag }}
           body_path: RELEASE_BODY.md
           files: flat-assets/*
           fail_on_unmatched_files: true
@@ -304,13 +304,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync to OwlSpeak/OwlSpeak hub
+      - name: Sync to NewtSpeak/NewtSpeak hub
         env:
           RELEASE_HUB_TOKEN: ${{ secrets.RELEASE_HUB_TOKEN }}
           RELEASE_HUB_REPO: ${{ env.RELEASE_HUB_REPO }}
           TAG: ${{ needs.resolve-version.outputs.tag }}
-          COMPONENT_KEY: Owl-Desktop
-          COMPONENT_TITLE: Owl-Desktop（桌面客户端 + Web 前端包）
+          COMPONENT_KEY: Newt-Desktop
+          COMPONENT_TITLE: Newt-Desktop（桌面客户端 + Web 前端包）
           RELEASE_BODY_PATH: RELEASE_BODY.md
           ASSET_GLOBS: "flat-assets/*"
         run: |

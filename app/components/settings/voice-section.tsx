@@ -743,7 +743,7 @@ export function VoiceSection() {
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {permission === "denied"
-                ? "请在系统设置中允许 OwlSpeak 访问麦克风后，点击刷新重试"
+                ? "请在系统设置中允许 NewtSpeak 访问麦克风后，点击刷新重试"
                 : "授权后才能显示设备名称并选择输入/输出设备"}
             </p>
           </div>

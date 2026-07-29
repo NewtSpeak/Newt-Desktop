@@ -1,4 +1,4 @@
-// Gateway DISPATCH 事件名常量与 payload 类型（对齐 Owl-Server internal/eventbus/events.go
+// Gateway DISPATCH 事件名常量与 payload 类型（对齐 Newt-Server internal/eventbus/events.go
 // 与各模块 Publish 的 payload 结构；docs 14）。
 // 后续消息/语音功能 agent 按事件名注册 handler，payload 类型在此集中演进。
 

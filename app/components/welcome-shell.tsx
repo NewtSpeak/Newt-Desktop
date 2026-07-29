@@ -32,7 +32,7 @@ function WelcomeGuide() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
       <div className="text-center">
-        <p className="text-base font-medium">欢迎使用 OwlSpeak</p>
+        <p className="text-base font-medium">欢迎使用 NewtSpeak</p>
         <p className="mt-1 text-sm text-muted-foreground">
           点击已记住的账号即可登录；或点左侧「+」通过邀请链接添加服务器
         </p>

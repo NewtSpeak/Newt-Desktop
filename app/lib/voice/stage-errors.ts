@@ -1,5 +1,5 @@
 // 舞台 / 屏幕共享服务端错误码 → 中文文案（docs 10 §3 / docs 11 FR-09）。
-// 错误码来源：Owl-Server internal/stage/api.go；映射模式对齐 connection.ts joinErrorMessage。
+// 错误码来源：Newt-Server internal/stage/api.go；映射模式对齐 connection.ts joinErrorMessage。
 
 import { ApiError } from "~/lib/api/http"
 

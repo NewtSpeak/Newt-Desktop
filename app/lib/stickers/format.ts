@@ -1,4 +1,4 @@
-// 贴图 / 小表情 wire 与反应键（对齐 Owl-Server docs 17）
+// 贴图 / 小表情 wire 与反应键（对齐 Newt-Server docs 17）
 
 import type { MessageStickerRef, StickerItem } from "~/lib/api/types"
 import { resolveApiUrl } from "~/lib/api/http"

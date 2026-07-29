@@ -1,4 +1,4 @@
-// 贴图与表情包用户端 API（docs 17 / Owl-Server sticker 模块）。
+// 贴图与表情包用户端 API（docs 17 / Newt-Server sticker 模块）。
 
 import { api, qs } from "./http"
 import type {

@@ -3,7 +3,7 @@
 # that file-watches the project; Cargo locks *.dll under target/ during link and
 # chokidar hits EBUSY, killing beforeDevCommand.
 #
-# Keep build output outside Owl-Desktop so Vite never sees those files.
+# Keep build output outside Newt-Desktop so Vite never sees those files.
 # Path is relative to this config file's directory (src-tauri/.cargo/).
 [build]
 target-dir = "../../../.tauri-target/owl-desktop"

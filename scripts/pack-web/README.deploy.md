@@ -1,6 +1,6 @@
 # Owl Desktop Web 前端包
 
-本压缩包是 **Owl-Desktop** 的纯前端静态构建产物（SPA，`ssr: false`），可独立部署到任意静态站点托管。
+本压缩包是 **Newt-Desktop** 的纯前端静态构建产物（SPA，`ssr: false`），可独立部署到任意静态站点托管。
 
 ## 部署方式
 
@@ -41,5 +41,5 @@ npx serve -s .
 ## 注意
 
 - 本包**不包含** Tauri 桌面壳；仅浏览器访问。
-- 需能访问你的 Owl-Server（API / Gateway / 媒体信令），在客户端设置里配置服务器地址。
+- 需能访问你的 Newt-Server（API / Gateway / 媒体信令），在客户端设置里配置服务器地址。
 - 若部署在子路径（如 `/app/`），请重新构建并配置 base path（默认按根路径 `/` 构建）。

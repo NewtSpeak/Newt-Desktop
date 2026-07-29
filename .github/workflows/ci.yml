@@ -1,4 +1,4 @@
-# Owl-Desktop 持续集成：类型检查 + 单元测试 + Web 构建
+# Newt-Desktop 持续集成：类型检查 + 单元测试 + Web 构建
 name: CI
 
 on:

@@ -213,7 +213,7 @@ export const SCOPE_LABELS: Record<string, string> = {
   openid: "验证你的身份",
   profile: "读取你的用户名与资料",
   offline_access: "在你关闭 CLI 后仍保持登录（刷新令牌）",
-  "gapi.full": "代表你使用 OwlSpeak 全部用户端能力（消息、服管等）",
+  "gapi.full": "代表你使用 NewtSpeak 全部用户端能力（消息、服管等）",
   "gapi.read": "只读访问你的服务器与消息",
   "gapi.guilds.manage": "管理你有权限的服务器（频道、角色、成员等）",
   "platform.read": "读取平台管理信息（仅系统管理员）",

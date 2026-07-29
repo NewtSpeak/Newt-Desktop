@@ -34,7 +34,7 @@ async function main() {
     playwright = require("playwright")
   } catch {
     console.error(
-      "[oauth-playwright] 请先安装: cd Owl-Desktop && bun add -d playwright && npx playwright install chromium",
+      "[oauth-playwright] 请先安装: cd Newt-Desktop && bun add -d playwright && npx playwright install chromium",
     )
     process.exit(1)
   }

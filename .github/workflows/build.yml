@@ -1,4 +1,4 @@
-# Owl-Desktop 按需编译安装包（不发 Release），用于验证各平台打包链路
+# Newt-Desktop 按需编译安装包（不发 Release），用于验证各平台打包链路
 name: Build packages
 
 on:

@@ -1,4 +1,4 @@
-// RBAC 权限位与计算（移植自 Owl-Server internal/rbac/permissions.go，
+// RBAC 权限位与计算（移植自 Newt-Server internal/rbac/permissions.go，
 // 位定义与 frontend/app/lib/permissions.ts 的权限位表一致）。
 //
 // int64 位掩码统一用 BigInt 处理（位 46+ 超出 Number 安全整数按位运算范围）。

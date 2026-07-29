@@ -357,7 +357,7 @@ fn process_frame(op: u32, body: &[u8], client_id: &mut String) -> Result<Vec<Vec
         "data": {
           "v": 1,
           "config": { "cdn_host": "cdn.discordapp.com", "api_endpoint": "//discord.com/api", "environment": "production" },
-          "user": { "id": "0", "username": "OwlSpeak", "discriminator": "0", "avatar": null }
+          "user": { "id": "0", "username": "NewtSpeak", "discriminator": "0", "avatar": null }
         },
         "nonce": null
       });

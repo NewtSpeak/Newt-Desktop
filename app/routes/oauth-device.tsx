@@ -139,7 +139,7 @@ export default function OAuthDevicePage() {
               授权 CLI / AI
             </h1>
             <p className="text-sm text-muted-foreground">
-              OwlSpeak OAuth 设备授权
+              NewtSpeak OAuth 设备授权
             </p>
           </div>
         </div>
@@ -240,7 +240,7 @@ export default function OAuthDevicePage() {
             <div className="rounded-xl border border-border/50 p-4">
               <p className="font-medium">{info.client_name || info.client_id}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {info.description || "请求代表你操作 OwlSpeak"}
+                {info.description || "请求代表你操作 NewtSpeak"}
               </p>
               <p className="mt-3 font-mono text-lg tracking-widest">{info.user_code}</p>
             </div>
@@ -288,7 +288,7 @@ export default function OAuthDevicePage() {
               可以返回终端或 AI 工具继续。此窗口可关闭。
             </p>
             <Link to="/" className={cn(buttonVariants({ variant: "secondary" }), "w-full")}>
-              回到 OwlSpeak
+              回到 NewtSpeak
             </Link>
           </div>
         )}
@@ -298,7 +298,7 @@ export default function OAuthDevicePage() {
             <p className="text-base font-medium">已拒绝授权</p>
             <p className="text-sm text-muted-foreground">CLI 将无法访问你的账号。</p>
             <Link to="/" className={cn(buttonVariants({ variant: "secondary" }), "w-full")}>
-              回到 OwlSpeak
+              回到 NewtSpeak
             </Link>
           </div>
         )}

@@ -239,7 +239,7 @@ export default defineConfig({
         (filePath: string) => isInsideSrcTauri(filePath),
       ],
     },
-    // 服务端 CORS 只放行 localhost:5173，dev 下把 /gapi 代理到本地 Owl-Server；
+    // 服务端 CORS 只放行 localhost:5173，dev 下把 /gapi 代理到本地 Newt-Server；
     // ws: true 让 Gateway WebSocket（/gapi/v1/gateway）也走同一代理。
     proxy: {
       "/gapi": {

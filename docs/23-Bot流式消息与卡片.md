@@ -2,20 +2,20 @@
 
 | 字段 | 内容 |
 |------|------|
-| **文档编号** | Owl-Desktop-PRD-23 |
+| **文档编号** | Newt-Desktop-PRD-23 |
 | **版本** | v1.1 |
 | **日期** | 2026-07-26 |
 | **状态** | 已实现（Desktop 客户端已接入） |
 | **对标** | Discord 无原生「AI 打字机流式」协议；本能力为 Owl 扩展（Bot 开放平面） |
-| **服务端依据** | `Owl-Server/backend/internal/message/stream.go`、Bot API `/bot-api/v1`、Gateway `MESSAGE_STREAM_*` |
-| **SDK 依据** | `OwlBotSdk` / `Owl-Server/sdk`（JS / Python / Go / Rust） |
+| **服务端依据** | `Newt-Server/backend/internal/message/stream.go`、Bot API `/bot-api/v1`、Gateway `MESSAGE_STREAM_*` |
+| **SDK 依据** | `NewtBotSdk` / `Newt-Server/sdk`（JS / Python / Go / Rust） |
 | **相关文档** | [05 文本消息](./05-文本消息.md)、[14 实时事件](./14-实时事件与状态同步.md)、[15 通知与未读](./15-通知与未读.md)、[19 隐私与私信](./19-隐私设置好友与私信.md) |
 
 ---
 
 ## 1. 功能概述
 
-本文档定义 **机器人（Bot）流式消息** 与 **消息卡片（card）** 在 Owl-Desktop 中的完整行为，覆盖：
+本文档定义 **机器人（Bot）流式消息** 与 **消息卡片（card）** 在 Newt-Desktop 中的完整行为，覆盖：
 
 1. **协议真相**：服务端三段式 HTTP + Gateway 事件（与用户端同构可见性过滤）。
 2. **Bot 侧用法**：官方 SDK 如何 `startStream → append → end`。
@@ -76,7 +76,7 @@ AI Bot 生成长回复时，若等全文完成再 `sendMessage`，用户只能�
 - 闲置 **10 分钟**未 end → GC 自动收束并下发 END 类事件；
 - `card`：JSON 对象，≤8KB。
 
-实现文件：`Owl-Server/backend/internal/message/stream.go`。
+实现文件：`Newt-Server/backend/internal/message/stream.go`。
 
 ### 3.2 Gateway 事件时序
 
@@ -131,17 +131,17 @@ MESSAGE_UPDATE      d = 同一终态 messageView（兼容旧客户端）
 
 | 语言 | API | 包路径 |
 |------|-----|--------|
-| JavaScript/TS | `startStream` / `append` / `end` | `OwlBotSdk/javascript`、`Owl-Server/sdk/javascript` |
-| Python | `start_stream` / `MessageStream` | `OwlBotSdk/python`、`Owl-Server/sdk/python` |
-| Go | `StartStream` / `Append` / `End` | `OwlBotSdk/go`、`Owl-Server/sdk/go` |
-| Rust | `start_stream` / `stream_append` / `stream_end` | `OwlBotSdk/rust` |
+| JavaScript/TS | `startStream` / `append` / `end` | `NewtBotSdk/javascript`、`Newt-Server/sdk/javascript` |
+| Python | `start_stream` / `MessageStream` | `NewtBotSdk/python`、`Newt-Server/sdk/python` |
+| Go | `StartStream` / `Append` / `End` | `NewtBotSdk/go`、`Newt-Server/sdk/go` |
+| Rust | `start_stream` / `stream_append` / `stream_end` | `NewtBotSdk/rust` |
 
-覆盖清单见 `OwlBotSdk/docs/COVERAGE.md`（流式消息四门语言均为 ✅）。
+覆盖清单见 `NewtBotSdk/docs/COVERAGE.md`（流式消息四门语言均为 ✅）。
 
 ### 4.2 JavaScript 示例（推荐）
 
 ```js
-import { OwlBotClient } from "@owlspeak/bot-sdk"
+import { OwlBotClient } from "@newtspeak/bot-sdk"
 
 const bot = new OwlBotClient({
   baseUrl: "https://owl.example.com",
@@ -435,7 +435,7 @@ START 与普通 `MESSAGE_CREATE` 共用 `noteIncomingMessage` 路径。
 ### 9.1 自动化（仓库内）
 
 ```bash
-cd Owl-Desktop
+cd Newt-Desktop
 npx tsx --test \
   app/lib/message-stream.test.ts \
   app/lib/stream-delta-batcher.test.ts \
@@ -453,7 +453,7 @@ npx tsx --test \
 服务端：
 
 ```bash
-cd Owl-Server/backend
+cd Newt-Server/backend
 go test ./internal/botapi/ -count=1 -run BotFullFlow
 ```
 
@@ -525,7 +525,7 @@ go test ./internal/botapi/ -count=1 -run BotFullFlow
 
 ```text
 ┌─────────────┐   startStream/append/end    ┌──────────────────┐
-│  Bot + LLM  │ ──────────────────────────► │ Owl-Server       │
+│  Bot + LLM  │ ──────────────────────────► │ Newt-Server       │
 │  (SDK)      │                             │ message/stream   │
 └─────────────┘                             │ + eventbus       │
                                             └────────┬─────────┘
@@ -533,7 +533,7 @@ go test ./internal/botapi/ -count=1 -run BotFullFlow
                                                      │ MESSAGE_STREAM_*
                                                      ▼
                                             ┌──────────────────┐
-                                            │ Owl-Desktop      │
+                                            │ Newt-Desktop      │
                                             │ gateway-bindings │
                                             │ messages store   │
                                             │ message-item/card│

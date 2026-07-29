@@ -1,15 +1,15 @@
-# Owl-Desktop
+# Newt-Desktop
 
-OwlSpeak **用户端**：桌面应用（Tauri）与可独立部署的 **Web 前端包**。  
+NewtSpeak **用户端**：桌面应用（Tauri）与可独立部署的 **Web 前端包**。  
 产品体验对标 **Discord / KOOK**：多服务器、文本/语音、RBAC、舞台、屏幕共享、搜索与社交。
 
 ```text
 ┌─────────────┐   REST + Gateway WS    ┌─────────────┐
-│ Owl-Desktop │ ─────────────────────► │ Owl-Server  │  控制面
+│ Newt-Desktop │ ─────────────────────► │ Newt-Server  │  控制面
 │  Tauri/Web  │                        └──────┬──────┘
 │             │   WSS + WebRTC (UDP)          │ mTLS
 │             │ ─────────────────────► ┌──────▼──────┐
-└─────────────┘                        │  Owl-SFU    │  媒体面
+└─────────────┘                        │  Newt-SFU    │  媒体面
                                        └─────────────┘
 ```
 
@@ -50,7 +50,7 @@ OwlSpeak **用户端**：桌面应用（Tauri）与可独立部署的 **Web 前�
 ## 仓库结构
 
 ```text
-Owl-Desktop/
+Newt-Desktop/
 ├── app/                 # 前端应用
 │   ├── components/      # UI
 │   ├── lib/             # API、媒体、权限、工具
@@ -90,18 +90,18 @@ bun run pack:web
 |------|------|
 | [docs/00-…](./docs/00-产品总览与功能地图.md) | 功能地图与硬约束 |
 | [docs/](./docs/) | 分域产品说明 |
-| `Owl-Server/docs/设计讨论/` | **冲突时以服务端定稿为准** |
-| `Owl-Server/docs/协议/` | Media Token、关闭码、信令 |
+| `Newt-Server/docs/设计讨论/` | **冲突时以服务端定稿为准** |
+| `Newt-Server/docs/协议/` | Media Token、关闭码、信令 |
 | [scripts/pack-web/README.deploy.md](./scripts/pack-web/README.deploy.md) | Web 包部署 |
 
 ## 相关仓库
 
 | 仓库 | 关系 |
 |------|------|
-| [Owl-Server](https://github.com/OwlSpeak/Owl-Server) | 控制面 API / Gateway |
-| [Owl-SFU](https://github.com/OwlSpeak/Owl-SFU) | 语音与屏幕媒体 |
-| [Owl-Agent](https://github.com/OwlSpeak/Owl-Agent) | 深链 OAuth 设备码登录 |
-| [OwlSpeak](https://github.com/OwlSpeak/OwlSpeak) | 安装包与 Web zip 发布 |
+| [Newt-Server](https://github.com/NewtSpeak/Newt-Server) | 控制面 API / Gateway |
+| [Newt-SFU](https://github.com/NewtSpeak/Newt-SFU) | 语音与屏幕媒体 |
+| [Newt-Agent](https://github.com/NewtSpeak/Newt-Agent) | 深链 OAuth 设备码登录 |
+| [NewtSpeak](https://github.com/NewtSpeak/NewtSpeak) | 安装包与 Web zip 发布 |
 
 ## 许可证
 

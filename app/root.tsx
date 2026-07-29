@@ -80,7 +80,7 @@ export function HydrateFallback() {
           animation: "owl-spin 0.8s linear infinite",
         }}
       />
-      <p style={{ fontSize: 14, opacity: 0.85 }}>正在加载 OwlSpeak…</p>
+      <p style={{ fontSize: 14, opacity: 0.85 }}>正在加载 NewtSpeak…</p>
       <style>{`@keyframes owl-spin { to { transform: rotate(360deg) } }`}</style>
     </main>
   )

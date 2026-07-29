@@ -103,7 +103,7 @@ export default function OAuthAuthorizePage() {
 
         {!booting && needLogin && (
           <div className="space-y-3 rounded-xl bg-muted/50 p-4 text-sm">
-            <p>请先登录 OwlSpeak，再批准此请求。</p>
+            <p>请先登录 NewtSpeak，再批准此请求。</p>
             <Link
               to={`/?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`}
               className={cn(buttonVariants(), "w-full")}

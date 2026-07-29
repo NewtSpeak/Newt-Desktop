@@ -1,5 +1,5 @@
 // 用户端平面（/gapi/v1）的请求/响应 TS 类型。
-// 字段与 Owl-Server 后端结构体的 json tag 一一对应：
+// 字段与 Newt-Server 后端结构体的 json tag 一一对应：
 //   - clientapi（auth/resources）、message、voice、stage 各模块的 handler；
 //   - 消息 ID 为雪花 int64，后端以 `json:"id,string"` 序列化为字符串，前端一律按 string 处理。
 

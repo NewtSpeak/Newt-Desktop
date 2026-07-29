@@ -2,7 +2,7 @@
 //   from:@用户 → author_id；in:#频道 → channel_id；before:/after:YYYY-MM-DD → 雪花游标。
 // 无法解析的前缀按普通文本处理，不报错阻断（FR-09）。
 //
-// before/after 的服务端参数是雪花消息 ID 游标：按 Owl-Server 雪花布局
+// before/after 的服务端参数是雪花消息 ID 游标：按 Newt-Server 雪花布局
 // （41bit 毫秒 @ 纪元 2026-01-01 UTC，左移 22 位）把日期换算成该时刻的最小 ID。
 
 import { useChannelsStore } from "~/stores/channels"
@@ -23,7 +23,7 @@ export type SearchFilterPill =
 // 雪花游标换算
 // ---------------------------------------------------------------------------
 
-/** 与 Owl-Server message/snowflake.go 一致：2026-01-01 00:00:00 UTC */
+/** 与 Newt-Server message/snowflake.go 一致：2026-01-01 00:00:00 UTC */
 const SNOWFLAKE_EPOCH_MS = 1767225600000n
 const TIMESTAMP_SHIFT = 22n
 

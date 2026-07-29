@@ -1,4 +1,4 @@
-// 多账号身份键：同一 Owl-Server 上不同用户、或不同服务器上的账号各自独立。
+// 多账号身份键：同一 Newt-Server 上不同用户、或不同服务器上的账号各自独立。
 
 /** 由服务器 origin + 用户 id 生成稳定账号键 */
 export function makeAccountId(serverBaseUrl: string, userId: string): string {

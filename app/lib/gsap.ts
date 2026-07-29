@@ -1,5 +1,5 @@
 // GSAP 统一封装：全局动效节奏 token 与 reduced-motion 媒体条件。
-// 与管理后台 Owl-Server/frontend/app/lib/gsap.ts 保持一致，新动效代码一律从此导入。
+// 与管理后台 Newt-Server/frontend/app/lib/gsap.ts 保持一致，新动效代码一律从此导入。
 
 import gsap from "gsap"
 import { useGSAP } from "@gsap/react"

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# 将本组件 Release 资产与说明同步到组织中心发布仓 OwlSpeak/OwlSpeak
+# 将本组件 Release 资产与说明同步到组织中心发布仓 NewtSpeak/NewtSpeak
 # 环境变量：
 #   RELEASE_HUB_TOKEN  有目标仓写权限的 PAT（必填）
-#   RELEASE_HUB_REPO   默认 OwlSpeak/OwlSpeak
+#   RELEASE_HUB_REPO   默认 NewtSpeak/NewtSpeak
 #   TAG                如 v0.1.0
-#   COMPONENT_KEY      区块键，如 Owl-SFU / Owl-Server / Owl-Desktop
+#   COMPONENT_KEY      区块键，如 Newt-SFU / Newt-Server / Newt-Desktop
 #   COMPONENT_TITLE    展示名
 #   RELEASE_BODY_PATH  本组件说明 Markdown
 #   ASSET_GLOBS        空格分隔的资产 glob（相对 cwd）
 set -euo pipefail
 
-HUB_REPO="${RELEASE_HUB_REPO:-OwlSpeak/OwlSpeak}"
+HUB_REPO="${RELEASE_HUB_REPO:-NewtSpeak/NewtSpeak}"
 TAG="${TAG:?TAG required}"
 COMPONENT_KEY="${COMPONENT_KEY:?COMPONENT_KEY required}"
 COMPONENT_TITLE="${COMPONENT_TITLE:-$COMPONENT_KEY}"
@@ -43,7 +43,7 @@ ${END}"
 if ! gh release view "$TAG" --repo "$HUB_REPO" >/dev/null 2>&1; then
   echo "Creating hub release ${TAG} on ${HUB_REPO}"
   # 初始 body 仅含本组件区块
-  FULL_BODY="# OwlSpeak ${TAG}
+  FULL_BODY="# NewtSpeak ${TAG}
 
 统一发布包（桌面端 / 服务端 / SFU / 未来 App）。各组件完成构建后会自动合并到此版本。
 
@@ -51,7 +51,7 @@ ${SECTION}
 "
   gh release create "$TAG" \
     --repo "$HUB_REPO" \
-    --title "OwlSpeak ${TAG}" \
+    --title "NewtSpeak ${TAG}" \
     --notes "$FULL_BODY" \
     --latest=false
 else
@@ -75,7 +75,7 @@ else:
     if existing.strip():
         new_body = existing.rstrip() + "\n\n" + section + "\n"
     else:
-        new_body = f"# OwlSpeak\n\n{section}\n"
+        new_body = f"# NewtSpeak\n\n{section}\n"
 print(new_body)
 PY
 )"
