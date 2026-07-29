@@ -141,9 +141,9 @@ MESSAGE_UPDATE      d = 同一终态 messageView（兼容旧客户端）
 ### 4.2 JavaScript 示例（推荐）
 
 ```js
-import { OwlBotClient } from "@newtspeak/bot-sdk"
+import { NewtBotClient } from "@newtspeak/bot-sdk"
 
-const bot = new OwlBotClient({
+const bot = new NewtBotClient({
   baseUrl: "https://newt.example.com",
   token: process.env.NEWT_BOT_TOKEN,
 })
