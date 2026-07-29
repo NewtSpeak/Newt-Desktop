@@ -21,11 +21,11 @@ if (import.meta.env.DEV && typeof document !== "undefined") {
   import("react-grab")
 }
 
-/** 站点图标：来自 Newt-assets/logo.png 生成 */
+/** 站点图标：来自 Newt-assets/logo.png（links + head 双写，避免 SPA 壳漏掉） */
 export const links: Route.LinksFunction = () => [
-  { rel: "icon", href: "/favicon.ico", sizes: "any" },
-  { rel: "icon", type: "image/png", href: "/favicon.png" },
-  { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
+  { rel: "icon", href: "/favicon.ico?v=newt2", sizes: "any" },
+  { rel: "icon", type: "image/png", href: "/favicon.png?v=newt2" },
+  { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=newt2" },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -34,6 +34,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" href="/favicon.ico?v=newt2" sizes="any" />
+        <link rel="icon" type="image/png" href="/favicon.png?v=newt2" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=newt2" />
         <Meta />
         <Links />
       </head>
