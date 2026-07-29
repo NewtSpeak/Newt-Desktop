@@ -209,6 +209,11 @@ function SelectedGuildTitleBar() {
             ? "私信"
             : guild?.name
 
+  // 浏览器 / WebView 标签页标题
+  useEffect(() => {
+    document.title = title ? `${title} · NewtSpeak` : "NewtSpeak"
+  }, [title])
+
   return (
     <div
       className="absolute inset-x-0 top-0 z-20 flex h-(--app-top-inset) items-center justify-center px-4"

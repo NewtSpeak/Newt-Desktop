@@ -166,8 +166,15 @@ export function NavUser() {
             render={
               <SidebarMenuButton
                 size="lg"
-                // 与服务器栏一致：去掉内边距，头像铺满 size-10 按钮区域
-                className="relative justify-center overflow-hidden rounded-lg p-0! group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:p-0! aria-expanded:bg-muted"
+                // 头像铺满按钮：禁止 sidebar 默认 hover/active/open 的灰底叠层（会像灰色滤镜）
+                className={cn(
+                  "relative justify-center overflow-hidden rounded-lg p-0!",
+                  "group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:p-0!",
+                  "bg-transparent! hover:bg-transparent! active:bg-transparent!",
+                  "data-open:bg-transparent! data-open:hover:bg-transparent!",
+                  "aria-expanded:bg-transparent!",
+                  "hover:ring-2 hover:ring-sidebar-ring/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                )}
               />
             }
           >
@@ -177,10 +184,10 @@ export function NavUser() {
                 <AvatarImage
                   src={avatarSrc}
                   alt={display}
-                  className="size-full! rounded-lg object-cover"
+                  className="size-full! rounded-lg object-cover opacity-100!"
                 />
               ) : null}
-              <AvatarFallback className="size-full! rounded-lg text-xs font-semibold">
+              <AvatarFallback className="size-full! rounded-lg bg-sidebar-accent text-xs font-semibold text-sidebar-accent-foreground">
                 {nameInitials(display)}
               </AvatarFallback>
             </Avatar>

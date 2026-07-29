@@ -28,12 +28,26 @@ export const links: Route.LinksFunction = () => [
   { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=newt2" },
 ]
 
+/** 默认标签页标题（各路由可再覆盖 document.title） */
+export function meta(): Route.MetaDescriptors {
+  return [
+    { title: "NewtSpeak" },
+    {
+      name: "description",
+      content:
+        "NewtSpeak — 开源 Discord / KOOK 替代，自托管组队语音与社区协作",
+    },
+    { name: "application-name", content: "NewtSpeak" },
+  ]
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="zh-CN">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>NewtSpeak</title>
         <link rel="icon" href="/favicon.ico?v=newt2" sizes="any" />
         <link rel="icon" type="image/png" href="/favicon.png?v=newt2" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=newt2" />
