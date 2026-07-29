@@ -38,13 +38,15 @@ export function StyledDisplayName({
   return (
     <span
       className={cn(
-        "inline",
+        // inline-block：支持 truncate / max-width；渐变 background-clip:text 也更稳
+        "inline-block max-w-full align-baseline",
         // 未指定加粗时保持 medium；指定 bold 时由 style.fontWeight 覆盖
         !resolved.bold && "font-medium",
         isGradient && resolved.animated && "name-gradient-animated",
         className,
       )}
       style={css}
+      title={prefix ? `${prefix}${name}` : name}
     >
       {prefix}
       {name}

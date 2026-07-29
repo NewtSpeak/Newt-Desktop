@@ -94,11 +94,19 @@ export function AvatarWithFrame({
   const asset = frame?.assets?.primary
   const url = resolveProfileAssetUrl(asset?.url)
   if (!url) {
-    return <span className={cn("relative inline-flex shrink-0", className)}>{children}</span>
+    return (
+      <span className={cn("relative inline-flex shrink-0 self-start", className)}>
+        {children}
+      </span>
+    )
   }
   return (
     <span
-      className={cn("relative inline-flex shrink-0 items-center justify-center", className)}
+      className={cn(
+        // 默认顶对齐：消息等多行布局中头像应贴顶部，不随正文垂直居中
+        "relative inline-flex shrink-0 self-start items-start justify-center",
+        className,
+      )}
     >
       <span className={cn("relative z-[1]", sizeClass)}>{children}</span>
       <AvatarFrameOverlay frame={frame} className="z-[2]" />

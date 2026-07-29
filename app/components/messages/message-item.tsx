@@ -67,6 +67,7 @@ import {
   parseCustomReactionItemId,
 } from "~/lib/stickers/format"
 import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
+import { MemberStyledName } from "~/components/member-styled-name"
 import { RoleBadgePills, StyledDisplayName } from "~/components/styled-name"
 import {
   memberDisplayName,
@@ -1206,13 +1207,13 @@ function ReplyPreview({
   // 临场超管：固定展示名与皇冠头像，禁止回落到本人资料头像/昵称
   const name = systemAdmin
     ? "系统超级管理员"
-    : resolveName(referenced.author_id) ||
+    : (member ? memberDisplayName(member) : null) ||
+      resolveName(referenced.author_id) ||
       referenced.author_username ||
       "未知用户"
   const avatarUrl = systemAdmin
     ? undefined
     : resolveAvatarUrl?.(referenced.author_id)
-  const nameStyle = systemAdmin ? null : resolveMemberNameStyle(member, roles)
   const badges = systemAdmin ? [] : memberRoleBadges(member, roles)
   const hasContent = Boolean(referenced.content?.trim())
   const hasAttachments = (referenced.attachments?.length ?? 0) > 0
@@ -1238,11 +1239,18 @@ function ReplyPreview({
           {(name || "?").slice(0, 1).toUpperCase()}
         </span>
       )}
-      <StyledDisplayName
-        name={name}
-        style={nameStyle}
-        className="shrink-0 text-xs"
-      />
+      {systemAdmin ? (
+        <StyledDisplayName name={name} style={null} className="shrink-0 text-xs" />
+      ) : (
+        <MemberStyledName
+          guildId={guildId}
+          userId={referenced.author_id}
+          member={member}
+          roles={roles}
+          name={name}
+          className="shrink-0 text-xs"
+        />
+      )}
       {systemAdmin ? (
         <SystemAdminBadge className="shrink-0" />
       ) : (
@@ -1322,10 +1330,6 @@ export const MessageRow = memo(function MessageRow({
   const groupSystem = isGroupDmSystemMessage(message.type)
   const selfUser = useAuthStore((state) => state.user)
   const viewerIsSystemAdmin = Boolean(selfUser?.system_admin)
-  const displayName =
-    resolveName(message.author_id) ||
-    message.author_username ||
-    (systemAdmin ? "系统超级管理员" : "未知用户")
   // 连发合并时不因 reply_to 强制展开头像栏——回复引用条已单独展示
   const showHeader = !grouped && !groupSystem
   const remove = useMessagesStore((state) => state.remove)
@@ -1340,6 +1344,15 @@ export const MessageRow = memo(function MessageRow({
       ? state.byGuild[guildId]?.find((m) => m.user_id === message.author_id)
       : undefined
   )
+  // 展示名：服内昵称优先；系统超管固定文案
+  const displayName = systemAdmin
+    ? "系统超级管理员"
+    : (authorMember
+        ? memberDisplayName(authorMember)
+        : null) ||
+      resolveName(message.author_id) ||
+      message.author_username ||
+      "未知用户"
   const selfMember = useMembersStore((state) =>
     guildId && selfId
       ? state.byGuild[guildId]?.find((m) => m.user_id === selfId)
@@ -1425,12 +1438,17 @@ export const MessageRow = memo(function MessageRow({
           onJump={onJump}
         />
       )}
-      <div className="flex gap-2.5">
+      {/* items-start：头像贴消息块顶部，不随多行正文垂直居中 */}
+      <div className="flex items-start gap-2.5">
         {showHeader ? (
           systemAdmin ? (
             <SystemAdminAvatar />
           ) : (
-            <AvatarWithFrame frame={authorAvatarFrame} sizeClass="size-9">
+            <AvatarWithFrame
+              frame={authorAvatarFrame}
+              sizeClass="size-9"
+              className="mt-0.5 shrink-0 self-start"
+            >
               <AuthorAvatar
                 userId={message.author_id}
                 name={displayName}
@@ -1439,18 +1457,29 @@ export const MessageRow = memo(function MessageRow({
             </AvatarWithFrame>
           )
         ) : (
-          <span className="w-9 shrink-0 pt-0.5 text-right text-[10px] leading-5 text-muted-foreground opacity-0 select-none group-hover/message:opacity-100">
+          <span className="w-9 shrink-0 self-start pt-0.5 text-right text-[10px] leading-5 text-muted-foreground opacity-0 select-none group-hover/message:opacity-100">
             {shortTime(message.created_at)}
           </span>
         )}
         <div className="min-w-0 flex-1">
           {showHeader && (
             <p className="flex min-w-0 items-center gap-1.5 leading-5">
-              <StyledDisplayName
-                name={displayName}
-                style={authorStyle}
-                className="truncate text-sm font-semibold"
-              />
+              {systemAdmin ? (
+                <StyledDisplayName
+                  name={displayName}
+                  style={null}
+                  className="truncate text-sm font-semibold"
+                />
+              ) : (
+                <MemberStyledName
+                  guildId={guildId ?? message.guild_id}
+                  userId={message.author_id}
+                  member={authorMember}
+                  roles={roles}
+                  name={displayName}
+                  className="truncate text-sm font-semibold"
+                />
+              )}
               {systemAdmin ? (
                 <SystemAdminBadge />
               ) : (
@@ -1731,20 +1760,27 @@ export function PendingRow({
         failed ? "" : "opacity-50",
       )}
     >
-      <div className="flex gap-2.5">
+      <div className="flex items-start gap-2.5">
         {grouped ? (
           <span className="w-9 shrink-0" aria-hidden />
         ) : (
-          <AuthorAvatar
-            userId={selfId ?? "self"}
-            name={selfName}
-            avatarUrl={resolvedAvatar}
-          />
+          <span className="mt-0.5 shrink-0 self-start">
+            <AuthorAvatar
+              userId={selfId ?? "self"}
+              name={selfName}
+              avatarUrl={resolvedAvatar}
+            />
+          </span>
         )}
         <div className="min-w-0 flex-1">
           {!grouped && (
             <p className="flex items-baseline gap-2 leading-5">
-              <span className="text-sm font-semibold">{selfName}</span>
+              <MemberStyledName
+                guildId={guildId}
+                userId={selfId}
+                name={selfName}
+                className="text-sm font-semibold"
+              />
               <span className="text-xs text-muted-foreground">
                 {failed ? "发送失败" : "发送中…"}
               </span>

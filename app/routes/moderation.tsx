@@ -23,6 +23,7 @@ import {
 import { toast } from "sonner"
 
 import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
+import { MemberStyledName } from "~/components/member-styled-name"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -411,6 +412,7 @@ export default function ModerationPage() {
                       online={Boolean(statusByUser[state.user_id])}
                       sub={`# ${channelName}`}
                       userId={state.user_id}
+                      guildId={guildId}
                     />
                     <div className="flex flex-wrap gap-1 text-[10px]">
                       {state.self_mute && <Badge>自静音</Badge>}
@@ -540,6 +542,7 @@ export default function ModerationPage() {
                       online={Boolean(statusByUser[member.user_id])}
                       sub={`@${member.username || member.user_id.slice(0, 8)}`}
                       userId={member.user_id}
+                      guildId={guildId}
                     />
                     <div className="flex flex-wrap gap-1 text-[10px]">
                       {member.is_owner && <Badge tone="amber">所有者</Badge>}
@@ -775,6 +778,7 @@ function UserChip({
   sub,
   online,
   userId,
+  guildId,
 }: {
   name: string
   avatarSrc?: string
@@ -782,6 +786,8 @@ function UserChip({
   online?: boolean
   /** 传入则机会主义读装扮缓存渲染头像框（无数据则无框降级，不新发请求） */
   userId?: string
+  /** 传入则套用服务器角色昵称样式 */
+  guildId?: string
 }) {
   // 头像框：只订阅单槽引用；仅读 equippedByUser 缓存
   const avatarFrame = useCosmeticsStore((s) =>
@@ -815,7 +821,18 @@ function UserChip({
         )}
       </span>
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{name}</p>
+        <p className="truncate text-sm font-medium">
+          {guildId && userId ? (
+            <MemberStyledName
+              guildId={guildId}
+              userId={userId}
+              name={name}
+              className="truncate text-sm font-medium"
+            />
+          ) : (
+            name
+          )}
+        </p>
         {sub ? (
           <p className="truncate text-xs text-muted-foreground">{sub}</p>
         ) : null}

@@ -98,8 +98,9 @@ export function NameplateBackground({
   return (
     <span
       className={cn(
-        // isolate：把视频 screen 混合限定在铭牌图层栈内，不与页面背景混合
-        "pointer-events-none absolute inset-0 -z-0 isolate overflow-hidden rounded-md",
+        // isolate：把视频 screen 混合限定在铭牌图层栈内，不与页面背景混合。
+        // z-0 明确垫底；行内昵称/头像须 relative z-[1]，否则会被盖住。
+        "pointer-events-none absolute inset-0 z-0 isolate overflow-hidden rounded-md",
         className,
       )}
       aria-hidden

@@ -30,6 +30,7 @@ import {
 import { toast } from "sonner"
 
 import { GuildAvatar } from "~/components/guild-avatar"
+import { MemberStyledName } from "~/components/member-styled-name"
 import { AuditSection } from "~/components/guild-settings/audit-section"
 import { InvitesSection } from "~/components/guild-settings/invites-section"
 import { RestrictionsSection } from "~/components/guild-settings/restrictions-section"
@@ -1099,7 +1100,13 @@ function MembersSection({
             >
               <div className="min-w-0">
                 <p className="truncate text-sm text-foreground">
-                  {label}
+                  <MemberStyledName
+                    guildId={guildId}
+                    userId={member.user_id}
+                    member={member}
+                    name={label}
+                    className="truncate text-sm"
+                  />
                   {member.is_owner && (
                     <span className="ml-1.5 text-[10px] text-amber-500">所有者</span>
                   )}

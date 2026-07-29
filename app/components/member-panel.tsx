@@ -493,7 +493,8 @@ function MemberRow({
             )
           }}
         >
-          <NameplateBackground nameplate={nameplate} />
+          {/* 铭牌必须在内容下层，否则会盖住昵称（isolate + absolute 叠层） */}
+          <NameplateBackground nameplate={nameplate} className="z-0" />
           {/* flex：消除 inline 基线偏移，让头像+头像框整体在行内垂直居中 */}
           <span className="relative z-[1] flex shrink-0 items-center justify-center">
             <AvatarWithFrame frame={avatarFrame} sizeClass="size-8">
@@ -517,12 +518,12 @@ function MemberRow({
               )}
             />
           </span>
-          <span className="min-w-0 flex-1">
+          <span className="relative z-[1] min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1">
               <StyledDisplayName
-                name={name}
+                name={name || username}
                 style={nameStyle}
-                className="min-w-0 flex-1 truncate text-[13px]"
+                className="min-w-0 truncate text-[13px]"
               />
               {member.is_owner && (
                 <CrownIcon

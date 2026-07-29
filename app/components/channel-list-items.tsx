@@ -30,6 +30,7 @@ import { toast } from "sonner"
 import { AdminMemberMenuSection } from "~/components/admin/admin-member-menu"
 import { AvatarWithFrame } from "~/components/cosmetics/avatar-frame"
 import { GuildSettingsContextMenuItems } from "~/components/guild-settings-menu-items"
+import { MemberStyledName } from "~/components/member-styled-name"
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar"
 import { Button } from "~/components/ui/button"
 import {
@@ -760,14 +761,16 @@ function VoiceParticipantRow({
               )}
             />
           </span>
-          <span
+          <MemberStyledName
+            guildId={guildId}
+            userId={state.user_id}
+            member={member}
+            name={name}
             className={cn(
               "min-w-0 flex-1 truncate text-[13px]",
-              speaking && "text-foreground"
+              speaking && "text-foreground",
             )}
-          >
-            {name}
-          </span>
+          />
           <span className="flex shrink-0 items-center gap-1">
             {streaming && (
               <span className="rounded-sm bg-red-600 px-1 text-[9px] font-bold text-white select-none">
