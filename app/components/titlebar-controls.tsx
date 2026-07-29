@@ -199,8 +199,8 @@ export function TitlebarControls() {
   return (
     <div
       className={cn(
-        // 顶部 4px 内边距把铃铛/信封下移，角标（略超出按钮顶边）完整落在窗口内，避免被裁切
-        "fixed top-0 right-0 z-60 flex items-start gap-0.5 overflow-visible pt-1",
+        // 不再需要顶部留白（badge 已调整 top: -1px，避免裁切）
+        "fixed top-0 right-0 z-60 flex items-start gap-0.5 overflow-visible",
         showWindowControls ? "pr-0" : "pr-2",
       )}
       onMouseDown={dragWindowOnMouseDown}

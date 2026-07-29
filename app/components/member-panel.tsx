@@ -287,9 +287,17 @@ function MemberRow({
     : Boolean(presence)
   const isAdmin = memberIsAdmin(member, roles)
   const name = displayName(member)
+  /** 最高位角色（owner / @everyone） */
+  const ownerRole = useMemo(
+    () =>
+      (roles ?? []).find((role) => role.is_everyone) ||
+      (roles ?? []).find((role) => role.position === 0),
+    [roles]
+  )
+
   /** 最高位角色的用户名样式（纯色 / 渐变） */
   const nameStyle = resolveMemberNameStyle(member, roles)
-  // 确保 owner 角色样式生效
+  // 确保 owner 角色样式生效（临时添加 owner 角色 ID 强制应用 owner 样式）
   const ownerNameStyle = ownerRole
     ? resolveMemberNameStyle({ ...member, role_ids: [...member.role_ids, ownerRole.id] }, [ownerRole])
     : nameStyle
@@ -328,14 +336,6 @@ function MemberRow({
         )
         .sort((a, b) => b.position - a.position),
     [roles, member.role_ids]
-  )
-
-  // 最高位角色（owner / @everyone）
-  const ownerRole = useMemo(
-    () =>
-      (roles ?? []).find((role) => role.is_everyone) ||
-      (roles ?? []).find((role) => role.position === 0),
-    [roles]
   )
 
   const assignableRoles = useMemo(
@@ -534,7 +534,7 @@ function MemberRow({
             <span className="flex min-w-0 items-center gap-1">
               <StyledDisplayName
                 name={name || username}
-                style={isOwner ? ownerNameStyle : nameStyle}
+                style={member.is_owner ? ownerNameStyle : nameStyle}
                 className="min-w-0 truncate text-[13px]"
               />
               {member.is_owner && (

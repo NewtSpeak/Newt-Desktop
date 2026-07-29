@@ -745,7 +745,7 @@ export function Composer({
 
   return (
     <div
-      className="relative px-4 pt-1 pb-3"
+      className="ml-auto relative px-4 pt-1 pb-3"
       onKeyDownCapture={onComposerKeyDownCapture}
     >
       {/* 拖放遮罩 */}

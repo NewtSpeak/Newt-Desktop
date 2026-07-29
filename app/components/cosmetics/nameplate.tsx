@@ -138,7 +138,11 @@ export function NameplateBackground({
             "absolute inset-y-0 right-0 h-full w-auto",
             keyOutBlack && "mix-blend-screen",
           )}
-          style={{ opacity }}
+          style={{
+            opacity,
+            mixBlendMode: keyOutBlack ? "screen" : "normal",
+            WebkitMixBlendMode: keyOutBlack ? "screen" : "normal",
+          }}
           muted
           loop
           playsInline

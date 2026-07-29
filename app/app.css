@@ -538,7 +538,7 @@
 /* 角标贴在图标右上内侧，避免 top 负值把数字裁出窗口顶边 */
 .t-badge {
   position: absolute;
-  top: -2px;
+  top: -1px;
   right: -4px;
   pointer-events: none;
   will-change: transform;

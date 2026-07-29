@@ -124,7 +124,7 @@ fn apply_activity(activity: &Value, client_id: &str) {
 
 #[cfg(unix)]
 fn serve_once() -> Result<(), String> {
-  use std::os::unix::net::{UnixListener, UnixStream};
+  use std::os::unix::net::UnixListener;
   let runtime = std::env::var("XDG_RUNTIME_DIR")
     .or_else(|_| std::env::var("TMPDIR"))
     .unwrap_or_else(|_| "/tmp".into());
