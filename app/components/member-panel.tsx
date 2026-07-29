@@ -330,13 +330,7 @@ function MemberRow({
     [roles, member.role_ids]
   )
 
-  const ownerRole = useMemo(
-    () =>
-      (roles ?? []).find((role) => role.is_everyone) ||
-      (roles ?? []).find((role) => role.position === 0),
-    [roles]
-  )
-
+  // 最高位角色（owner / @everyone）
   const ownerRole = useMemo(
     () =>
       (roles ?? []).find((role) => role.is_everyone) ||

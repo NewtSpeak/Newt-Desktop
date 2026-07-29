@@ -127,10 +127,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           私信未读角标已移至右上角信封。 */}
       <SidebarHeader
         className={cn(
-          "shrink-0 gap-0.5 border-b border-sidebar-border/50 group-data-[collapsible=icon]:px-1",
-          isMacDesktop && "pt-8",
+          "shrink-0 gap-1 border-b border-sidebar-border/50 group-data-[collapsible=icon]:px-1",
+          // Windows 下不额外规避顶部红绿灯按钮
+          !isMacDesktop && "pt-1.5",
+          isMacDesktop && "pt-2.5",
         )}
       >
+        {/* 新增顶部 Logo Icon - 彻底移除上下间隙，只保留图标本身高度 */}
+        <img
+          src="/icon.svg"
+          alt="NewtSpeak"
+          className="h-9 w-auto mx-auto"
+        />
+
         <SidebarMenu>
           <SidebarMenuItem className="relative flex justify-center">
             <SidebarMenuButton
