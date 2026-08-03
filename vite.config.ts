@@ -229,9 +229,21 @@ export default defineConfig({
   // 固定端口，避免与其他项目的 dev server 冲突（Tauri devUrl 指向此端口）
   server: {
     // 同时支持 127.0.0.1 与 localhost（::1），避免只绑一边导致连不上/旧缓存
+    // host:true → 0.0.0.0，供 Android 真机通过局域网 IP 访问
     host: true,
     port: 1420,
     strictPort: true,
+    // Android 热更：HMR 客户端需连到手机可达的本机 IP（android-dev.mjs 设置）
+    // 未设置时保持 Vite 默认（桌面 dev 不受影响）
+    ...(process.env.TAURI_DEV_HOST || process.env.VITE_DEV_HOST
+      ? {
+          hmr: {
+            protocol: "ws",
+            host: process.env.TAURI_DEV_HOST || process.env.VITE_DEV_HOST,
+            port: 1420,
+          },
+        }
+      : {}),
     // 热重载必须开 watch；只把 src-tauri 整棵树排除（尤其是 target/*.dll）
     watch: {
       ignored: [

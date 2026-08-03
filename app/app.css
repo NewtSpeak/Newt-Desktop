@@ -199,6 +199,15 @@
     height: 100%;
   }
 
+  /*
+   * App 端整页底色与 PC inset 一致：侧栏色铺满左右（含右侧卡片外的空隙），
+   * 避免 body 的 bg-background 只让左侧像「导航色」、右侧像另一块底。
+   */
+  html.app-mobile-ui,
+  html.app-mobile-ui body {
+    background-color: var(--sidebar) !important;
+  }
+
   /* 全局滚动条：细窄、浅色、不显眼。
      仅用 ::-webkit-scrollbar 定制（一旦设置标准的 scrollbar-width/color，
      引擎会忽略 webkit 规则，而标准属性最细只能到 thin ≈ 11px） */
@@ -497,6 +506,18 @@
   transition:
     transform var(--modal-close-dur) var(--modal-ease),
     opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+/* 移动 App：设置面板底部抽屉动画（覆盖 scale） */
+.settings-modal-panel.settings-modal-panel--drawer {
+  transform-origin: bottom center;
+  transform: translate3d(0, 100%, 0);
+}
+.settings-modal-panel.settings-modal-panel--drawer.is-open {
+  transform: translate3d(0, 0, 0);
+}
+.settings-modal-panel.settings-modal-panel--drawer.is-closing {
+  transform: translate3d(0, 100%, 0);
 }
 
 .settings-section-enter {

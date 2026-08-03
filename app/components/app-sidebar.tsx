@@ -128,8 +128,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader
         className={cn(
           "shrink-0 gap-1 border-b border-sidebar-border/50 group-data-[collapsible=icon]:px-1",
-          // Windows 下不额外规避顶部红绿灯按钮
-          // macOS 上增加足够顶部间距（匹配 --app-top-inset 32px），避免盖住红绿灯窗口控制按钮
+          // Windows/App 不额外规避顶部红绿灯；macOS 匹配 --app-top-inset 32px 避免盖住交通灯
           !isMacDesktop && "pt-1.5",
           isMacDesktop && "pt-8",
         )}

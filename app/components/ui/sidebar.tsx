@@ -138,7 +138,8 @@ function SidebarProvider({
           } as React.CSSProperties
         }
         className={cn(
-          "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
+          // 默认即可铺侧栏底；inset 时尤其依赖此色铺满左右
+          "group/sidebar-wrapper flex min-h-svh w-full bg-sidebar has-data-[variant=inset]:bg-sidebar",
           className
         )}
         {...props}
@@ -179,7 +180,10 @@ function Sidebar({
     )
   }
 
-  if (isMobile) {
+  // 移动端：常驻 icon 导航轨（服务器栏），继续与主内容并排包裹，
+  // 不再整栏塞进 Sheet（否则竖屏看起来「没有导航」）。
+  // collapsible=offcanvas 时仍可用 Sheet 作为临时展开。
+  if (isMobile && collapsible === "offcanvas") {
     return (
       <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
         <SheetContent
@@ -205,14 +209,28 @@ function Sidebar({
     )
   }
 
+  // 移动端（非 offcanvas Sheet 路径）：常驻 icon 轨，始终可见并占位
+  const forceIconRail = isMobile
+  const effectiveState = forceIconRail ? "collapsed" : state
+  const effectiveCollapsible = forceIconRail
+    ? "icon"
+    : state === "collapsed"
+      ? collapsible
+      : ""
+
   return (
     <div
-      className="group peer hidden text-sidebar-foreground md:block"
-      data-state={state}
-      data-collapsible={state === "collapsed" ? collapsible : ""}
+      className={cn(
+        "group peer text-sidebar-foreground",
+        // 桌面与移动端均渲染（移动端不再 hidden）
+        !isMobile && "hidden md:block",
+      )}
+      data-state={effectiveState}
+      data-collapsible={effectiveCollapsible}
       data-variant={variant}
       data-side={side}
       data-slot="sidebar"
+      data-mobile={isMobile ? "true" : undefined}
     >
       {/* This is what handles the sidebar gap on desktop */}
       <div
@@ -221,20 +239,32 @@ function Sidebar({
           "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
+          // PC inset + icon：预留「轨宽 + 内边距」，主内容嵌套在背景右侧
+          // 移动端同样采用该占位，与桌面一致
           variant === "floating" || variant === "inset"
             ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(2)))]"
-            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)"
+            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
         )}
       />
       <div
         data-slot="sidebar-container"
         data-side={side}
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] md:flex",
-          // Adjust the padding for floating and inset variants.
+          "fixed z-10 flex w-(--sidebar-width) transition-[left,right,width,top,bottom,height] duration-200 ease-linear data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
+          // 桌面 / 移动端：均贴满上下
+          "inset-y-0 h-svh",
+          !isMobile && "hidden md:flex",
+          isMobile && "flex",
+          // floating / inset：内外边距 + icon 宽（PC 与 App 同一套）
+          // 移动端同样 inset，与右侧圆角内容卡一起被 bg-sidebar 包裹
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:p-1 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(2))+2px)]"
             : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+          // 移动端：顶对齐内容卡（--app-top-inset），底与内容卡底边距一致
+          isMobile &&
+            (variant === "floating" || variant === "inset"
+              ? "pt-[var(--app-top-inset,0.5rem)]! pb-[var(--app-content-mb,max(1.25rem,env(safe-area-inset-bottom,0px)))]! pl-2! pr-1!"
+              : "pt-[var(--app-top-inset,0.5rem)]! pb-[var(--app-content-mb,max(1.25rem,env(safe-area-inset-bottom,0px)))]!"),
           className
         )}
         {...props}
@@ -242,7 +272,11 @@ function Sidebar({
         <div
           data-sidebar="sidebar"
           data-slot="sidebar-inner"
-          className="flex size-full flex-col bg-sidebar group-data-[variant=floating]:rounded-2xl group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border"
+          className={cn(
+            "flex size-full flex-col bg-sidebar",
+            // 仅 floating 做悬浮卡片；inset 导航融进背景，与 PC 一致
+            "group-data-[variant=floating]:rounded-2xl group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border",
+          )}
         >
           {children}
         </div>
@@ -307,7 +341,11 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        "relative flex w-full flex-1 flex-col bg-background md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-2xl",
+        "relative flex min-h-0 w-full flex-1 flex-col bg-background",
+        // PC 与移动 App 同一套 inset：内容卡嵌在 bg-sidebar 里
+        // 上 / 右 / 下留白，左侧不留（贴导航轨）
+        "peer-data-[variant=inset]:m-2 peer-data-[variant=inset]:ml-0",
+        "peer-data-[variant=inset]:rounded-2xl peer-data-[variant=inset]:overflow-hidden",
         className
       )}
       {...props}

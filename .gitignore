@@ -11,3 +11,11 @@ build
 
 # Tauri/Cargo (default path; actual output is repo-root .tauri-target/)
 src-tauri/target
+
+# Android 本地构建产物（gen/android 工程源码建议提交；下列为构建输出）
+src-tauri/gen/android/**/build
+src-tauri/gen/android/**/.gradle
+src-tauri/gen/android/**/local.properties
+src-tauri/gen/android/**/*.apk
+src-tauri/gen/android/**/*.aab
+src-tauri/gen/android/**/.cxx

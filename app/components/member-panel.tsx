@@ -124,23 +124,34 @@ function displayName(member: GuildMember): string {
 }
 
 /** 右侧栏外壳：可拖拽宽度 + 圆角卡片；三处出口（成员/群成员/DM 资料）共用 */
-function MemberPanelShell({ children }: { children: ReactNode }) {
+function MemberPanelShell({
+  children,
+  mobileMode = false,
+}: {
+  children: ReactNode
+  mobileMode?: boolean
+}) {
   const width = useUIStore((s) => s.memberPanelWidth)
   const setWidth = useUIStore((s) => s.setMemberPanelWidth)
   return (
     <aside
-      className="relative flex shrink-0 flex-col overflow-visible"
-      style={{ width }}
+      className={cn(
+        "relative flex shrink-0 flex-col overflow-visible",
+        mobileMode && "h-full w-full min-w-0",
+      )}
+      style={mobileMode ? undefined : { width }}
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
         {children}
       </div>
-      <PanelResizeHandle
-        edge="start"
-        width={width}
-        onWidthChange={setWidth}
-        label="调整成员列表宽度"
-      />
+      {!mobileMode ? (
+        <PanelResizeHandle
+          edge="start"
+          width={width}
+          onWidthChange={setWidth}
+          label="调整成员列表宽度"
+        />
+      ) : null}
     </aside>
   )
 }
@@ -286,6 +297,7 @@ function MemberRow({
     ? selfStatus !== "invisible"
     : Boolean(presence)
   const isAdmin = memberIsAdmin(member, roles)
+  const isOwner = Boolean(member.is_owner)
   const name = displayName(member)
   /** 最高位角色（owner / @everyone） */
   const ownerRole = useMemo(
@@ -299,7 +311,10 @@ function MemberRow({
   const nameStyle = resolveMemberNameStyle(member, roles)
   // 确保 owner 角色样式生效（临时添加 owner 角色 ID 强制应用 owner 样式）
   const ownerNameStyle = ownerRole
-    ? resolveMemberNameStyle({ ...member, role_ids: [...member.role_ids, ownerRole.id] }, [ownerRole])
+    ? resolveMemberNameStyle(
+        { ...member, role_ids: [...member.role_ids, ownerRole.id] },
+        [ownerRole]
+      )
     : nameStyle
   const avatarSrc = resolveProfileAssetUrl(member.avatar_url)
   const bannerSrc = resolveProfileAssetUrl(member.banner_url)
@@ -969,7 +984,13 @@ function MemberRow({
 // 私信右侧栏：群成员 / 1:1 资料卡（Discord 风格）
 // ---------------------------------------------------------------------------
 
-function GroupDmMembersPanel({ channelId }: { channelId: string }) {
+function GroupDmMembersPanel({
+  channelId,
+  mobileMode = false,
+}: {
+  channelId: string
+  mobileMode?: boolean
+}) {
   // 所有 hooks 必须在任何 early return 之前（避免 hooks 数量不一致崩溃）
   const selfId = useAuthStore((s) => s.user?.id)
   const selfUser = useAuthStore((s) => s.user)
@@ -1033,7 +1054,7 @@ function GroupDmMembersPanel({ channelId }: { channelId: string }) {
   })
 
   return (
-    <MemberPanelShell>
+    <MemberPanelShell mobileMode={mobileMode}>
       <div className="flex h-12 shrink-0 items-center px-3">
         <span className="text-[13px] font-semibold">
           成员 — {sorted.length}
@@ -1137,7 +1158,13 @@ function GroupDmMembersPanel({ channelId }: { channelId: string }) {
 }
 
 /** 1:1 私信对方资料卡 */
-function DmProfilePanel({ channelId }: { channelId: string }) {
+function DmProfilePanel({
+  channelId,
+  mobileMode = false,
+}: {
+  channelId: string
+  mobileMode?: boolean
+}) {
   const selfId = useAuthStore((s) => s.user?.id)
   const channel = usePrivateChannelsStore((s) =>
     s.channels.find((c) => c.id === channelId)
@@ -1184,7 +1211,7 @@ function DmProfilePanel({ channelId }: { channelId: string }) {
   }
 
   return (
-    <MemberPanelShell>
+    <MemberPanelShell mobileMode={mobileMode}>
       <div className="flex h-12 shrink-0 items-center px-3">
         <span className="text-[13px] font-semibold">资料</span>
       </div>
@@ -1322,25 +1349,39 @@ function DmProfilePanel({ channelId }: { channelId: string }) {
   )
 }
 
-function DmSidePanel() {
-  const open = useUIStore((s) => s.memberPanelOpen)
+function DmSidePanel({
+  forceOpen = false,
+  mobileMode = false,
+}: {
+  forceOpen?: boolean
+  mobileMode?: boolean
+}) {
+  const storeOpen = useUIStore((s) => s.memberPanelOpen)
+  const open = forceOpen || storeOpen
   const channelId = useUIStore((s) => s.selectedChannelId)
   const channel = usePrivateChannelsStore((s) =>
     s.channels.find((c) => c.id === channelId)
   )
   if (!open || !channelId || !channel) return null
   if (channel.type === "GROUP_DM") {
-    return <GroupDmMembersPanel channelId={channelId} />
+    return <GroupDmMembersPanel channelId={channelId} mobileMode={mobileMode} />
   }
-  return <DmProfilePanel channelId={channelId} />
+  return <DmProfilePanel channelId={channelId} mobileMode={mobileMode} />
 }
 
 // ---------------------------------------------------------------------------
 // 面板
 // ---------------------------------------------------------------------------
 
-export function MemberPanel() {
-  const open = useUIStore((state) => state.memberPanelOpen)
+export function MemberPanel({
+  forceOpen = false,
+}: {
+  /** 移动端抽屉强制打开（忽略桌面 memberPanelOpen 折叠状态） */
+  forceOpen?: boolean
+}) {
+  const storeOpen = useUIStore((state) => state.memberPanelOpen)
+  const open = forceOpen || storeOpen
+  const mobileMode = forceOpen
   const guildId = useUIStore((state) => state.selectedGuildId)
   const isDm = guildId === "@me"
   const selfId = useAuthStore((state) => state.user?.id)
@@ -1489,7 +1530,9 @@ export function MemberPanel() {
   }, [members, roles, statusByUser, selfId, selfEffective])
 
   // 私信：1:1 资料卡 / 群成员列表
-  if (isDm) return <DmSidePanel />
+  if (isDm) {
+    return <DmSidePanel forceOpen={forceOpen} mobileMode={mobileMode} />
+  }
 
   if (!open || !guildId) return null
 
@@ -1586,7 +1629,7 @@ export function MemberPanel() {
   const total = members?.length ?? 0
 
   return (
-    <MemberPanelShell>
+    <MemberPanelShell mobileMode={mobileMode}>
       {/* 面板头 */}
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase select-none">

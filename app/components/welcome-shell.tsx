@@ -19,7 +19,7 @@ import {
   SidebarProvider,
 } from "~/components/ui/sidebar"
 import { Toaster } from "~/components/ui/sonner"
-import { useIsMacDesktop } from "~/lib/platform"
+import { useIsMacDesktop, useIsMobileApp } from "~/lib/platform"
 import { cn } from "~/lib/utils"
 import {
   dragWindowOnMouseDown,
@@ -49,27 +49,35 @@ function WelcomeGuide() {
 
 export function WelcomeShell() {
   const isMacDesktop = useIsMacDesktop()
+  const isMobileApp = useIsMobileApp()
   const pending = useConnectStore((state) => state.pending)
   const [addOpen, setAddOpen] = React.useState(false)
+
+  const appTopInset = isMobileApp
+    ? "calc(env(safe-area-inset-top, 0px) + 0.5rem)"
+    : "32px"
 
   return (
     <SidebarProvider
       defaultOpen={false}
-      className="h-svh overflow-hidden"
+      className="h-svh w-full overflow-hidden bg-sidebar"
       onMouseDown={dragWindowOnSelfMouseDown}
       style={
         {
           "--sidebar-width": "calc(var(--spacing) * 72)",
           "--sidebar-width-icon": "3rem",
           "--header-height": "calc(var(--spacing) * 12)",
-          "--app-top-inset": "32px",
+          "--app-top-inset": appTopInset,
+          "--app-content-mb": isMobileApp
+            ? "max(0.5rem, env(safe-area-inset-bottom, 0px))"
+            : "0.5rem",
         } as React.CSSProperties
       }
     >
       <Sidebar
         collapsible="icon"
         variant="inset"
-        onMouseDown={dragWindowOnMouseDown}
+        onMouseDown={isMobileApp ? undefined : dragWindowOnMouseDown}
       >
         <SidebarContent className={cn(isMacDesktop && "pt-8")}>
           <SidebarGroup>
@@ -88,7 +96,20 @@ export function WelcomeShell() {
           </SidebarGroup>
         </SidebarContent>
       </Sidebar>
-      <SidebarInset className="min-h-0 overflow-hidden md:peer-data-[variant=inset]:mt-(--app-top-inset)">
+      {/*
+        与 PC 相同：SidebarInset 在 bg-sidebar 上做圆角内容卡；
+        上/右/下有 margin，左侧 ml-0 贴导航（见 sidebar.tsx SidebarInset）。
+      */}
+      <SidebarInset
+        className={cn(
+          "min-h-0",
+          // 顶：标题带/安全区；右/下：与 App 壳一致（下边距略大）
+          "peer-data-[variant=inset]:mt-[var(--app-top-inset)]!",
+          "peer-data-[variant=inset]:mr-2!",
+          "peer-data-[variant=inset]:mb-[var(--app-content-mb,0.5rem)]!",
+          "peer-data-[variant=inset]:ml-0!",
+        )}
+      >
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-none">
           {pending ? (
             <ServerAuthView key={pending.serverBaseUrl} pending={pending} />
@@ -97,7 +118,7 @@ export function WelcomeShell() {
           )}
         </div>
       </SidebarInset>
-      <Toaster position="bottom-right" />
+      <Toaster position={isMobileApp ? "top-center" : "bottom-right"} />
       <AddServerDialog open={addOpen} onOpenChange={setAddOpen} />
     </SidebarProvider>
   )

@@ -16,7 +16,7 @@ import { ActivityQuickButton } from "~/components/activity-quick-popover"
 import { NotificationsInboxButton } from "~/components/notifications-inbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip"
 import { FRIENDS_PATH } from "~/lib/friends-route"
-import { useIsMacDesktop, useIsTauri } from "~/lib/platform"
+import { useIsMobileApp, useShowWindowControls } from "~/lib/platform"
 import { dragWindowOnMouseDown } from "~/lib/window-drag"
 import { cn } from "~/lib/utils"
 import { usePrivateChannelsStore } from "~/stores/private-channels"
@@ -192,16 +192,20 @@ function WindowControls() {
 }
 
 export function TitlebarControls() {
-  const isTauri = useIsTauri()
-  const isMacDesktop = useIsMacDesktop()
-  const showWindowControls = isTauri && !isMacDesktop
+  const showWindowControls = useShowWindowControls()
+  const isMobileApp = useIsMobileApp()
+
+  // 移动 App：暂时隐藏右上角整组控件（主题/活跃度/通知/好友/窗口键），
+  // 避免缩放后与系统状态栏、标题带重叠；桌面端保持原样。
+  if (isMobileApp) return null
 
   return (
     <div
       className={cn(
-        // 不再需要顶部留白（badge 已调整 top: -1px，避免裁切）
+        // 桌面：不再需要顶部留白（badge 已调整 top: -1px）；窄屏/移动 Web 走下方 safe-area
         "fixed top-0 right-0 z-60 flex items-start gap-0.5 overflow-visible",
         showWindowControls ? "pr-0" : "pr-2",
+        "max-md:pt-[max(0.5rem,calc(env(safe-area-inset-top,0px)+0.35rem))] max-md:pr-2",
       )}
       onMouseDown={dragWindowOnMouseDown}
     >
@@ -209,11 +213,12 @@ export function TitlebarControls() {
       <ActivityQuickButton />
       <NotificationsInboxButton />
       <FriendsButton />
-      {showWindowControls && (
+      {/* 仅 Windows/Linux 桌面；Android/iOS App 不渲染窗口三键 */}
+      {showWindowControls ? (
         <div className="flex h-8 items-center self-start">
           <WindowControls />
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

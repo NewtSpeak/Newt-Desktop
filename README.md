@@ -75,6 +75,11 @@ bun run dev
 # 桌面壳
 bun run dev:tauri
 
+# Android（需 Android SDK/NDK + rust android targets，见 docs/24）
+# bun run android:init   # 首次生成 src-tauri/gen/android
+# bun run dev:android
+# bun run build:android
+
 # 生产 Web 构建
 bun run build
 
@@ -83,6 +88,8 @@ bun run pack:web
 ```
 
 配置 API 基址等以项目内环境/设置为准（指向你的 `newt-panel` 域名或本地 Server）。
+
+Android 详细步骤与权限清单：[docs/24-Android构建与运行.md](./docs/24-Android构建与运行.md)。
 
 ## 文档与权威性
 

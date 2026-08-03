@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 use std::collections::BTreeSet;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
@@ -611,9 +612,10 @@ fn linux_extract_icon(_path: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// helpers
+// helpers（仅桌面平台实现调用；移动端不编译，避免 dead_code）
 // ---------------------------------------------------------------------------
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn run_capture(cmd: &str, args: &[&str]) -> Option<String> {
   let output = Command::new(cmd).args(args).output().ok()?;
   if !output.status.success() && output.stdout.is_empty() {
@@ -626,6 +628,8 @@ fn run_capture(cmd: &str, args: &[&str]) -> Option<String> {
   Some(text)
 }
 
+// 仅 macOS Now Playing（osascript）解析用
+#[cfg(target_os = "macos")]
 fn parse_usv_now_playing(text: &str, app: &str) -> Option<NowPlaying> {
   let parts: Vec<&str> = text.split('\u{001f}').collect();
   if parts.len() < 4 {
@@ -647,6 +651,7 @@ fn parse_usv_now_playing(text: &str, app: &str) -> Option<NowPlaying> {
   })
 }
 
+#[cfg(target_os = "macos")]
 fn now_ms_simple() -> u128 {
   std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
@@ -654,6 +659,7 @@ fn now_ms_simple() -> u128 {
     .unwrap_or(0)
 }
 
+#[cfg(target_os = "macos")]
 fn b64_encode(bytes: &[u8]) -> String {
   const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);

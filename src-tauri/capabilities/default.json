@@ -2,9 +2,39 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "enables the default permissions",
-  "windows": [
-    "main"
-  ],
+  "windows": ["main"],
+  "platforms": ["linux", "macOS", "windows", "android", "iOS"],
+  "local": true,
+  "remote": {
+    "urls": [
+      "http://localhost/*",
+      "http://localhost:*/*",
+      "http://127.0.0.1/*",
+      "http://127.0.0.1:*/*",
+      "http://10.*/*",
+      "http://10.*:*/*",
+      "http://172.*/*",
+      "http://172.*:*/*",
+      "http://192.168.*/*",
+      "http://192.168.*:*/*",
+      "https://localhost/*",
+      "https://localhost:*/*",
+      "https://127.0.0.1/*",
+      "https://127.0.0.1:*/*",
+      "https://10.*/*",
+      "https://10.*:*/*",
+      "https://172.*/*",
+      "https://172.*:*/*",
+      "https://192.168.*/*",
+      "https://192.168.*:*/*",
+      "http://tauri.localhost/*",
+      "https://tauri.localhost/*",
+      "http://*/*",
+      "http://*:*/*",
+      "https://*/*",
+      "https://*:*/*"
+    ]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
@@ -19,4 +49,3 @@
     "deep-link:default"
   ]
 }
-

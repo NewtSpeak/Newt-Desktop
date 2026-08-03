@@ -22,6 +22,7 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { useIsMobileApp } from "~/lib/platform"
 import { cn } from "~/lib/utils"
 import { useSettingsStore, type SettingsSection } from "~/stores/settings"
 import { AboutSection } from "./about-section"
@@ -275,6 +276,9 @@ export function SettingsPanel() {
     setActiveAnchor((prev) => prev ?? toc[0]?.id ?? null)
   }, [storeOpen, section])
 
+  // hooks 须在 early return 之前
+  const isMobileApp = useIsMobileApp()
+
   if (phase === "closed") return null
 
   const open = phase === "open"
@@ -282,7 +286,12 @@ export function SettingsPanel() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+      className={cn(
+        "fixed inset-0 z-50 flex",
+        isMobileApp
+          ? "items-end justify-center p-0"
+          : "items-center justify-center p-4 sm:p-6",
+      )}
       role="presentation"
     >
       {/* 遮罩 */}
@@ -296,25 +305,46 @@ export function SettingsPanel() {
         onClick={requestClose}
       />
 
-      {/* 弹窗卡片 */}
+      {/* 桌面：居中卡片；移动 App：底部抽屉 */}
       <div
         role="dialog"
         aria-modal="true"
         aria-label="设置"
         className={cn(
-          "settings-modal-panel relative z-10 flex w-full max-w-4xl overflow-hidden",
-          "h-[min(720px,calc(100dvh-2rem))] sm:h-[min(680px,calc(100dvh-3rem))]",
-          "rounded-[1.75rem] bg-background text-foreground",
-          "shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_8px_30px_rgba(0,0,0,0.12),0_24px_64px_rgba(0,0,0,0.16)]",
-          "dark:shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_8px_30px_rgba(0,0,0,0.45),0_24px_64px_rgba(0,0,0,0.55)]",
+          "settings-modal-panel relative z-10 flex w-full overflow-hidden bg-background text-foreground",
+          isMobileApp
+            ? [
+                "max-w-none flex-col",
+                "h-[min(92dvh,100%)] max-h-[92dvh]",
+                "rounded-t-3xl rounded-b-none",
+                "shadow-[0_-8px_30px_rgba(0,0,0,0.18)]",
+                "pb-[env(safe-area-inset-bottom,0px)]",
+              ].join(" ")
+            : [
+                "max-w-4xl flex-row",
+                "h-[min(720px,calc(100dvh-2rem))] sm:h-[min(680px,calc(100dvh-3rem))]",
+                "rounded-[1.75rem]",
+                "shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_8px_30px_rgba(0,0,0,0.12),0_24px_64px_rgba(0,0,0,0.16)]",
+                "dark:shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_8px_30px_rgba(0,0,0,0.45),0_24px_64px_rgba(0,0,0,0.55)]",
+              ].join(" "),
           open ? "is-open" : "is-closing",
+          // 移动抽屉：用上滑动画覆盖默认 scale（见 app.css）
+          isMobileApp && "settings-modal-panel--drawer",
         )}
       >
+        {isMobileApp ? (
+          <div
+            className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-muted"
+            aria-hidden
+          />
+        ) : null}
         <nav
           className={cn(
-            "flex w-[14.5rem] shrink-0 flex-col overflow-y-auto",
-            "border-r border-border/60 bg-muted/40 py-5 pr-2 pl-3",
-            "dark:bg-muted/20",
+            "flex shrink-0 flex-col overflow-y-auto",
+            "border-border/60 bg-muted/40 dark:bg-muted/20",
+            isMobileApp
+              ? "w-full max-h-[38%] border-b py-3 pr-2 pl-3"
+              : "w-[14.5rem] border-r py-5 pr-2 pl-3",
           )}
           aria-label="设置分类"
         >
@@ -407,7 +437,7 @@ export function SettingsPanel() {
           ))}
         </nav>
 
-        <div className="relative flex min-w-0 flex-1 flex-col bg-background">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
           <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-3">
             <div className="min-w-0 pl-1">
               {currentToc.length > 0 && activeAnchor && (
@@ -438,9 +468,11 @@ export function SettingsPanel() {
               >
                 <XIcon className="size-4" />
               </button>
-              <span className="w-7 select-none text-center text-[10px] font-semibold tracking-wide text-muted-foreground tabular-nums">
-                ESC
-              </span>
+              {!isMobileApp ? (
+                <span className="w-7 select-none text-center text-[10px] font-semibold tracking-wide text-muted-foreground tabular-nums">
+                  ESC
+                </span>
+              ) : null}
             </div>
           </div>
 

@@ -50,8 +50,23 @@ const PREVIEW_MAX_CHARS = 80
 
 let permissionGranted: boolean | null = null
 
+/**
+ * Android/WebView 启动时 origin 可能短暂为 about:blank，此时 ACL 只匹配
+ * `URL: local`，调用 notification / 其它插件会抛
+ * `… not allowed on … URL: about:blank`。未就绪时不发起 IPC，也不缓存结果。
+ */
+function isWebviewOriginReady(): boolean {
+  if (typeof location === "undefined") return false
+  const href = location.href
+  return Boolean(href) && href !== "about:blank" && !href.startsWith("about:")
+}
+
 async function ensurePermission(): Promise<boolean> {
   if (permissionGranted !== null) return permissionGranted
+  // WebView 尚未导航到真实页面：跳过且不缓存，等下次再试
+  if (isTauriRuntime() && !isWebviewOriginReady()) {
+    return false
+  }
   try {
     if (isTauriRuntime()) {
       const plugin = await import("@tauri-apps/plugin-notification")
@@ -69,10 +84,20 @@ async function ensurePermission(): Promise<boolean> {
     } else {
       permissionGranted = false
     }
-  } catch {
+  } catch (err) {
+    // ACL（about:blank / 未配置 remote）可能随导航或重编消失，不缓存失败
+    const msg = err instanceof Error ? err.message : String(err ?? "")
+    const aclDenied =
+      msg.includes("not allowed") ||
+      msg.includes("about:blank") ||
+      msg.includes("capability")
+    if (aclDenied) {
+      return false
+    }
+    // 其它失败（插件缺失等）缓存，避免反复尝试
     permissionGranted = false
   }
-  return permissionGranted
+  return permissionGranted ?? false
 }
 
 async function deliver(title: string, body: string) {

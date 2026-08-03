@@ -4,6 +4,9 @@
 # chokidar hits EBUSY, killing beforeDevCommand.
 #
 # Keep build output outside Newt-Desktop so Vite never sees those files.
-# Path is relative to this config file's directory (src-tauri/.cargo/).
+#
+# Android NDK ld.lld on Windows cannot open paths with non-ASCII characters
+# (e.g. D:\研发\...). Use a pure-ASCII absolute target-dir on D:\.
+# Override with env CARGO_TARGET_DIR if you need a different location.
 [build]
-target-dir = "../../../.tauri-target/newt-desktop"
+target-dir = "D:/tauri-target/newt-desktop"

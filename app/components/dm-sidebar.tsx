@@ -269,7 +269,11 @@ function DmRow({
   )
 }
 
-export function DmSidebar() {
+export function DmSidebar({
+  mobileMode = false,
+}: {
+  mobileMode?: boolean
+}) {
   const navigate = useNavigate()
   const location = useLocation()
   const selfId = useAuthStore((s) => s.user?.id)
@@ -383,9 +387,12 @@ export function DmSidebar() {
 
   return (
     <aside
-      className="relative flex shrink-0 flex-col gap-2 overflow-visible bg-transparent"
-      style={{ width: channelListWidth }}
-      onMouseDown={dragWindowOnMouseDown}
+      className={cn(
+        "relative flex shrink-0 flex-col gap-2 overflow-visible bg-transparent",
+        mobileMode && "h-full w-full min-w-0",
+      )}
+      style={mobileMode ? undefined : { width: channelListWidth }}
+      onMouseDown={mobileMode ? undefined : dragWindowOnMouseDown}
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
         {/* 顶栏：搜索 + 新建 */}
@@ -665,12 +672,14 @@ export function DmSidebar() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <PanelResizeHandle
-        edge="end"
-        width={channelListWidth}
-        onWidthChange={setChannelListWidth}
-        label="调整私信列表宽度"
-      />
+      {!mobileMode ? (
+        <PanelResizeHandle
+          edge="end"
+          width={channelListWidth}
+          onWidthChange={setChannelListWidth}
+          label="调整私信列表宽度"
+        />
+      ) : null}
     </aside>
   )
 }

@@ -40,6 +40,7 @@
       "icons/icon.ico"
     ],
     "android": {
+      "minSdkVersion": 26,
       "debugApplicationIdSuffix": ".debug"
     },
     "macOS": {
@@ -50,7 +51,12 @@
     "deep-link": {
       "desktop": {
         "schemes": ["newtspeak"]
-      }
+      },
+      "mobile": [
+        {
+          "scheme": ["newtspeak"]
+        }
+      ]
     }
   }
 }

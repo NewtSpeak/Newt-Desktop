@@ -14,6 +14,7 @@ import "./app.css"
 import { TitlebarControls } from "~/components/titlebar-controls"
 import { TooltipProvider } from "~/components/ui/tooltip"
 import { useDeepLinkNavigation } from "~/hooks/use-deep-link"
+import { isMobileAppRuntime } from "~/lib/platform"
 import { initAppearance } from "~/stores/settings"
 
 // react-grab 仅在开发模式的浏览器环境加载
@@ -46,7 +47,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <html lang="zh-CN">
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
         <title>NewtSpeak</title>
         <link rel="icon" href="/favicon.ico?v=newt2" sizes="any" />
         <link rel="icon" type="image/png" href="/favicon.png?v=newt2" />
@@ -68,12 +72,24 @@ export default function App() {
   useEffect(() => {
     initAppearance()
   }, [])
+
+  // 移动 App：挂 html.app-mobile-ui（侧栏底色等 App 样式；不再做全局缩放）
+  useEffect(() => {
+    const root = document.documentElement
+    if (isMobileAppRuntime()) {
+      root.classList.add("app-mobile-ui")
+    } else {
+      root.classList.remove("app-mobile-ui")
+    }
+    return () => root.classList.remove("app-mobile-ui")
+  }, [])
+
   // Tauri：newtspeak://oauth/* 深链 → 授权页
   useDeepLinkNavigation()
   return (
     <>
       <Outlet />
-      {/* 右上角悬浮：主题切换 + 通知 + 好友（含未读）+（Windows/Linux）窗口三键 */}
+      {/* 右上角：主题/通知/好友；（仅 Windows/Linux 桌面）窗口三键 —— App 端不显示 */}
       <TitlebarControls />
     </>
   )

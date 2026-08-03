@@ -22,7 +22,12 @@ import { useRolesStore } from "~/stores/roles"
 import { useUIStore } from "~/stores/ui"
 import { useViewAsStore, viewAsLabel } from "~/stores/view-as"
 
-export function ChannelList() {
+export function ChannelList({
+  mobileMode = false,
+}: {
+  /** 移动端抽屉：占满父宽、隐藏拖拽条 */
+  mobileMode?: boolean
+}) {
   const navigate = useNavigate()
   const selectedGuildId = useUIStore((state) => state.selectedGuildId)
   const selectedChannelId = useUIStore((state) => state.selectedChannelId)
@@ -91,7 +96,7 @@ export function ChannelList() {
   }, [selectedGuildId, isHomeOrDm])
 
   // Discord：主页 / 私信时左侧常驻私信侧栏
-  if (isHomeOrDm) return <DmSidebar />
+  if (isHomeOrDm) return <DmSidebar mobileMode={mobileMode} />
 
   const hasChannels = (channels?.length ?? 0) > 0
   const isEmpty = channels !== undefined && !loading && !hasChannels
@@ -121,9 +126,12 @@ export function ChannelList() {
 
   return (
     <aside
-      className="relative flex shrink-0 flex-col gap-2 overflow-visible bg-transparent"
-      style={{ width: channelListWidth }}
-      onMouseDown={dragWindowOnMouseDown}
+      className={cn(
+        "relative flex shrink-0 flex-col gap-2 overflow-visible bg-transparent",
+        mobileMode && "h-full w-full min-w-0",
+      )}
+      style={mobileMode ? undefined : { width: channelListWidth }}
+      onMouseDown={mobileMode ? undefined : dragWindowOnMouseDown}
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white text-foreground dark:bg-card dark:text-card-foreground">
         {guild && <GuildBannerCarousel guild={guild} />}
@@ -161,12 +169,14 @@ export function ChannelList() {
         </div>
       </div>
       <VoicePanel />
-      <PanelResizeHandle
-        edge="end"
-        width={channelListWidth}
-        onWidthChange={setChannelListWidth}
-        label="调整频道列表宽度"
-      />
+      {!mobileMode ? (
+        <PanelResizeHandle
+          edge="end"
+          width={channelListWidth}
+          onWidthChange={setChannelListWidth}
+          label="调整频道列表宽度"
+        />
+      ) : null}
     </aside>
   )
 }
