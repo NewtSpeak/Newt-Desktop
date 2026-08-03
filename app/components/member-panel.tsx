@@ -299,23 +299,12 @@ function MemberRow({
   const isAdmin = memberIsAdmin(member, roles)
   const isOwner = Boolean(member.is_owner)
   const name = displayName(member)
-  /** 最高位角色（owner / @everyone） */
-  const ownerRole = useMemo(
-    () =>
-      (roles ?? []).find((role) => role.is_everyone) ||
-      (roles ?? []).find((role) => role.position === 0),
-    [roles]
-  )
 
-  /** 最高位角色的用户名样式（纯色 / 渐变） */
+  /**
+   * 用户名样式：服主也走统一解析（is_owner 会视同持有 managed @admin 样式）。
+   * 旧逻辑误用 @everyone 覆盖 owner 样式，导致服主/管理员渐变永远不生效。
+   */
   const nameStyle = resolveMemberNameStyle(member, roles)
-  // 确保 owner 角色样式生效（临时添加 owner 角色 ID 强制应用 owner 样式）
-  const ownerNameStyle = ownerRole
-    ? resolveMemberNameStyle(
-        { ...member, role_ids: [...member.role_ids, ownerRole.id] },
-        [ownerRole]
-      )
-    : nameStyle
   const avatarSrc = resolveProfileAssetUrl(member.avatar_url)
   const bannerSrc = resolveProfileAssetUrl(member.banner_url)
   const username = member.username?.trim() || member.user_id.slice(0, 8)
@@ -549,7 +538,7 @@ function MemberRow({
             <span className="flex min-w-0 items-center gap-1">
               <StyledDisplayName
                 name={name || username}
-                style={member.is_owner ? ownerNameStyle : nameStyle}
+                style={nameStyle}
                 className="min-w-0 truncate text-[13px]"
               />
               {member.is_owner && (

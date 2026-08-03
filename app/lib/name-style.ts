@@ -145,62 +145,52 @@ function surfaceToResolved(
   return hasDecor(decor) ? { ...emptyResolved(), ...decor } : null
 }
 
+function roleHasDisplayStyle(role: Role): boolean {
+  if (normalizeHex(role.color)) return true
+  const parsed = parseStyle(role.style)
+  return Boolean(surfaceToResolved(parsed))
+}
+
 /**
  * 解析成员展示名样式：
  * 1. 若设置了 name_style_role_id 且仍持有该角色 → 用该角色 style/color；
  * 2. 否则取持有角色中 position 最高且有 style 的角色；
  * 3. 再回退最高有 color 的角色纯色。
- * （不可改变角色绑定，仅切换样式来源）
+ *
+ * 特殊：服主（is_owner）即使未写入 member_roles，也视同持有内置 managed 管理员角色
+ *（建服种子 @admin 默认带渐变样式；历史上所有者未必被绑进该角色）。
  */
 export function resolveMemberNameStyle(
   member:
-    | Pick<GuildMember, "role_ids" | "name_style_role_id">
+    | Pick<GuildMember, "role_ids" | "name_style_role_id" | "is_owner">
     | undefined,
   roles: Role[] | undefined,
 ): ResolvedNameStyle {
   const empty = emptyResolved()
   if (!member || !roles?.length) return empty
 
-  const heldIds = new Set(member.role_ids)
+  // 统一 string 比较，避免 UUID 序列化差异导致 has 失败
+  const heldIds = new Set(
+    (member.role_ids ?? []).map((id) => String(id).toLowerCase()),
+  )
   const everyone = roles.find((r) => r.is_everyone)
 
-  // 1. 本人偏好角色
-  const preferredId = member.name_style_role_id?.trim()
-  if (preferredId) {
-    const preferred = roles.find((r) => r.id === preferredId)
-    if (
-      preferred &&
-      (preferred.is_everyone || heldIds.has(preferred.id))
-    ) {
-      const fromStyle = surfaceToResolved(parseStyle(preferred.style))
-      if (fromStyle) return fromStyle
-      const color = normalizeHex(preferred.color)
-      if (color) {
-        return {
-          ...emptyResolved(),
-          kind: "solid",
-          colors: [color],
-          primaryColor: color,
-        }
+  // 服主视同持有 managed 管理员角色（用于用户名样式，不改变真实 role_ids）
+  if (member.is_owner) {
+    for (const role of roles) {
+      if (role.managed && !role.is_everyone) {
+        heldIds.add(String(role.id).toLowerCase())
       }
     }
   }
 
-  // 2. 自动：持有角色 + @everyone，按 position 降序
-  const bound = roles
-    .filter(
-      (role) =>
-        role.is_everyone || heldIds.has(role.id),
-    )
-    .sort((a, b) => b.position - a.position)
+  const holds = (role: Role) =>
+    role.is_everyone || heldIds.has(String(role.id).toLowerCase())
 
-  for (const role of bound) {
-    const resolved = surfaceToResolved(parseStyle(role.style))
-    if (resolved) return resolved
-  }
-
-  for (const role of bound) {
-    if (role.is_everyone) continue
+  const styleFromRole = (role: Role): ResolvedNameStyle | null => {
+    const fromStyle = surfaceToResolved(parseStyle(role.style))
+    if (fromStyle && fromStyle.kind !== "none") return fromStyle
+    // style 为空对象时回退 color，避免 managed admin 仅有 color 时被跳过
     const color = normalizeHex(role.color)
     if (color) {
       return {
@@ -210,6 +200,37 @@ export function resolveMemberNameStyle(
         primaryColor: color,
       }
     }
+    return null
+  }
+
+  // 1. 本人偏好角色
+  const preferredId = member.name_style_role_id
+    ? String(member.name_style_role_id).trim().toLowerCase()
+    : ""
+  if (preferredId) {
+    const preferred = roles.find(
+      (r) => String(r.id).toLowerCase() === preferredId,
+    )
+    if (preferred && holds(preferred)) {
+      const resolved = styleFromRole(preferred)
+      if (resolved) return resolved
+    }
+  }
+
+  // 2. 自动：持有角色 + @everyone，按 position 降序（优先真正有样式的角色）
+  const bound = roles
+    .filter((role) => holds(role))
+    .sort((a, b) => {
+      // 同 position 时 managed 管理员优先（@admin position 通常最高）
+      if (b.position !== a.position) return b.position - a.position
+      if (a.managed !== b.managed) return a.managed ? -1 : 1
+      return 0
+    })
+
+  for (const role of bound) {
+    if (!roleHasDisplayStyle(role) && !role.is_everyone) continue
+    const resolved = styleFromRole(role)
+    if (resolved) return resolved
   }
 
   // @everyone color 最后

@@ -24,8 +24,14 @@ export type SendMessageInput = {
   /**
    * 限定可见身份组（服内文本频道）；空/省略 = 公开。
    * 非空时仅自己 + 指定角色成员 + 管理消息权限可见。
+   * 与 visible_user_ids 取并集。
    */
   visible_role_ids?: string[]
+  /**
+   * 限定可见用户（服内成员）；空/省略 = 不额外限定用户。
+   * 与 visible_role_ids 任一非空即启用限定可见。
+   */
+  visible_user_ids?: string[]
 }
 
 /** 发送贴图消息（一条恰好一张） */
@@ -72,6 +78,8 @@ export type EditMessageInput = {
   content?: string
   /** 省略不改；[] = 公开；非空 = 限定身份组 */
   visible_role_ids?: string[]
+  /** 省略不改；[] = 清空用户名单；非空 = 限定用户 */
+  visible_user_ids?: string[]
 }
 
 /** 编辑消息正文（仅作者可编辑） */

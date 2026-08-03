@@ -54,6 +54,7 @@ import {
   EmojiPickerPopover,
   type ExpressionPick,
 } from "./emoji-picker"
+import { MessageVisibilityPicker } from "./message-visibility-picker"
 
 const MAX_CONTENT = 4000
 const MAX_ATTACHMENTS = 10
@@ -209,6 +210,7 @@ export function Composer({
     useChannelsStore((state) => state.byGuild[guildId]) ?? []
   const roles = useRolesStore((state) => state.byGuild[guildId]) ?? []
   const fetchRoles = useRolesStore((state) => state.fetchRoles)
+  const fetchMembers = useMembersStore((state) => state.fetchMembers)
   const channelMeta = useChannelsStore((state) =>
     guildId
       ? state.byGuild[guildId]?.find((ch) => ch.id === channelId)
@@ -227,55 +229,97 @@ export function Composer({
   const [mentionIndex, setMentionIndex] = useState(0)
   /** 发送失败后从错误码推断的对端拉黑（本地 relationships 看不到对方拉黑我） */
   const [peerBlockHint, setPeerBlockHint] = useState(false)
-  /** 限定可见身份组；空 = 公开（所有人） */
+  /** 限定可见身份组；空 = 不额外限定角色 */
   const [visibleRoleIds, setVisibleRoleIds] = useState<string[]>([])
+  /** 限定可见用户；空 = 不额外限定用户 */
+  const [visibleUserIds, setVisibleUserIds] = useState<string[]>([])
   const [visibilityOpen, setVisibilityOpen] = useState(false)
 
   const tipTapRef = useRef<TipTapComposerHandle | null>(null)
   const lastTypingRef = useRef(0)
-  const visibilityPanelRef = useRef<HTMLDivElement | null>(null)
 
-  // 服内文本频道：确保角色列表可用（可见范围选择器）
+  // 服内文本频道：确保角色/成员列表可用（可见范围选择器）
   useEffect(() => {
     if (!guildId) return
     void fetchRoles(guildId).catch(() => undefined)
-  }, [guildId, fetchRoles])
+    void fetchMembers(guildId).catch(() => undefined)
+  }, [guildId, fetchRoles, fetchMembers])
+
+  // 打开选择器时再拉一次成员，避免列表为空
+  useEffect(() => {
+    if (!visibilityOpen || !guildId) return
+    void fetchMembers(guildId).catch(() => undefined)
+  }, [visibilityOpen, guildId, fetchMembers])
 
   // 频道切换时重置可见范围
   useEffect(() => {
     setVisibleRoleIds([])
+    setVisibleUserIds([])
     setVisibilityOpen(false)
   }, [channelId])
 
-  // 点击外部关闭可见范围面板
-  useEffect(() => {
-    if (!visibilityOpen) return
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node
-      if (visibilityPanelRef.current?.contains(target)) return
-      setVisibilityOpen(false)
-    }
-    document.addEventListener("mousedown", onPointerDown)
-    return () => document.removeEventListener("mousedown", onPointerDown)
-  }, [visibilityOpen])
+  const hasRestrictedVisibility =
+    visibleRoleIds.length > 0 || visibleUserIds.length > 0
 
-  const selectableRoles = useMemo(
-    () =>
-      roles
-        .filter((role) => !role.is_everyone)
-        .slice()
-        .sort((a, b) => b.position - a.position),
-    [roles],
-  )
-
+  /** 摘要文案：明确标注「身份组 / 用户」，避免角色名被误当成系统功能 */
   const visibilityLabel = useMemo(() => {
-    if (visibleRoleIds.length === 0) return "所有人"
+    if (!hasRestrictedVisibility) return "所有人"
+    const parts: string[] = []
     if (visibleRoleIds.length === 1) {
       const role = roles.find((item) => item.id === visibleRoleIds[0])
-      return role?.name ?? "1 个身份组"
+      const roleName = role?.name?.trim() || "未命名身份组"
+      parts.push(`身份组「${roleName}」`)
+    } else if (visibleRoleIds.length > 1) {
+      parts.push(`${visibleRoleIds.length} 个身份组`)
     }
-    return `${visibleRoleIds.length} 个身份组`
-  }, [visibleRoleIds, roles])
+    if (visibleUserIds.length === 1) {
+      const member = members.find((item) => item.user_id === visibleUserIds[0])
+      const name =
+        member?.nickname ||
+        member?.display_name ||
+        member?.username ||
+        resolveName(visibleUserIds[0]) ||
+        "成员"
+      parts.push(`用户 @${member?.username || name}`)
+    } else if (visibleUserIds.length > 1) {
+      parts.push(`${visibleUserIds.length} 位用户`)
+    }
+    return parts.join(" + ") || "限定"
+  }, [
+    hasRestrictedVisibility,
+    visibleRoleIds,
+    visibleUserIds,
+    roles,
+    members,
+    resolveName,
+  ])
+
+  /** 悬停完整说明（列出已选身份组名与用户名） */
+  const visibilityTitle = useMemo(() => {
+    if (!hasRestrictedVisibility) {
+      return "选择谁能看到这条消息（可按身份组 / 用户限定）"
+    }
+    const roleNames = visibleRoleIds.map((id) => {
+      const role = roles.find((item) => item.id === id)
+      return role?.name?.trim() || id.slice(0, 8)
+    })
+    const userNames = visibleUserIds.map((id) => {
+      const member = members.find((item) => item.user_id === id)
+      const uname = member?.username || resolveName(id) || id.slice(0, 8)
+      return `@${uname}`
+    })
+    const lines = ["仅以下范围可见（作者与版主仍始终可见）"]
+    if (roleNames.length > 0) lines.push(`身份组：${roleNames.join("、")}`)
+    if (userNames.length > 0) lines.push(`用户：${userNames.join("、")}`)
+    return lines.join("\n")
+  }, [
+    hasRestrictedVisibility,
+    visibleRoleIds,
+    visibleUserIds,
+    roles,
+    members,
+    resolveName,
+  ])
 
   const toggleVisibleRole = (roleId: string) => {
     setVisibleRoleIds((current) =>
@@ -283,6 +327,21 @@ export function Composer({
         ? current.filter((id) => id !== roleId)
         : [...current, roleId],
     )
+  }
+
+  const toggleVisibleUser = (userId: string) => {
+    setVisibleUserIds((current) =>
+      current.includes(userId)
+        ? current.filter((id) => id !== userId)
+        : current.length >= 20
+          ? current
+          : [...current, userId],
+    )
+  }
+
+  const clearVisibility = () => {
+    setVisibleRoleIds([])
+    setVisibleUserIds([])
   }
   const uploadsRef = useRef(uploads)
   uploadsRef.current = uploads
@@ -613,6 +672,8 @@ export function Composer({
         ],
         visibleRoleIds:
           guildId && visibleRoleIds.length > 0 ? visibleRoleIds : undefined,
+        visibleUserIds:
+          guildId && visibleUserIds.length > 0 ? visibleUserIds : undefined,
       })
       onCancelReply()
     } catch (error) {
@@ -693,6 +754,8 @@ export function Composer({
         attachments,
         visibleRoleIds:
           guildId && visibleRoleIds.length > 0 ? visibleRoleIds : undefined,
+        visibleUserIds:
+          guildId && visibleUserIds.length > 0 ? visibleUserIds : undefined,
       })
     } catch (error) {
       if (error instanceof ApiError) {
@@ -932,128 +995,6 @@ export function Composer({
           </div>
         )}
 
-        {/* 可见范围：服内频道可选限定身份组（频道策略可关闭/强制） */}
-        {guildId && !isBlocked && (allowRestricted || forceDefault) && (
-          <div className="relative flex items-center gap-2 px-3 py-1.5" ref={visibilityPanelRef}>
-            {forceDefault ? (
-              <span
-                className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground"
-                title="频道已强制默认可见范围"
-              >
-                <LockIcon className="size-3.5 shrink-0" aria-hidden />
-                <span className="truncate">
-                  可见：
-                  {channelDefaultRoleIds.length === 0
-                    ? "所有人（频道强制）"
-                    : `频道默认 ${channelDefaultRoleIds.length} 个身份组`}
-                </span>
-              </span>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setVisibilityOpen((open) => !open)}
-                  className={cn(
-                    "inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
-                    visibleRoleIds.length > 0
-                      ? "bg-amber-500/15 text-amber-800 hover:bg-amber-500/20 dark:text-amber-200"
-                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                  )}
-                  title="选择谁能看到这条消息"
-                  aria-expanded={visibilityOpen}
-                  aria-haspopup="listbox"
-                >
-                  {visibleRoleIds.length > 0 ? (
-                    <LockIcon className="size-3.5 shrink-0" aria-hidden />
-                  ) : (
-                    <EyeIcon className="size-3.5 shrink-0" aria-hidden />
-                  )}
-                  <span className="truncate">可见：{visibilityLabel}</span>
-                </button>
-                {visibleRoleIds.length > 0 && (
-                  <button
-                    type="button"
-                    className="text-[11px] text-muted-foreground hover:text-foreground"
-                    onClick={() => setVisibleRoleIds([])}
-                  >
-                    恢复公开
-                  </button>
-                )}
-                {visibilityOpen && (
-                  <div
-                    role="listbox"
-                    aria-label="选择可见身份组"
-                    className="absolute bottom-full left-3 z-30 mb-1 max-h-56 w-64 overflow-y-auto rounded-lg border-0 bg-popover p-1 shadow-none"
-                  >
-                    <p className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
-                      仅自己与勾选身份组可见；版主（管理消息）仍可审核
-                      {channelDefaultRoleIds.length > 0
-                        ? "；不选则使用频道默认"
-                        : ""}
-                    </p>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={visibleRoleIds.length === 0}
-                      onClick={() => {
-                        setVisibleRoleIds([])
-                        setVisibilityOpen(false)
-                      }}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                        visibleRoleIds.length === 0 && "bg-muted",
-                      )}
-                    >
-                      <EyeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="flex-1">所有人</span>
-                      {visibleRoleIds.length === 0 && (
-                        <CheckIcon className="size-3.5 text-primary" />
-                      )}
-                    </button>
-                    {selectableRoles.length === 0 ? (
-                      <p className="px-2 py-2 text-xs text-muted-foreground">
-                        暂无可选身份组
-                      </p>
-                    ) : (
-                      selectableRoles.map((role: Role) => {
-                        const selected = visibleRoleIds.includes(role.id)
-                        return (
-                          <button
-                            key={role.id}
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            onClick={() => toggleVisibleRole(role.id)}
-                            className={cn(
-                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                              selected && "bg-muted",
-                            )}
-                          >
-                            <span
-                              className="size-2.5 shrink-0 rounded-full"
-                              style={{
-                                backgroundColor:
-                                  role.color || "var(--muted-foreground)",
-                              }}
-                              aria-hidden
-                            />
-                            <span className="min-w-0 flex-1 truncate">
-                              {role.name}
-                            </span>
-                            {selected && (
-                              <CheckIcon className="size-3.5 shrink-0 text-primary" />
-                            )}
-                          </button>
-                        )
-                      })
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
         {/* 拉黑态：红锁 + 红字（仍保留会话窗口，仅禁止发送） */}
         {isBlocked && blockHintText ? (
           <div
@@ -1083,6 +1024,54 @@ export function Composer({
             onPasteFiles={addFiles}
             editorRef={tipTapRef}
             resolveMentionLabel={resolveName}
+            toolbarTrailing={
+              guildId && (allowRestricted || forceDefault) ? (
+                <div className="flex min-w-0 max-w-[min(100%,16rem)] items-center gap-1">
+                  {forceDefault ? (
+                    <span
+                      className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground"
+                      title="频道已强制默认可见范围"
+                    >
+                      <LockIcon className="size-3.5 shrink-0" aria-hidden />
+                      <span className="truncate">
+                        可见：
+                        {channelDefaultRoleIds.length === 0
+                          ? "所有人（频道强制）"
+                          : `频道默认 ${channelDefaultRoleIds.length} 个身份组`}
+                      </span>
+                    </span>
+                  ) : (
+                    <>
+                      <MessageVisibilityPicker
+                        open={visibilityOpen}
+                        onOpenChange={setVisibilityOpen}
+                        roles={roles}
+                        members={members}
+                        visibleRoleIds={visibleRoleIds}
+                        visibleUserIds={visibleUserIds}
+                        onToggleRole={toggleVisibleRole}
+                        onToggleUser={toggleVisibleUser}
+                        onClear={clearVisibility}
+                        channelDefaultRoleCount={channelDefaultRoleIds.length}
+                        label={visibilityLabel}
+                        title={visibilityTitle}
+                        hasRestricted={hasRestrictedVisibility}
+                        resolveName={resolveName}
+                      />
+                      {hasRestrictedVisibility && (
+                        <button
+                          type="button"
+                          className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground"
+                          onClick={clearVisibility}
+                        >
+                          恢复公开
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : undefined
+            }
             leadingActions={
               <button
                 type="button"

@@ -395,8 +395,14 @@ export type Message = {
   /**
    * 限定可见身份组；空/省略 = 公开（频道 VIEW 即可）。
    * 非空时仅作者、持有任一角色的成员、MANAGE_MESSAGES 可见。
+   * 与 visible_user_ids 取并集。
    */
   visible_role_ids?: string[]
+  /**
+   * 限定可见用户（服内成员 user_id）；空/省略 = 不额外限定用户。
+   * 与 visible_role_ids 任一非空即启用限定可见；作者始终可见。
+   */
+  visible_user_ids?: string[]
   edit_count: number
   edited_at?: string
   nonce?: string

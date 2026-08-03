@@ -149,24 +149,56 @@ function fullTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN")
 }
 
-/** 限定可见范围角标：仅作者 + 指定身份组（及管理消息权限）可见 */
+/** 限定可见范围角标：仅作者 + 指定身份组/用户（及管理消息权限）可见 */
 function RestrictedVisibilityBadge({
   roleIds,
+  userIds,
   roles,
+  resolveName,
+  className,
 }: {
-  roleIds: string[]
+  roleIds?: string[]
+  userIds?: string[]
   roles: Role[] | undefined
+  resolveName?: (userId: string) => string
+  className?: string
 }) {
-  const names = roleIds.map((id) => {
+  const roleNames = (roleIds ?? []).map((id) => {
     const role = roles?.find((item) => item.id === id)
     return role?.name ?? "未知身份组"
   })
-  const title = `仅自己与身份组可见：${names.join("、")}`
-  const label =
-    names.length === 1 ? names[0] : names.length > 1 ? `${names.length} 个身份组` : "限定"
+  const userNames = (userIds ?? []).map((id) =>
+    resolveName?.(id)?.trim() || id.slice(0, 8),
+  )
+  const parts: string[] = []
+  if (roleNames.length > 0) {
+    parts.push(
+      roleNames.length === 1
+        ? `身份组「${roleNames[0]}」`
+        : `${roleNames.length} 个身份组`,
+    )
+  }
+  if (userNames.length > 0) {
+    parts.push(
+      userNames.length === 1
+        ? `用户 ${userNames[0]}`
+        : `${userNames.length} 位用户`,
+    )
+  }
+  const titleBits: string[] = []
+  if (roleNames.length > 0) titleBits.push(`身份组：${roleNames.join("、")}`)
+  if (userNames.length > 0) titleBits.push(`用户：${userNames.join("、")}`)
+  const title =
+    titleBits.length > 0
+      ? `仅自己与以下范围可见；${titleBits.join("；")}`
+      : "限定可见"
+  const label = parts.length > 0 ? parts.join(" + ") : "限定"
   return (
     <span
-      className="ml-1 inline-flex items-center gap-0.5 align-baseline text-[10px] text-amber-700 select-none dark:text-amber-300"
+      className={cn(
+        "inline-flex items-center gap-0.5 text-[10px] text-amber-700 select-none dark:text-amber-300",
+        className,
+      )}
       title={title}
     >
       <LockIcon className="size-3" aria-hidden />
@@ -1338,7 +1370,9 @@ export const MessageRow = memo(function MessageRow({
   const [ctxDeleteOpen, setCtxDeleteOpen] = useState(false)
   const [ctxDeleteError, setCtxDeleteError] = useState<string | null>(null)
   const [editHistoryOpen, setEditHistoryOpen] = useState(false)
-  const isRestricted = (message.visible_role_ids?.length ?? 0) > 0
+  const isRestricted =
+    (message.visible_role_ids?.length ?? 0) > 0 ||
+    (message.visible_user_ids?.length ?? 0) > 0
   const authorMember = useMembersStore((state) =>
     guildId
       ? state.byGuild[guildId]?.find((m) => m.user_id === message.author_id)
@@ -1468,7 +1502,7 @@ export const MessageRow = memo(function MessageRow({
                 <StyledDisplayName
                   name={displayName}
                   style={null}
-                  className="truncate text-sm font-semibold"
+                  className="min-w-0 truncate text-sm font-semibold"
                 />
               ) : (
                 <MemberStyledName
@@ -1477,7 +1511,7 @@ export const MessageRow = memo(function MessageRow({
                   member={authorMember}
                   roles={roles}
                   name={displayName}
-                  className="truncate text-sm font-semibold"
+                  className="min-w-0 truncate text-sm font-semibold"
                 />
               )}
               {systemAdmin ? (
@@ -1499,8 +1533,34 @@ export const MessageRow = memo(function MessageRow({
               >
                 {groupTime(message.created_at)}
               </span>
+              {/* 限定可见角标：顶到用户名行最右侧 */}
+              {!editing &&
+                ((message.visible_role_ids?.length ?? 0) > 0 ||
+                  (message.visible_user_ids?.length ?? 0) > 0) && (
+                  <RestrictedVisibilityBadge
+                    className="ml-auto shrink-0"
+                    roleIds={message.visible_role_ids}
+                    userIds={message.visible_user_ids}
+                    roles={roles}
+                    resolveName={resolveName}
+                  />
+                )}
             </p>
           )}
+          {/* 无 header 时（连续消息）角标仍跟在正文后 */}
+          {!showHeader &&
+            !editing &&
+            ((message.visible_role_ids?.length ?? 0) > 0 ||
+              (message.visible_user_ids?.length ?? 0) > 0) && (
+              <div className="mb-0.5 flex justify-end">
+                <RestrictedVisibilityBadge
+                  roleIds={message.visible_role_ids}
+                  userIds={message.visible_user_ids}
+                  roles={roles}
+                  resolveName={resolveName}
+                />
+              </div>
+            )}
           {editing ? (
             <InlineEditor
               channelId={channelId}
@@ -1510,21 +1570,13 @@ export const MessageRow = memo(function MessageRow({
               onDone={onStopEdit}
             />
           ) : (
-            <>
-              <MessageStreamBody
-                message={message}
-                resolveName={resolveName}
-                resolveAvatarUrl={resolveAvatarUrl}
-                selfId={selfId}
-                guildId={guildId ?? message.guild_id}
-              />
-              {(message.visible_role_ids?.length ?? 0) > 0 && (
-                <RestrictedVisibilityBadge
-                  roleIds={message.visible_role_ids!}
-                  roles={roles}
-                />
-              )}
-            </>
+            <MessageStreamBody
+              message={message}
+              resolveName={resolveName}
+              resolveAvatarUrl={resolveAvatarUrl}
+              selfId={selfId}
+              guildId={guildId ?? message.guild_id}
+            />
           )}
           <ReactionPills
             message={message}
@@ -1706,6 +1758,7 @@ export function PendingRow({
   attachments,
   stickerPreview,
   visibleRoleIds,
+  visibleUserIds,
   status,
   errorMessage,
   selfName,
@@ -1727,6 +1780,7 @@ export function PendingRow({
     asset_url?: string
   }[]
   visibleRoleIds?: string[]
+  visibleUserIds?: string[]
   status: "sending" | "failed"
   errorMessage?: string
   selfName: string
@@ -1819,10 +1873,13 @@ export function PendingRow({
                   ]
                 </p>
               )}
-              {(visibleRoleIds?.length ?? 0) > 0 && (
+              {((visibleRoleIds?.length ?? 0) > 0 ||
+                (visibleUserIds?.length ?? 0) > 0) && (
                 <RestrictedVisibilityBadge
-                  roleIds={visibleRoleIds!}
+                  roleIds={visibleRoleIds}
+                  userIds={visibleUserIds}
                   roles={roles}
+                  resolveName={resolveName}
                 />
               )}
             </div>

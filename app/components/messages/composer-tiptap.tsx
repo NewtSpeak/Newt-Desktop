@@ -1,7 +1,14 @@
 // TipTap 消息输入：有限 Markdown 工具栏 + 提及 chip + wire Markdown 序列化。
 // 由 Composer 嵌入，保留附件/发送/冷却等外层逻辑。
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { EditorContent, useEditor, type Editor } from "@tiptap/react"
 import {
   BoldIcon,
@@ -30,6 +37,17 @@ import {
 } from "~/lib/tiptap/markdown-bridge"
 import { cn } from "~/lib/utils"
 import { useStickersStore } from "~/stores/stickers"
+import { Button } from "~/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog"
+import { Input } from "~/components/ui/input"
+import { Label } from "~/components/ui/label"
 
 function channelResolveForDoc() {
   return {
@@ -63,11 +81,14 @@ function FormatToolbar({
   onInline,
   onBlock,
   onLink,
+  trailing,
 }: {
   state: ComposerFormatState
   onInline: (cmd: "bold" | "italic" | "strike" | "code") => void
   onBlock: (cmd: "quote" | "list" | "codeblock") => void
   onLink: () => void
+  /** 工具栏最右侧插槽（如消息可见范围） */
+  trailing?: ReactNode
 }) {
   const btn =
     "flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/5 hover:text-foreground data-[active=true]:bg-primary/15 data-[active=true]:text-primary"
@@ -77,7 +98,13 @@ function FormatToolbar({
       className="flex flex-wrap items-center gap-0.5 border-b border-border/40 px-2 py-1"
       role="toolbar"
       aria-label="Markdown 格式"
-      onMouseDown={(event) => event.preventDefault()}
+      onMouseDown={(event) => {
+        // 格式按钮：preventDefault 保持编辑器焦点；右侧插槽（Popover 等）不要拦截
+        if ((event.target as HTMLElement).closest("[data-toolbar-trailing]")) {
+          return
+        }
+        event.preventDefault()
+      }}
     >
       <button
         type="button"
@@ -160,6 +187,14 @@ function FormatToolbar({
       >
         <LinkIcon className="size-3.5" />
       </button>
+      {trailing ? (
+        <div
+          data-toolbar-trailing
+          className="ml-auto flex min-w-0 shrink-0 items-center gap-1 pl-1"
+        >
+          {trailing}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -258,6 +293,8 @@ export function TipTapComposerEditor({
   resolveMentionLabel,
   leadingActions,
   trailingActions,
+  /** 格式工具栏最右侧（如消息可见范围） */
+  toolbarTrailing,
   /** 初始 wire Markdown（消息内联编辑用）；设置后不随 channelId 清空 */
   initialMarkdown,
   /** composer=底部输入；inline-edit=消息内联编辑（更矮、可藏工具栏） */
@@ -279,9 +316,11 @@ export function TipTapComposerEditor({
   editorRef: React.MutableRefObject<TipTapComposerHandle | null>
   resolveMentionLabel?: (id: string) => string
   /** 工具栏下方、编辑器左侧（如附件按钮） */
-  leadingActions?: React.ReactNode
+  leadingActions?: ReactNode
   /** 编辑器右侧（如表情 / 发送） */
-  trailingActions?: React.ReactNode
+  trailingActions?: ReactNode
+  /** 格式工具栏最右侧插槽 */
+  toolbarTrailing?: ReactNode
   initialMarkdown?: string
   variant?: "composer" | "inline-edit"
   hideToolbar?: boolean
@@ -289,6 +328,12 @@ export function TipTapComposerEditor({
 }) {
   const [formatState, setFormatState] =
     useState<ComposerFormatState>(EMPTY_FORMAT)
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkHref, setLinkHref] = useState("https://")
+  const [linkError, setLinkError] = useState<string | null>(null)
+  /** 打开链接弹窗前保存选区，避免焦点进 Dialog 后丢失 */
+  const linkSelectionRef = useRef<{ from: number; to: number } | null>(null)
+  const linkInputRef = useRef<HTMLInputElement | null>(null)
 
   const isInlineEdit = variant === "inline-edit"
   const extensions = useMemo(
@@ -558,6 +603,55 @@ export function TipTapComposerEditor({
     }
   }, [editor, editorRef, onChange])
 
+  const openLinkDialog = useCallback(() => {
+    if (!editor) return
+    const { from, to } = editor.state.selection
+    linkSelectionRef.current = { from, to }
+    const current = editor.getAttributes("link")?.href
+    setLinkHref(
+      typeof current === "string" && current.trim()
+        ? current.trim()
+        : "https://",
+    )
+    setLinkError(null)
+    setLinkOpen(true)
+  }, [editor])
+
+  const applyLink = useCallback(() => {
+    if (!editor) return
+    const href = linkHref.trim()
+    if (!href) {
+      setLinkError("请输入链接地址")
+      return
+    }
+    if (!/^https?:\/\//i.test(href)) {
+      setLinkError("链接需以 http:// 或 https:// 开头")
+      return
+    }
+    const sel = linkSelectionRef.current
+    let chain = editor.chain().focus()
+    if (sel) {
+      chain = chain.setTextSelection(sel)
+    }
+    chain.extendMarkRange("link").setLink({ href }).run()
+    setLinkOpen(false)
+    setLinkError(null)
+    linkSelectionRef.current = null
+  }, [editor, linkHref])
+
+  const removeLink = useCallback(() => {
+    if (!editor) return
+    const sel = linkSelectionRef.current
+    let chain = editor.chain().focus()
+    if (sel) {
+      chain = chain.setTextSelection(sel)
+    }
+    chain.extendMarkRange("link").unsetLink().run()
+    setLinkOpen(false)
+    setLinkError(null)
+    linkSelectionRef.current = null
+  }, [editor])
+
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (!editor) return
     const mod = event.metaKey || event.ctrlKey
@@ -601,11 +695,7 @@ export function TipTapComposerEditor({
       }
       if (key === "l" && event.shiftKey) {
         event.preventDefault()
-        const raw = window.prompt("输入链接地址（http/https）", "https://")
-        if (!raw) return
-        const href = raw.trim()
-        if (!/^https?:\/\//i.test(href)) return
-        editor.chain().focus().extendMarkRange("link").setLink({ href }).run()
+        openLinkDialog()
         return
       }
     }
@@ -652,6 +742,7 @@ export function TipTapComposerEditor({
       {showToolbar && (
         <FormatToolbar
           state={formatState}
+          trailing={toolbarTrailing}
           onInline={(cmd) => {
             const chain = editor.chain().focus()
             if (cmd === "bold") chain.toggleBold().run()
@@ -665,18 +756,7 @@ export function TipTapComposerEditor({
             if (cmd === "list") chain.toggleBulletList().run()
             if (cmd === "codeblock") chain.toggleCodeBlock().run()
           }}
-          onLink={() => {
-            const raw = window.prompt("输入链接地址（http/https）", "https://")
-            if (raw === null) return
-            const href = raw.trim()
-            if (!href || !/^https?:\/\//i.test(href)) return
-            editor
-              .chain()
-              .focus()
-              .extendMarkRange("link")
-              .setLink({ href })
-              .run()
-          }}
+          onLink={openLinkDialog}
         />
       )}
       <div
@@ -695,6 +775,87 @@ export function TipTapComposerEditor({
         />
         {trailingActions}
       </div>
+
+      <Dialog
+        open={linkOpen}
+        onOpenChange={(open) => {
+          setLinkOpen(open)
+          if (!open) {
+            setLinkError(null)
+            linkSelectionRef.current = null
+            // 关闭后把焦点还给编辑器
+            queueMicrotask(() => editor.chain().focus().run())
+          }
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-md"
+          initialFocus={linkInputRef}
+        >
+          <DialogHeader>
+            <DialogTitle>插入链接</DialogTitle>
+            <DialogDescription>
+              输入以 http:// 或 https:// 开头的地址，将应用到当前选中文本。
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="grid gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              applyLink()
+            }}
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="composer-link-href">链接地址</Label>
+              <Input
+                ref={linkInputRef}
+                id="composer-link-href"
+                type="url"
+                inputMode="url"
+                autoComplete="url"
+                placeholder="https://example.com"
+                value={linkHref}
+                aria-invalid={Boolean(linkError)}
+                onFocus={(event) => {
+                  // 打开时全选，方便直接覆盖默认 https://
+                  try {
+                    event.currentTarget.select()
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                onChange={(event) => {
+                  setLinkHref(event.target.value)
+                  if (linkError) setLinkError(null)
+                }}
+              />
+              {linkError ? (
+                <p className="text-xs text-destructive" role="alert">
+                  {linkError}
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setLinkOpen(false)}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={removeLink}
+              >
+                移除链接
+              </Button>
+              <Button type="submit">插入</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
