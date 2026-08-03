@@ -22,7 +22,7 @@ if (import.meta.env.DEV && typeof document !== "undefined") {
   import("react-grab")
 }
 
-/** 站点图标：来自 Newt-assets/logo.png（links + head 双写，避免 SPA 壳漏掉） */
+/** 站点图标：favicon 等；侧栏品牌字标见 /icon.svg（links + head 双写，避免 SPA 壳漏掉） */
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico?v=newt4", sizes: "any" },
   { rel: "icon", type: "image/png", href: "/favicon.png?v=newt4" },

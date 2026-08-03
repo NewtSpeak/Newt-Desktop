@@ -21,6 +21,8 @@ use std::sync::Mutex;
 
 use tauri::AppHandle;
 #[cfg(desktop)]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+#[cfg(desktop)]
 use tauri::{Emitter, Manager};
 #[cfg(mobile)]
 use tauri::Manager;
@@ -200,6 +202,35 @@ pub fn run() {
       // Discord RPC 兼容监听（仅桌面；无 Discord 占用管道时生效）
       #[cfg(desktop)]
       discord_rpc::start_discord_rpc_server();
+
+      // 系统托盘：使用 Newt-assets/logo.png 生成的 tray-icon（见 tauri.conf.json trayIcon）
+      // 左键单击 / 双击 → 显示并聚焦主窗口
+      #[cfg(desktop)]
+      {
+        let handle = app.handle().clone();
+        app.on_tray_icon_event(move |_tray, event| {
+          let show = match event {
+            TrayIconEvent::Click {
+              button: MouseButton::Left,
+              button_state: MouseButtonState::Up,
+              ..
+            } => true,
+            TrayIconEvent::DoubleClick {
+              button: MouseButton::Left,
+              ..
+            } => true,
+            _ => false,
+          };
+          if show {
+            if let Some(window) = handle.get_webview_window("main") {
+              let _ = window.unminimize();
+              let _ = window.show();
+              let _ = window.set_focus();
+            }
+          }
+        });
+      }
+
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![

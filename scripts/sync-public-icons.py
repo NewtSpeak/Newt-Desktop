@@ -59,9 +59,12 @@ def main() -> None:
     else:
         print("keep tauri icon.ico", ico.stat().st_size)
 
-    # 注意：不要覆盖 public/icon.svg。
-    # Newt-assets/icon.svg 的 transform 与历史 potrace 路径不兼容，
-    # 会导致侧栏 logo 画到 viewBox 外；侧栏已改用 app-icon.png。
+    # 同步品牌字标 SVG（侧栏 / 登录页使用）
+    svg_src = LOGO.parent / "icon.svg"
+    svg_dst = PUB / "icon.svg"
+    if svg_src.is_file():
+        svg_dst.write_bytes(svg_src.read_bytes())
+        print("SVG", svg_dst)
 
     print("done")
 
