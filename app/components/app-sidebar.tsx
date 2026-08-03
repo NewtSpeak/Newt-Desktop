@@ -133,10 +133,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           isMacDesktop && "pt-8",
         )}
       >
+        {/* 使用品牌 PNG：icon.svg 为黑底单色且坐标系易在同步时坏掉，深色侧栏/Win WebView 上会「消失」 */}
         <img
-          src="/icon.svg"
+          src="/app-icon.png"
           alt="NewtSpeak"
-          className="h-9 w-auto mx-auto"
+          width={36}
+          height={36}
+          draggable={false}
+          className="mx-auto size-9 shrink-0 rounded-lg object-cover select-none"
         />
 
         <SidebarMenu>
