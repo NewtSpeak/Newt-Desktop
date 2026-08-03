@@ -12,8 +12,10 @@ import { useEffect } from "react"
 import type { Route } from "./+types/root"
 import "./app.css"
 import { TitlebarControls } from "~/components/titlebar-controls"
+import { UpdateReadyBanner } from "~/components/update-ready-banner"
 import { TooltipProvider } from "~/components/ui/tooltip"
 import { useDeepLinkNavigation } from "~/hooks/use-deep-link"
+import { useUpdaterBootstrap } from "~/hooks/use-updater"
 import { isMobileAppRuntime } from "~/lib/platform"
 import { initAppearance } from "~/stores/settings"
 
@@ -86,11 +88,14 @@ export default function App() {
 
   // Tauri：newtspeak://oauth/* 深链 → 授权页
   useDeepLinkNavigation()
+  // 桌面端：应用内更新状态订阅（10 分钟轮询在 Rust 侧）
+  useUpdaterBootstrap()
   return (
     <>
       <Outlet />
       {/* 右上角：主题/通知/好友；（仅 Windows/Linux 桌面）窗口三键 —— App 端不显示 */}
       <TitlebarControls />
+      <UpdateReadyBanner />
     </>
   )
 }

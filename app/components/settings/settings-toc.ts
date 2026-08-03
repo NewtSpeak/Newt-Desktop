@@ -80,5 +80,9 @@ export const SECTION_TOC: Record<SettingsSection, SettingsTocItem[]> = {
     { id: "activity-today", label: "今日活跃" },
     { id: "activity-history", label: "历史记录" },
   ],
-  about: [{ id: "about-oss", label: "开源信息" }],
+  about: [
+    { id: "about-update", label: "软件更新" },
+    { id: "about-mirrors", label: "下载镜像" },
+    { id: "about-oss", label: "开源信息" },
+  ],
 }

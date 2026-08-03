@@ -208,7 +208,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="shrink-0 border-t border-sidebar-border/50 group-data-[collapsible=icon]:px-1">
+      <SidebarFooter className="shrink-0 group-data-[collapsible=icon]:px-1">
         <NavUser />
       </SidebarFooter>
       <AddGuildDialog open={addOpen} onOpenChange={setAddOpen} />

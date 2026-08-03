@@ -10,6 +10,9 @@ mod activity;
 mod discord_rpc;
 mod voice_overlay;
 
+#[cfg(desktop)]
+mod updater;
+
 #[cfg(mobile)]
 use std::collections::HashMap;
 #[cfg(mobile)]
@@ -23,7 +26,7 @@ use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 #[cfg(desktop)]
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 #[cfg(mobile)]
 use tauri::Manager;
 
@@ -168,7 +171,7 @@ fn forward_deep_link_args(app: &AppHandle, argv: &[String]) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  #[allow(unused_mut)] // desktop 会链式挂 single-instance
+  #[allow(unused_mut)] // desktop 会链式挂 single-instance / manage / handler
   let mut builder = tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_deep_link::init())
@@ -181,59 +184,66 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
       forward_deep_link_args(app, &argv);
     }));
+    builder = builder.manage(updater::UpdaterState::new());
   }
 
-  builder
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-        // 开发模式自动打开 WebView 开发者工具（桌面）；移动端无 devtools API
-        #[cfg(all(debug_assertions, desktop))]
-        {
-          if let Some(window) = app.get_webview_window("main") {
-            window.open_devtools();
-          }
+  builder = builder.setup(|app| {
+    if cfg!(debug_assertions) {
+      app.handle().plugin(
+        tauri_plugin_log::Builder::default()
+          .level(log::LevelFilter::Info)
+          .build(),
+      )?;
+      // 开发模式自动打开 WebView 开发者工具（桌面）；移动端无 devtools API
+      #[cfg(all(debug_assertions, desktop))]
+      {
+        if let Some(window) = app.get_webview_window("main") {
+          window.open_devtools();
         }
       }
-      // Discord RPC 兼容监听（仅桌面；无 Discord 占用管道时生效）
-      #[cfg(desktop)]
-      discord_rpc::start_discord_rpc_server();
+    }
+    // Discord RPC 兼容监听（仅桌面；无 Discord 占用管道时生效）
+    #[cfg(desktop)]
+    discord_rpc::start_discord_rpc_server();
 
-      // 系统托盘：使用 Newt-assets/logo.png 生成的 tray-icon（见 tauri.conf.json trayIcon）
-      // 左键单击 / 双击 → 显示并聚焦主窗口
-      #[cfg(desktop)]
-      {
-        let handle = app.handle().clone();
-        app.on_tray_icon_event(move |_tray, event| {
-          let show = match event {
-            TrayIconEvent::Click {
-              button: MouseButton::Left,
-              button_state: MouseButtonState::Up,
-              ..
-            } => true,
-            TrayIconEvent::DoubleClick {
-              button: MouseButton::Left,
-              ..
-            } => true,
-            _ => false,
-          };
-          if show {
-            if let Some(window) = handle.get_webview_window("main") {
-              let _ = window.unminimize();
-              let _ = window.show();
-              let _ = window.set_focus();
-            }
+    // 系统托盘：使用 Newt-assets/logo.png 生成的 tray-icon（见 tauri.conf.json trayIcon）
+    // 左键单击 / 双击 → 显示并聚焦主窗口
+    #[cfg(desktop)]
+    {
+      let handle = app.handle().clone();
+      app.on_tray_icon_event(move |_tray, event| {
+        let show = match event {
+          TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+          } => true,
+          TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+          } => true,
+          _ => false,
+        };
+        if show {
+          if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
           }
-        });
-      }
+        }
+      });
+    }
 
-      Ok(())
-    })
-    .invoke_handler(tauri::generate_handler![
+    // 应用内更新：恢复已下载包 + 10 分钟轮询检测/预下载
+    #[cfg(desktop)]
+    updater::bootstrap(app.handle());
+
+    Ok(())
+  });
+
+  #[cfg(desktop)]
+  {
+    builder = builder.invoke_handler(tauri::generate_handler![
       secure_get,
       secure_set,
       secure_delete,
@@ -242,7 +252,53 @@ pub fn run() {
       activity::get_foreground_app,
       activity::extract_app_icon,
       discord_rpc::get_rpc_activity,
-    ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+      updater::updater_get_status,
+      updater::updater_check,
+      updater::updater_download,
+      updater::updater_check_and_download,
+      updater::updater_install_now,
+      updater::updater_quit,
+      updater::updater_set_auto_check,
+      updater::updater_set_install_on_quit,
+      updater::updater_list_mirrors,
+      updater::updater_probe_mirrors,
+    ]);
+
+    builder
+      .build(tauri::generate_context!())
+      .expect("error while building tauri application")
+      .run(|app_handle, event| {
+        if let RunEvent::WindowEvent {
+          label,
+          event: WindowEvent::CloseRequested { api, .. },
+          ..
+        } = &event
+        {
+          if label == "main" {
+            let state = app_handle.state::<updater::UpdaterState>();
+            if updater::handle_close_requested(app_handle, state.inner()) {
+              api.prevent_close();
+            }
+          }
+        }
+      });
+    return;
+  }
+
+  #[cfg(mobile)]
+  {
+    builder
+      .invoke_handler(tauri::generate_handler![
+        secure_get,
+        secure_set,
+        secure_delete,
+        activity::list_running_apps,
+        activity::get_now_playing,
+        activity::get_foreground_app,
+        activity::extract_app_icon,
+        discord_rpc::get_rpc_activity,
+      ])
+      .run(tauri::generate_context!())
+      .expect("error while running tauri application");
+  }
 }

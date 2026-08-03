@@ -173,7 +173,9 @@ export function NavUser() {
                   "bg-transparent! hover:bg-transparent! active:bg-transparent!",
                   "data-open:bg-transparent! data-open:hover:bg-transparent!",
                   "aria-expanded:bg-transparent!",
-                  "hover:ring-2 hover:ring-sidebar-ring/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                  // 头像悬停/聚焦/展开时不要描边或 ring
+                  "ring-0! hover:ring-0! focus-visible:ring-0! focus-visible:outline-none!",
+                  "data-open:ring-0! aria-expanded:ring-0!",
                 )}
               />
             }

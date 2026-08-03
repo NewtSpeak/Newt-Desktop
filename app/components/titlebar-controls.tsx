@@ -150,6 +150,12 @@ function WindowControls() {
   }, [])
 
   const invoke = async (action: "minimize" | "toggleMaximize" | "close") => {
+    // 关闭走 updater_quit：有已下载更新时先启动安装再退出
+    if (action === "close") {
+      const { updaterQuit } = await import("~/lib/updater")
+      await updaterQuit()
+      return
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window")
     await getCurrentWindow()[action]()
   }
