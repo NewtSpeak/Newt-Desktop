@@ -24,9 +24,9 @@ if (import.meta.env.DEV && typeof document !== "undefined") {
 
 /** 站点图标：来自 Newt-assets/logo.png（links + head 双写，避免 SPA 壳漏掉） */
 export const links: Route.LinksFunction = () => [
-  { rel: "icon", href: "/favicon.ico?v=newt3", sizes: "any" },
-  { rel: "icon", type: "image/png", href: "/favicon.png?v=newt3" },
-  { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=newt3" },
+  { rel: "icon", href: "/favicon.ico?v=newt4", sizes: "any" },
+  { rel: "icon", type: "image/png", href: "/favicon.png?v=newt4" },
+  { rel: "apple-touch-icon", href: "/apple-touch-icon.png?v=newt4" },
 ]
 
 /** 默认标签页标题（各路由可再覆盖 document.title） */
@@ -52,9 +52,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           content="width=device-width, initial-scale=1, viewport-fit=cover"
         />
         <title>NewtSpeak</title>
-        <link rel="icon" href="/favicon.ico?v=newt3" sizes="any" />
-        <link rel="icon" type="image/png" href="/favicon.png?v=newt3" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=newt3" />
+        <link rel="icon" href="/favicon.ico?v=newt4" sizes="any" />
+        <link rel="icon" type="image/png" href="/favicon.png?v=newt4" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=newt4" />
         <Meta />
         <Links />
       </head>

@@ -19,3 +19,7 @@ src-tauri/gen/android/**/local.properties
 src-tauri/gen/android/**/*.apk
 src-tauri/gen/android/**/*.aab
 src-tauri/gen/android/**/.cxx
+
+# intermediate icon pipeline source
+src-tauri/icons/app-icon-rounded-source.png
+
