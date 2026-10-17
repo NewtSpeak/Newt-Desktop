@@ -95,7 +95,7 @@ import {
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
-import { useCosmeticsStore } from "~/stores/cosmetics"
+import { useEquippedSlots } from "~/hooks/use-equipped-slots"
 import { useMembersStore } from "~/stores/members"
 import type { PresenceStatus } from "~/lib/gateway/events"
 import {
@@ -238,15 +238,11 @@ function MemberRow({
   const presence = usePresenceStore(
     (state) => state.statusByUser[member.user_id]
   )
-  const cosmeticsSlots = useCosmeticsStore(
-    (s) =>
-      (member.user_id === selfId ? s.loadout : s.equippedByUser[member.user_id]) ??
-      {},
-  )
-  const avatarFrame = cosmeticsSlots.avatar_frame
-  const nameplate = cosmeticsSlots.nameplate
-  const profileBorder = cosmeticsSlots.profile_border
-  const profileEffect = cosmeticsSlots.profile_effect
+  const cosmeticsSlots = useEquippedSlots(member.user_id, selfId)
+  const avatarFrame = cosmeticsSlots?.avatar_frame
+  const nameplate = cosmeticsSlots?.nameplate
+  const profileBorder = cosmeticsSlots?.profile_border
+  const profileEffect = cosmeticsSlots?.profile_effect
   const customPresence = usePresenceStore(
     (state) => state.customByUser[member.user_id]
   )

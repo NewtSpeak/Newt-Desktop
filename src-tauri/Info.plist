@@ -5,5 +5,13 @@
 	<!-- WKWebView getUserMedia 需要：缺失时系统直接拒绝麦克风访问（语音频道通话） -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>NewtSpeak 需要访问麦克风，以便你在语音频道中与他人通话。</string>
+	<!-- 自托管服务器普遍是明文 http://（IP:端口），ATS 默认会拦截 WKWebView 发出的明文请求，
+	     表现就是客户端里「网络请求失败，请检查网络连接」（邀请预检/登录/Gateway 全部连不上）。
+	     这里只对 WebView 内容放开 ATS，Rust 侧 reqwest（更新检查）不受影响。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

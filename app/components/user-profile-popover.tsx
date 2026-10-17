@@ -44,6 +44,7 @@ import {
 } from "~/lib/user-display"
 import { cn } from "~/lib/utils"
 import { useAuthStore } from "~/stores/auth"
+import { useEquippedSlots } from "~/hooks/use-equipped-slots"
 import { useCosmeticsStore } from "~/stores/cosmetics"
 import { usePresenceStore } from "~/stores/presence"
 import { usePrivateChannelsStore } from "~/stores/private-channels"
@@ -100,13 +101,10 @@ export function UserProfilePopover({
   const selfId = useAuthStore((s) => s.user?.id)
   // 装扮：订阅 store（本人走 loadout，他人走 equippedByUser 缓存），
   // COSMETIC_LOADOUT_UPDATE 事件实时生效；成员列表已缓存的 listMode 数据可先渲染减少闪现
-  const cosmeticsSlots = useCosmeticsStore(
-    (s) =>
-      (userId === selfId ? s.loadout : s.equippedByUser[userId]) ?? {},
-  )
-  const avatarFrame = cosmeticsSlots.avatar_frame
-  const profileBorder = cosmeticsSlots.profile_border
-  const profileEffect = cosmeticsSlots.profile_effect
+  const cosmeticsSlots = useEquippedSlots(userId, selfId)
+  const avatarFrame = cosmeticsSlots?.avatar_frame
+  const profileBorder = cosmeticsSlots?.profile_border
+  const profileEffect = cosmeticsSlots?.profile_effect
   const customPresence = usePresenceStore((s) => s.customByUser[userId])
   const activities = usePresenceStore((s) => s.activitiesByUser[userId])
   const relItems = useRelationshipsStore((s) => s.items)

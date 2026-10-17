@@ -7,6 +7,7 @@
 // 单实例（仅桌面）：二次启动/深链唤起时聚焦已有窗口，并把 argv 中的 URL 发给前端。
 
 mod activity;
+mod client_log;
 mod discord_rpc;
 mod voice_overlay;
 
@@ -188,18 +189,14 @@ pub fn run() {
   }
 
   builder = builder.setup(|app| {
-    if cfg!(debug_assertions) {
-      app.handle().plugin(
-        tauri_plugin_log::Builder::default()
-          .level(log::LevelFilter::Info)
-          .build(),
-      )?;
-      // 开发模式自动打开 WebView 开发者工具（桌面）；移动端无 devtools API
-      #[cfg(all(debug_assertions, desktop))]
-      {
-        if let Some(window) = app.get_webview_window("main") {
-          window.open_devtools();
-        }
+    if let Some(logger) = client_log::builder_from_env() {
+      app.handle().plugin(logger.build())?;
+    }
+    // 开发模式自动打开 WebView 开发者工具（桌面）；移动端无 devtools API
+    #[cfg(all(debug_assertions, desktop))]
+    {
+      if let Some(window) = app.get_webview_window("main") {
+        window.open_devtools();
       }
     }
     // Discord RPC 兼容监听（仅桌面；无 Discord 占用管道时生效）
@@ -244,6 +241,8 @@ pub fn run() {
   #[cfg(desktop)]
   {
     builder = builder.invoke_handler(tauri::generate_handler![
+      client_log::client_log_level,
+      client_log::client_log_batch,
       secure_get,
       secure_set,
       secure_delete,
@@ -289,6 +288,8 @@ pub fn run() {
   {
     builder
       .invoke_handler(tauri::generate_handler![
+        client_log::client_log_level,
+        client_log::client_log_batch,
         secure_get,
         secure_set,
         secure_delete,

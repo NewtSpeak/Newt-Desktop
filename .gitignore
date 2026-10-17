@@ -23,3 +23,6 @@ src-tauri/gen/android/**/.cxx
 # intermediate icon pipeline source
 src-tauri/icons/app-icon-rounded-source.png
 
+
+# JetBrains IDE settings
+.idea/

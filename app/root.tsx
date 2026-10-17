@@ -16,6 +16,7 @@ import { UpdateReadyBanner } from "~/components/update-ready-banner"
 import { TooltipProvider } from "~/components/ui/tooltip"
 import { useDeepLinkNavigation } from "~/hooks/use-deep-link"
 import { useUpdaterBootstrap } from "~/hooks/use-updater"
+import { initClientLog } from "~/lib/client-log"
 import { isMobileAppRuntime } from "~/lib/platform"
 import { initAppearance } from "~/stores/settings"
 
@@ -23,6 +24,8 @@ import { initAppearance } from "~/stores/settings"
 if (import.meta.env.DEV && typeof document !== "undefined") {
   import("react-grab")
 }
+
+initClientLog()
 
 /** 站点图标：favicon 等；侧栏品牌字标见 /icon.svg（links + head 双写，避免 SPA 壳漏掉） */
 export const links: Route.LinksFunction = () => [
